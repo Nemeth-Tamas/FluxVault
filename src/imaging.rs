@@ -7,6 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -25,11 +26,50 @@ pub enum SectorReadState {
 #[derive(Debug, Clone)]
 pub struct ImagingResult {
     pub output_path: PathBuf,
+    pub metadata_path: PathBuf,
     pub sha256: String,
     pub total_sectors: usize,
     pub bad_sectors: Vec<u64>,
     pub retry_recovered: usize,
     pub bytes_written: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct BadSectorMetadata {
+    lba: u64,
+    cylinder: u64,
+    head: u32,
+    sector: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct AcquisitionMetadata {
+    fluxvault_version: &'static str,
+    status: &'static str,
+    source_device: String,
+    image_file: String,
+    timestamp_unix_ms: u128,
+
+    geometry: GeometryMetadata,
+
+    sector_retries: usize,
+    total_sectors: usize,
+    bytes_written: u64,
+    retry_recovered_sectors: usize,
+    bad_sector_count: usize,
+    bad_sectors: Vec<BadSectorMetadata>,
+
+    sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GeometryMetadata {
+    cylinders: u64,
+    heads: u32,
+    sectors_per_track: u32,
+    bytes_per_sector: u32,
+    total_bytes: u64,
+    format_guess: String,
 }
 
 #[derive(Debug)]
@@ -109,6 +149,10 @@ fn run_imaging(
 
     let partial_path = PathBuf::from("captures").join(format!("{stem}.partial.img"));
     let final_path = PathBuf::from("captures").join(format!("{stem}.img"));
+
+    let metadata_partial_path = PathBuf::from("captures").join(format!("{stem}.partial.json"));
+
+    let metadata_final_path = PathBuf::from("captures").join(format!("{stem}.json"));
 
     let mut source = File::open(&drive.device_path).map_err(|error| {
         format!(
@@ -302,6 +346,56 @@ fn run_imaging(
         ));
     }
 
+    let sha256 = format!("{:x}", hasher.finalize());
+
+    let bad_sector_metadata = bad_sectors
+        .iter()
+        .copied()
+        .map(|lba| bad_sector_metadata(lba, geometry))
+        .collect::<Vec<_>>();
+
+    let acquisition_status = if bad_sectors.is_empty() {
+        "OK"
+    } else {
+        "PARTIAL"
+    };
+
+    let metadata = AcquisitionMetadata {
+        fluxvault_version: env!("CARGO_PKG_VERSION"),
+        status: acquisition_status,
+        source_device: drive.device_path.clone(),
+        image_file: final_path.display().to_string(),
+        timestamp_unix_ms: timestamp,
+
+        geometry: GeometryMetadata {
+            cylinders: geometry.cylinders,
+            heads: geometry.heads,
+            sectors_per_track: geometry.sectors_per_track,
+            bytes_per_sector: geometry.bytes_per_sector,
+            total_bytes: geometry.total_bytes(),
+            format_guess: geometry.format_guess().to_owned(),
+        },
+
+        sector_retries,
+        total_sectors,
+        bytes_written: actual_bytes,
+        retry_recovered_sectors: retry_recovered,
+        bad_sector_count: bad_sectors.len(),
+        bad_sectors: bad_sector_metadata,
+
+        sha256: sha256.clone(),
+    };
+
+    let metadata_json = serde_json::to_string_pretty(&metadata)
+        .map_err(|error| format!("Metadata JSON generalasi hiba: {error}"))?;
+
+    fs::write(&metadata_partial_path, metadata_json).map_err(|error| {
+        format!(
+            "Nem sikerult kiirni a metadata fajlt {}: {error}",
+            metadata_partial_path.display()
+        )
+    })?;
+
     fs::rename(&partial_path, &final_path).map_err(|error| {
         format!(
             "A kesz lemezkep atnevezese sikertelen. A partial fajl megmarad: {}: {error}",
@@ -309,12 +403,24 @@ fn run_imaging(
         )
     })?;
 
-    let sha256 = format!("{:x}", hasher.finalize());
+    fs::rename(&metadata_partial_path, &metadata_final_path).map_err(|error| {
+        format!(
+            "A metadata fajl atnevezese sikertelen. A partial metadata megmarad: {}: {error}",
+            metadata_partial_path.display()
+        )
+    })?;
 
     sender
         .send(ImagingEvent::Log(format!(
             "Kepkeszites befejezve: {}",
             final_path.display()
+        )))
+        .ok();
+
+    sender
+        .send(ImagingEvent::Log(format!(
+            "Metadata: {}",
+            metadata_final_path.display()
         )))
         .ok();
 
@@ -325,6 +431,7 @@ fn run_imaging(
     sender
         .send(ImagingEvent::Completed(ImagingResult {
             output_path: final_path,
+            metadata_path: metadata_final_path,
             sha256,
             total_sectors,
             bad_sectors,
@@ -366,4 +473,22 @@ fn read_sector_with_retries(
     Err(last_error
         .map(|error| error.to_string())
         .unwrap_or_else(|| "Ismeretlen szektorolvasasi hiba.".to_owned()))
+}
+
+fn bad_sector_metadata(lba: u64, geometry: DiskGeometry) -> BadSectorMetadata {
+    let sectors_per_cylinder = geometry.heads as u64 * geometry.sectors_per_track as u64;
+
+    let cylinder = lba / sectors_per_cylinder;
+    let within_cylinder = lba % sectors_per_cylinder;
+
+    let head = (within_cylinder / geometry.sectors_per_track as u64) as u32;
+
+    let sector = (within_cylinder % geometry.sectors_per_track as u64) as u32 + 1;
+
+    BadSectorMetadata {
+        lba,
+        cylinder,
+        head,
+        sector,
+    }
 }

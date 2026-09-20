@@ -662,7 +662,43 @@ impl FluxVaultApp {
                     result.retry_recovered
                 ));
                 ui.label(format!("Méret: {} bájt", result.bytes_written));
+                ui.label(format!("Metadata: {}", result.metadata_path.display()));
                 ui.monospace(format!("SHA-256: {}", result.sha256));
+
+                if !result.bad_sectors.is_empty() {
+                    ui.add_space(10.0);
+
+                    ui.label(
+                        egui::RichText::new("Olvashatatlan szektorok")
+                            .strong()
+                            .size(15.0),
+                    );
+
+                    if let Some(geometry) = self.imaging_geometry {
+                        egui::ScrollArea::vertical()
+                            .max_height(110.0)
+                            .show(ui, |ui| {
+                                for lba in &result.bad_sectors {
+                                    let sectors_per_cylinder =
+                                        geometry.heads as u64 * geometry.sectors_per_track as u64;
+
+                                    let cylinder = *lba / sectors_per_cylinder;
+
+                                    let within_cylinder = *lba % sectors_per_cylinder;
+
+                                    let head = within_cylinder / geometry.sectors_per_track as u64;
+
+                                    let sector =
+                                        within_cylinder % geometry.sectors_per_track as u64 + 1;
+
+                                    ui.monospace(format!(
+                                        "LBA {:4} | C{:02} H{} S{:02}",
+                                        lba, cylinder, head, sector
+                                    ));
+                                }
+                            });
+                    }
+                }
             }
 
             if let Some(error) = &self.imaging_error {
@@ -794,18 +830,28 @@ impl FluxVaultApp {
     }
 
     fn operator_log(&self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Operátori napló")
-            .default_open(false)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(160.0)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for entry in &self.operator_log {
-                            ui.monospace(entry);
-                        }
-                    });
-            });
+        ui.horizontal(|ui| {
+            ui.strong("Operátori napló");
+
+            ui.separator();
+
+            ui.weak(format!("{} bejegyzés", self.operator_log.len()));
+        });
+
+        ui.add_space(4.0);
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(130.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+
+                    for entry in &self.operator_log {
+                        ui.monospace(entry);
+                    }
+                });
+        });
     }
 }
 
@@ -826,7 +872,7 @@ impl eframe::App for FluxVaultApp {
             ui.separator();
             ui.add_space(6.0);
 
-            let status_reserve = 72.0;
+            let status_reserve = 190.0;
             let content_height = (ui.available_height() - status_reserve).max(200.0);
             let total_width = ui.available_width();
             let navigation_width = 180.0;
