@@ -1,4 +1,5 @@
 mod app;
+mod floppy;
 mod safety;
 
 use app::FluxVaultApp;

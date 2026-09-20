@@ -1,6 +1,9 @@
 use eframe::egui;
 
-use crate::safety::{MediaSafetyPolicy, SourceMediaAccess};
+use crate::{
+    floppy::{self, FloppyDrive, ProbeResult},
+    safety::{MediaSafetyPolicy, SourceMediaAccess},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -29,6 +32,9 @@ pub struct FluxVaultApp {
     page: Page,
     project_path: Option<String>,
     active_source: Option<String>,
+    floppy_drives: Vec<FloppyDrive>,
+    selected_drive: Option<usize>,
+    probe_result: Option<ProbeResult>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -39,6 +45,9 @@ impl FluxVaultApp {
             page: Page::Project,
             project_path: None,
             active_source: None,
+            floppy_drives: Vec::new(),
+            selected_drive: None,
+            probe_result: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -51,6 +60,78 @@ impl FluxVaultApp {
 
     fn log(&mut self, message: impl Into<String>) {
         self.operator_log.push(message.into());
+    }
+
+    fn refresh_floppy_drives(&mut self) {
+        self.probe_result = None;
+        self.selected_drive = None;
+        self.active_source = None;
+
+        match floppy::enumerate_removable_drives() {
+            Ok(drives) => {
+                let count = drives.len();
+
+                self.floppy_drives = drives;
+
+                if count == 0 {
+                    self.status = "Nem található cserélhető meghajtó.".to_owned();
+                    self.log("Meghajtókeresés: nem található cserélhető meghajtó.");
+                } else {
+                    self.status = format!("{count} cserélhető meghajtó található.");
+                    self.log(format!(
+                        "Meghajtókeresés kész: {count} cserélhető meghajtó."
+                    ));
+                }
+            }
+            Err(error) => {
+                self.floppy_drives.clear();
+                self.status = "Meghajtókeresési hiba.".to_owned();
+                self.log(format!("Meghajtókeresési hiba: {error}"));
+            }
+        }
+    }
+
+    fn probe_selected_drive(&mut self) {
+        MediaSafetyPolicy::assert_invariants();
+
+        let Some(index) = self.selected_drive else {
+            self.status = "Nincs kiválasztott meghajtó.".to_owned();
+            return;
+        };
+
+        let Some(drive) = self.floppy_drives.get(index).cloned() else {
+            self.status = "A kiválasztott meghajtó már nem érhető el.".to_owned();
+            self.selected_drive = None;
+            self.active_source = None;
+            return;
+        };
+
+        self.status = format!("Read-only próbaolvasás: {}", drive.root);
+        self.log(format!(
+            "READ ONLY próbaolvasás indul: {} -> {}",
+            drive.root, drive.device_path
+        ));
+
+        match floppy::probe_read_only(&drive) {
+            Ok(result) => {
+                self.status = format!(
+                    "Sikeres read-only próbaolvasás: {} bájt.",
+                    result.bytes_read
+                );
+
+                self.log(format!(
+                    "READ ONLY próbaolvasás sikeres: {} bájt a(z) {} meghajtóról.",
+                    result.bytes_read, drive.root
+                ));
+
+                self.probe_result = Some(result);
+            }
+            Err(error) => {
+                self.status = "A read-only próbaolvasás sikertelen.".to_owned();
+                self.log(format!("READ ONLY próbaolvasási hiba: {error}"));
+                self.probe_result = None;
+            }
+        }
     }
 
     fn navigation(&mut self, ui: &mut egui::Ui) {
@@ -177,28 +258,91 @@ impl FluxVaultApp {
 
             ui.add_space(6.0);
 
-            match &self.active_source {
-                Some(source) => {
-                    ui.label(format!("Kiválasztva: {source}"));
-                }
-                None => {
-                    ui.weak("Még nincs fizikai floppy meghajtó kiválasztva.");
-                }
+            if ui.button("Meghajtók frissítése").clicked() {
+                self.refresh_floppy_drives();
             }
 
             ui.add_space(8.0);
 
-            ui.add_enabled(false, egui::Button::new("Meghajtók frissítése"));
+            if self.floppy_drives.is_empty() {
+                ui.weak("Még nincs felismert cserélhető meghajtó.");
+            } else {
+                ui.label("Felismert cserélhető meghajtók:");
 
-            ui.add_enabled(false, egui::Button::new("Beolvasás indítása"));
+                let mut newly_selected = None;
+
+                for (index, drive) in self.floppy_drives.iter().enumerate() {
+                    let selected = self.selected_drive == Some(index);
+
+                    if ui
+                        .selectable_label(selected, drive.display_name())
+                        .clicked()
+                    {
+                        newly_selected = Some(index);
+                    }
+                }
+
+                if let Some(index) = newly_selected {
+                    self.selected_drive = Some(index);
+                    self.probe_result = None;
+
+                    if let Some(drive) = self.floppy_drives.get(index) {
+                        self.active_source = Some(drive.root.clone());
+                        self.status = format!("Forrás meghajtó kiválasztva: {}", drive.root);
+                    }
+                }
+            }
+
+            ui.add_space(12.0);
+
+            let drive_selected = self.selected_drive.is_some();
+
+            if ui
+                .add_enabled(
+                    drive_selected,
+                    egui::Button::new("Read-only próbaolvasás (512 bájt)"),
+                )
+                .clicked()
+            {
+                self.probe_selected_drive();
+            }
+
+            ui.add_enabled(false, egui::Button::new("Teljes lemezkép készítése"));
 
             ui.add_space(8.0);
 
             ui.weak(
-                "A vezérlők addig tiltva maradnak, amíg a read-only \
-                 Windows floppy backend el nem készül.",
+                "A próbaolvasás kizárólag olvasási hozzáféréssel nyitja meg \
+                 a fizikai meghajtót. A teljes lemezkép készítése még tiltva van.",
             );
         });
+
+        if let Some(result) = &self.probe_result {
+            ui.add_space(16.0);
+
+            ui.group(|ui| {
+                ui.label(
+                    egui::RichText::new("Read-only próba eredménye")
+                        .strong()
+                        .size(16.0),
+                );
+
+                ui.add_space(6.0);
+
+                ui.label(format!("Beolvasott bájtok: {}", result.bytes_read));
+                ui.label(format!("Első 16 bájt: {}", result.first_bytes_hex()));
+                ui.label(format!("510-511. bájt: {}", result.boot_signature_hex()));
+
+                if result.boot_signature == Some([0x55, 0xAA]) {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        "55 AA boot signature található.",
+                    );
+                } else if result.bytes_read >= 512 {
+                    ui.weak("A klasszikus 55 AA boot signature nem található.");
+                }
+            });
+        }
 
         ui.add_space(16.0);
 
@@ -348,42 +492,43 @@ impl FluxVaultApp {
 }
 
 impl eframe::App for FluxVaultApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.add_space(6.0);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.add_space(6.0);
 
-            self.safety_banner(ui);
+        self.safety_banner(ui);
 
-            ui.add_space(6.0);
-        });
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
 
-        egui::SidePanel::left("navigation")
-            .resizable(false)
-            .default_width(220.0)
-            .show(ctx, |ui| {
-                ui.add_space(8.0);
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(220.0);
                 self.navigation(ui);
             });
 
-        egui::TopBottomPanel::bottom("status_panel")
-            .resizable(false)
-            .show(ctx, |ui| {
+            ui.separator();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.set_min_width(600.0);
                 ui.add_space(4.0);
 
-                ui.horizontal(|ui| {
-                    ui.label("Állapot:");
-                    ui.strong(&self.status);
-                });
+                self.current_page(ui);
 
-                self.operator_log(ui);
-
-                ui.add_space(4.0);
+                ui.add_space(12.0);
             });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(8.0);
-
-            self.current_page(ui);
         });
+
+        ui.separator();
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Állapot:");
+            ui.strong(&self.status);
+        });
+
+        self.operator_log(ui);
+
+        ui.add_space(4.0);
     }
 }
