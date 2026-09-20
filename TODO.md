@@ -211,7 +211,14 @@ Replace the current updater/audit script chain with one in-app source of truth w
 - [ ] Delivery-file manifest.
 - [ ] Export CSV/text reports.
 - [ ] Export `FloppyFinalReport.xlsx` equivalent from the app or a dedicated report exporter.
-- [ ] Do not make Excel COM automation a core requirement if we can generate the workbook directly.
+- [ ] Generate polished XLSX reports directly rather than depending on Excel COM automation.
+- [ ] Primary report language is Hungarian.
+- [ ] Add English report export from the same underlying report data model.
+- [ ] Excel summary/dashboard sheet with major KPIs and project statistics.
+- [ ] Include charts for useful project-wide metrics such as imaging status, bad-sector counts, recovery results, file counts, and conversion outcomes.
+- [ ] Detailed per-floppy worksheet/table with filtering, frozen headers, sensible column widths, status highlighting, and consistent formatting.
+- [ ] Separate recovered-file, conversion, issue, and integrity tables where useful.
+- [ ] Reports should be presentable to a customer without requiring manual cleanup in Excel.
 - [ ] Audit must be re-runnable/idempotent and never alter source floppy media.
 
 ## 14. Customer package builder
