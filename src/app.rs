@@ -1,7 +1,10 @@
+use std::{sync::mpsc::Receiver, time::Duration};
+
 use eframe::egui;
 
 use crate::{
-    floppy::{self, FloppyDrive, ProbeResult},
+    floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
+    imaging::{self, ImagingEvent, ImagingResult, SectorReadState},
     safety::{MediaSafetyPolicy, SourceMediaAccess},
 };
 
@@ -35,6 +38,15 @@ pub struct FluxVaultApp {
     floppy_drives: Vec<FloppyDrive>,
     selected_drive: Option<usize>,
     probe_result: Option<ProbeResult>,
+    imaging_receiver: Option<Receiver<ImagingEvent>>,
+    imaging_running: bool,
+    imaging_geometry: Option<DiskGeometry>,
+    imaging_states: Vec<SectorReadState>,
+    imaging_completed_sectors: usize,
+    imaging_total_sectors: usize,
+    imaging_output: Option<String>,
+    imaging_result: Option<ImagingResult>,
+    imaging_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -48,6 +60,15 @@ impl FluxVaultApp {
             floppy_drives: Vec::new(),
             selected_drive: None,
             probe_result: None,
+            imaging_receiver: None,
+            imaging_running: false,
+            imaging_geometry: None,
+            imaging_states: Vec::new(),
+            imaging_completed_sectors: 0,
+            imaging_total_sectors: 0,
+            imaging_output: None,
+            imaging_result: None,
+            imaging_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -60,6 +81,201 @@ impl FluxVaultApp {
 
     fn log(&mut self, message: impl Into<String>) {
         self.operator_log.push(message.into());
+    }
+
+    fn start_full_imaging(&mut self) {
+        if self.imaging_running {
+            return;
+        }
+
+        MediaSafetyPolicy::assert_invariants();
+
+        let Some(index) = self.selected_drive else {
+            self.status = "Nincs kiválasztott meghajtó.".to_owned();
+            return;
+        };
+
+        let Some(drive) = self.floppy_drives.get(index).cloned() else {
+            self.status = "A kiválasztott meghajtó már nem érhető el.".to_owned();
+            return;
+        };
+
+        let Some(geometry) = self
+            .probe_result
+            .as_ref()
+            .and_then(|result| result.geometry)
+        else {
+            self.status = "Előbb sikeres próbaolvasás szükséges.".to_owned();
+            return;
+        };
+
+        if !geometry.looks_like_floppy() {
+            self.status = "A meghajtó geometriája nem tűnik floppy geometriának.".to_owned();
+            self.log("Teljes kép készítése megtagadva: nem floppy méretű geometria.");
+            return;
+        }
+
+        let total_sectors = geometry.total_sectors() as usize;
+
+        self.imaging_geometry = Some(geometry);
+        self.imaging_states = vec![SectorReadState::Unread; total_sectors];
+        self.imaging_completed_sectors = 0;
+        self.imaging_total_sectors = total_sectors;
+        self.imaging_output = None;
+        self.imaging_result = None;
+        self.imaging_error = None;
+        self.imaging_running = true;
+
+        self.status = format!("Teljes lemezkép készítése: {}", drive.root);
+        self.log(format!(
+            "Teljes READ ONLY lemezkép készítése indul: {}",
+            drive.device_path
+        ));
+
+        self.imaging_receiver = Some(imaging::start_imaging(drive, geometry, 2));
+    }
+
+    fn poll_imaging_events(&mut self) {
+        let mut events = Vec::new();
+
+        if let Some(receiver) = &self.imaging_receiver {
+            while let Ok(event) = receiver.try_recv() {
+                events.push(event);
+            }
+        }
+
+        let mut finished = false;
+
+        for event in events {
+            match event {
+                ImagingEvent::Started {
+                    output_path,
+                    total_sectors,
+                } => {
+                    self.imaging_output = Some(output_path.display().to_string());
+                    self.imaging_total_sectors = total_sectors;
+
+                    self.log(format!("Cél lemezkép: {}", output_path.display()));
+                }
+                ImagingEvent::Sector { lba, state } => {
+                    if let Some(slot) = self.imaging_states.get_mut(lba) {
+                        *slot = state;
+                    }
+                }
+                ImagingEvent::Progress { completed, total } => {
+                    self.imaging_completed_sectors = completed;
+                    self.imaging_total_sectors = total;
+
+                    self.status = format!("Lemezkép készítése: {completed}/{total} szektor");
+                }
+                ImagingEvent::Log(message) => {
+                    self.log(message);
+                }
+                ImagingEvent::Completed(result) => {
+                    let bad_count = result.bad_sectors.len();
+
+                    if bad_count == 0 {
+                        self.status =
+                            format!("Lemezkép kész: {} szektor, 0 hiba.", result.total_sectors);
+                    } else {
+                        self.status =
+                            format!("Részleges lemezkép kész: {bad_count} hibás szektor.");
+                    }
+
+                    self.log(format!(
+                        "Kép elkészült: {} | SHA-256: {} | hibás szektorok: {}",
+                        result.output_path.display(),
+                        result.sha256,
+                        bad_count
+                    ));
+
+                    self.imaging_result = Some(result);
+                    self.imaging_running = false;
+                    finished = true;
+                }
+                ImagingEvent::Failed(error) => {
+                    self.status = "A lemezkép készítése sikertelen.".to_owned();
+                    self.log(format!("KÉPKÉSZÍTÉSI HIBA: {error}"));
+                    self.imaging_error = Some(error);
+                    self.imaging_running = false;
+                    finished = true;
+                }
+            }
+        }
+
+        if finished {
+            self.imaging_receiver = None;
+        }
+    }
+
+    fn draw_sector_map(&self, ui: &mut egui::Ui) {
+        let Some(geometry) = self.imaging_geometry else {
+            ui.weak("Még nincs aktív vagy befejezett lemezkép.");
+            return;
+        };
+
+        if self.imaging_states.is_empty() {
+            ui.weak("Nincs megjeleníthető szektortérkép.");
+            return;
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(egui::Color32::DARK_GRAY, "[ ] Olvasatlan");
+            ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "[ ] Jo");
+            ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "[ ] Retry");
+            ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "[ ] Hibas");
+        });
+
+        ui.add_space(8.0);
+
+        egui::ScrollArea::vertical()
+            .max_height(380.0)
+            .show(ui, |ui| {
+                for cylinder in 0..geometry.cylinders as usize {
+                    ui.horizontal(|ui| {
+                        ui.monospace(format!("C{cylinder:02}"));
+
+                        for head in 0..geometry.heads as usize {
+                            ui.add_space(4.0);
+                            ui.monospace(format!("H{head}"));
+
+                            for sector_index in 0..geometry.sectors_per_track as usize {
+                                let lba = ((cylinder * geometry.heads as usize + head)
+                                    * geometry.sectors_per_track as usize)
+                                    + sector_index;
+
+                                let state = self
+                                    .imaging_states
+                                    .get(lba)
+                                    .copied()
+                                    .unwrap_or(SectorReadState::Unread);
+
+                                let color = match state {
+                                    SectorReadState::Unread => egui::Color32::DARK_GRAY,
+                                    SectorReadState::Good => egui::Color32::from_rgb(70, 200, 120),
+                                    SectorReadState::RetryRecovered => {
+                                        egui::Color32::from_rgb(220, 180, 80)
+                                    }
+                                    SectorReadState::Bad => egui::Color32::from_rgb(220, 70, 70),
+                                };
+
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(8.0, 8.0),
+                                    egui::Sense::hover(),
+                                );
+
+                                ui.painter().rect_filled(rect, 1.0, color);
+
+                                response.on_hover_text(format!(
+                                    "C{cylinder:02} H{head} S{:02} | LBA {lba} | {:?}",
+                                    sector_index + 1,
+                                    state
+                                ));
+                            }
+                        }
+                    });
+                }
+            });
     }
 
     fn refresh_floppy_drives(&mut self) {
@@ -258,7 +474,13 @@ impl FluxVaultApp {
 
             ui.add_space(6.0);
 
-            if ui.button("Meghajtók frissítése").clicked() {
+            if ui
+                .add_enabled(
+                    !self.imaging_running,
+                    egui::Button::new("Meghajtók frissítése"),
+                )
+                .clicked()
+            {
                 self.refresh_floppy_drives();
             }
 
@@ -275,7 +497,10 @@ impl FluxVaultApp {
                     let selected = self.selected_drive == Some(index);
 
                     if ui
-                        .selectable_label(selected, drive.display_name())
+                        .add_enabled(
+                            !self.imaging_running,
+                            egui::SelectableLabel::new(selected, drive.display_name()),
+                        )
                         .clicked()
                     {
                         newly_selected = Some(index);
@@ -307,13 +532,32 @@ impl FluxVaultApp {
                 self.probe_selected_drive();
             }
 
-            ui.add_enabled(false, egui::Button::new("Teljes lemezkép készítése"));
+            let imaging_ready = self
+                .probe_result
+                .as_ref()
+                .and_then(|result| result.geometry)
+                .map(|geometry| geometry.looks_like_floppy())
+                .unwrap_or(false)
+                && !self.imaging_running;
+
+            let imaging_button_text = if self.imaging_running {
+                "Lemezkép készítése folyamatban..."
+            } else {
+                "Teljes READ ONLY lemezkép készítése"
+            };
+
+            if ui
+                .add_enabled(imaging_ready, egui::Button::new(imaging_button_text))
+                .clicked()
+            {
+                self.start_full_imaging();
+            }
 
             ui.add_space(8.0);
 
             ui.weak(
-                "A próbaolvasás kizárólag olvasási hozzáféréssel nyitja meg \
-                 a fizikai meghajtót. A teljes lemezkép készítése még tiltva van.",
+                "A forrás meghajtó kizárólag olvasási hozzáféréssel van megnyitva. \
+                 A lemezkép a helyi captures mappába készül.",
             );
         });
 
@@ -375,18 +619,66 @@ impl FluxVaultApp {
         ui.add_space(16.0);
 
         ui.group(|ui| {
-            ui.label(
-                egui::RichText::new("Tervezett élő lemeztérkép")
-                    .strong()
-                    .size(16.0),
-            );
+            ui.label(egui::RichText::new("Élő lemeztérkép").strong().size(16.0));
 
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
-            ui.label(
-                "A szektorok állapota itt fog élőben megjelenni: \
-                 olvasatlan / jó / retry után jó / hibás.",
-            );
+            if self.imaging_total_sectors > 0 {
+                let progress =
+                    self.imaging_completed_sectors as f32 / self.imaging_total_sectors as f32;
+
+                ui.add(
+                    egui::ProgressBar::new(progress)
+                        .show_percentage()
+                        .text(format!(
+                            "{} / {} szektor",
+                            self.imaging_completed_sectors, self.imaging_total_sectors
+                        )),
+                );
+            }
+
+            if let Some(output) = &self.imaging_output {
+                ui.label(format!("Kimenet: {output}"));
+            }
+
+            if let Some(result) = &self.imaging_result {
+                ui.add_space(8.0);
+
+                if result.bad_sectors.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        "[OK] Hibamentes lemezkép.",
+                    );
+                } else {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        format!(
+                            "[PARTIAL] {} olvashatatlan szektor.",
+                            result.bad_sectors.len()
+                        ),
+                    );
+                }
+
+                ui.label(format!(
+                    "Retry után megmentett szektorok: {}",
+                    result.retry_recovered
+                ));
+                ui.label(format!("Méret: {} bájt", result.bytes_written));
+                ui.monospace(format!("SHA-256: {}", result.sha256));
+            }
+
+            if let Some(error) = &self.imaging_error {
+                ui.add_space(8.0);
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[FAILED] A lemezkép készítése megszakadt.",
+                );
+                ui.monospace(error);
+            }
+
+            ui.add_space(10.0);
+
+            self.draw_sector_map(ui);
         });
     }
 
@@ -521,6 +813,12 @@ impl FluxVaultApp {
 
 impl eframe::App for FluxVaultApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_imaging_events();
+
+        if self.imaging_running {
+            ui.ctx().request_repaint_after(Duration::from_millis(40));
+        }
+
         ui.vertical(|ui| {
             ui.add_space(6.0);
 

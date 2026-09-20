@@ -52,6 +52,20 @@ impl DiskGeometry {
             .saturating_mul(self.bytes_per_sector as u64)
     }
 
+    pub fn looks_like_floppy(&self) -> bool {
+        let total_bytes = self.total_bytes();
+
+        self.cylinders > 0
+            && self.heads > 0
+            && self.heads <= 2
+            && self.sectors_per_track > 0
+            && self.sectors_per_track <= 36
+            && self.bytes_per_sector >= 128
+            && self.bytes_per_sector <= 4096
+            && total_bytes > 0
+            && total_bytes <= 4 * 1024 * 1024
+    }
+
     pub fn format_guess(&self) -> &'static str {
         match (
             self.cylinders,
