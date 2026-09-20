@@ -496,13 +496,11 @@ impl FluxVaultApp {
                 for (index, drive) in self.floppy_drives.iter().enumerate() {
                     let selected = self.selected_drive == Some(index);
 
-                    if ui
-                        .add_enabled(
-                            !self.imaging_running,
-                            egui::SelectableLabel::new(selected, drive.display_name()),
-                        )
-                        .clicked()
-                    {
+                    let drive_clicked = ui
+                        .selectable_label(selected, drive.display_name())
+                        .clicked();
+
+                    if !self.imaging_running && drive_clicked {
                         newly_selected = Some(index);
                     }
                 }
