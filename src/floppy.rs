@@ -2,8 +2,18 @@ use std::fs::File;
 use std::io::Read;
 
 #[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+
+#[cfg(windows)]
 use windows::{
-    Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives},
+    Win32::{
+        Foundation::HANDLE,
+        Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives},
+        System::{
+            IO::DeviceIoControl,
+            Ioctl::{DISK_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY},
+        },
+    },
     core::PCWSTR,
 };
 
@@ -21,11 +31,53 @@ impl FloppyDrive {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DiskGeometry {
+    pub cylinders: u64,
+    pub heads: u32,
+    pub sectors_per_track: u32,
+    pub bytes_per_sector: u32,
+    pub media_type: i32,
+}
+
+impl DiskGeometry {
+    pub fn total_sectors(&self) -> u64 {
+        self.cylinders
+            .saturating_mul(self.heads as u64)
+            .saturating_mul(self.sectors_per_track as u64)
+    }
+
+    pub fn total_bytes(&self) -> u64 {
+        self.total_sectors()
+            .saturating_mul(self.bytes_per_sector as u64)
+    }
+
+    pub fn format_guess(&self) -> &'static str {
+        match (
+            self.cylinders,
+            self.heads,
+            self.sectors_per_track,
+            self.bytes_per_sector,
+        ) {
+            (80, 2, 18, 512) => "1.44 MB HD",
+            (80, 2, 9, 512) => "720 KB DD",
+            (80, 2, 15, 512) => "1.2 MB",
+            (40, 2, 9, 512) => "360 KB",
+            (40, 2, 8, 512) => "320 KB",
+            (40, 1, 9, 512) => "180 KB",
+            (40, 1, 8, 512) => "160 KB",
+            _ => "Ismeretlen / nem szabvanyos",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProbeResult {
     pub bytes_read: usize,
     pub first_bytes: [u8; 16],
     pub boot_signature: Option<[u8; 2]>,
+    pub geometry: Option<DiskGeometry>,
+    pub geometry_error: Option<String>,
 }
 
 impl ProbeResult {
@@ -94,6 +146,47 @@ fn enumerate_removable_drives_platform() -> Result<Vec<FloppyDrive>, String> {
     Ok(Vec::new())
 }
 
+#[cfg(windows)]
+fn query_geometry(file: &File) -> Result<DiskGeometry, String> {
+    let mut geometry = DISK_GEOMETRY::default();
+    let mut bytes_returned = 0u32;
+
+    let handle = HANDLE(file.as_raw_handle());
+
+    unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY,
+            None,
+            0,
+            Some((&mut geometry as *mut DISK_GEOMETRY).cast()),
+            std::mem::size_of::<DISK_GEOMETRY>() as u32,
+            Some(&mut bytes_returned),
+            None,
+        )
+        .map_err(|error| format!("Lemezgeometria lekerdezesi hiba: {error}"))?;
+    }
+
+    if bytes_returned < std::mem::size_of::<DISK_GEOMETRY>() as u32 {
+        return Err(format!(
+            "A geometria lekerdezes csak {bytes_returned} bajtot adott vissza."
+        ));
+    }
+
+    Ok(DiskGeometry {
+        cylinders: geometry.Cylinders.max(0) as u64,
+        heads: geometry.TracksPerCylinder,
+        sectors_per_track: geometry.SectorsPerTrack,
+        bytes_per_sector: geometry.BytesPerSector,
+        media_type: geometry.MediaType.0,
+    })
+}
+
+#[cfg(not(windows))]
+fn query_geometry(_file: &File) -> Result<DiskGeometry, String> {
+    Err("A lemezgeometria lekerdezese jelenleg csak Windowson tamogatott.".to_owned())
+}
+
 pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
     let mut file = File::open(&drive.device_path).map_err(|error| {
         format!(
@@ -101,6 +194,11 @@ pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
             drive.device_path
         )
     })?;
+
+    let (geometry, geometry_error) = match query_geometry(&file) {
+        Ok(geometry) => (Some(geometry), None),
+        Err(error) => (None, Some(error)),
+    };
 
     let mut sector = [0u8; PROBE_SIZE];
     let mut total_read = 0usize;
@@ -139,5 +237,7 @@ pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
         bytes_read: total_read,
         first_bytes,
         boot_signature,
+        geometry,
+        geometry_error,
     })
 }

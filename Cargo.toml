@@ -5,7 +5,12 @@ edition = "2024"
 
 [dependencies]
 eframe = "0.36"
-windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+] }
 
 [build-dependencies]
 embed-manifest = "1.5.0"

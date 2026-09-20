@@ -182,18 +182,18 @@ impl FluxVaultApp {
         let read_only = MediaSafetyPolicy::SOURCE_MEDIA_ACCESS == SourceMediaAccess::ReadOnly
             && !MediaSafetyPolicy::ALLOW_PHYSICAL_MEDIA_WRITES;
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if read_only {
                 ui.colored_label(
                     egui::Color32::from_rgb(70, 200, 120),
-                    egui::RichText::new("● FORRÁSLEMEZ: CSAK OLVASHATÓ")
+                    egui::RichText::new("[READ ONLY] FORRASLEMEZ: CSAK OLVASHATO")
                         .strong()
                         .size(15.0),
                 );
             } else {
                 ui.colored_label(
                     egui::Color32::RED,
-                    egui::RichText::new("● VESZÉLY: ÍRÁSI HOZZÁFÉRÉS ENGEDÉLYEZVE")
+                    egui::RichText::new("[VESZELY] IRASI HOZZAFERES ENGEDELYEZVE")
                         .strong()
                         .size(15.0),
                 );
@@ -201,7 +201,7 @@ impl FluxVaultApp {
 
             ui.separator();
 
-            ui.weak("A FluxVault soha nem írhat az ügyfél eredeti floppy lemezére.");
+            ui.weak("A FluxVault soha nem irhat az ugyfel eredeti floppy lemezere.");
         });
     }
 
@@ -234,13 +234,13 @@ impl FluxVaultApp {
         ui.group(|ui| {
             ui.heading("M0 állapot");
 
-            ui.label("✓ eframe / egui GUI");
-            ui.label("✓ Windows DPI manifest");
-            ui.label("✓ Központi read-only biztonsági szabály");
-            ui.label("✓ Navigáció és operátori napló");
-            ui.label("○ Projektkezelés");
-            ui.label("○ Fizikai floppy meghajtó felismerése");
-            ui.label("○ Nyers, read-only lemezbeolvasás");
+            ui.label("[OK] eframe / egui GUI");
+            ui.label("[OK] Windows DPI manifest");
+            ui.label("[OK] Központi read-only biztonsági szabály");
+            ui.label("[OK] Navigáció és operátori napló");
+            ui.label("[TODO] Projektkezelés");
+            ui.label("[OK] Fizikai floppy meghajtó felismerése");
+            ui.label("[WIP] Nyers, read-only lemezbeolvasás");
         });
     }
 
@@ -321,25 +321,53 @@ impl FluxVaultApp {
             ui.add_space(16.0);
 
             ui.group(|ui| {
-                ui.label(
-                    egui::RichText::new("Read-only próba eredménye")
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    egui::RichText::new("[READ OK] Fizikai floppy olvashato")
                         .strong()
-                        .size(16.0),
+                        .size(18.0),
                 );
 
-                ui.add_space(6.0);
+                ui.add_space(8.0);
 
-                ui.label(format!("Beolvasott bájtok: {}", result.bytes_read));
-                ui.label(format!("Első 16 bájt: {}", result.first_bytes_hex()));
-                ui.label(format!("510-511. bájt: {}", result.boot_signature_hex()));
+                ui.label(format!("Beolvasott bajtok: {}", result.bytes_read));
+                ui.monospace(format!("Elso 16 bajt: {}", result.first_bytes_hex()));
+                ui.label(format!("510-511. bajt: {}", result.boot_signature_hex()));
 
                 if result.boot_signature == Some([0x55, 0xAA]) {
                     ui.colored_label(
                         egui::Color32::from_rgb(70, 200, 120),
-                        "55 AA boot signature található.",
+                        "[OK] 55 AA boot signature megtalalva.",
                     );
                 } else if result.bytes_read >= 512 {
-                    ui.weak("A klasszikus 55 AA boot signature nem található.");
+                    ui.weak("[INFO] Klasszikus 55 AA boot signature nincs.");
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.label(
+                    egui::RichText::new("Windows lemezgeometria")
+                        .strong()
+                        .size(16.0),
+                );
+
+                if let Some(geometry) = result.geometry {
+                    ui.label(format!("Formatum becsles: {}", geometry.format_guess()));
+                    ui.label(format!("Cilinderek: {}", geometry.cylinders));
+                    ui.label(format!("Fejek: {}", geometry.heads));
+                    ui.label(format!("Szektor / sav: {}", geometry.sectors_per_track));
+                    ui.label(format!("Bajt / szektor: {}", geometry.bytes_per_sector));
+                    ui.label(format!("Osszes szektor: {}", geometry.total_sectors()));
+                    ui.label(format!("Varhato meret: {} bajt", geometry.total_bytes()));
+                    ui.label(format!("Windows media type kod: {}", geometry.media_type));
+                } else if let Some(error) = &result.geometry_error {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        "[WARN] A szektor olvasasa sikerult, de a geometria lekerdezese nem.",
+                    );
+                    ui.monospace(error);
                 }
             });
         }
@@ -413,16 +441,16 @@ impl FluxVaultApp {
 
             ui.add_space(6.0);
 
-            ui.label("• Összesítő dashboard");
-            ui.label("• Feldolgozott floppy lemezek száma");
-            ui.label("• Hibátlan / részleges / sikertelen beolvasások");
-            ui.label("• Hibás és újrapróbált szektorok statisztikája");
-            ui.label("• Visszaállított fájlok száma és mérete");
-            ui.label("• Adatmentési módszerek megoszlása");
-            ui.label("• Konverziós eredmények");
-            ui.label("• Lemezenkénti részletes munkalap");
-            ui.label("• Szűrhető és színezett állapotok");
-            ui.label("• Grafikonok és összesített statisztikák");
+            ui.label("- Összesítő dashboard");
+            ui.label("- Feldolgozott floppy lemezek száma");
+            ui.label("- Hibátlan / részleges / sikertelen beolvasások");
+            ui.label("- Hibás és újrapróbált szektorok statisztikája");
+            ui.label("- Visszaállított fájlok száma és mérete");
+            ui.label("- Adatmentési módszerek megoszlása");
+            ui.label("- Konverziós eredmények");
+            ui.label("- Lemezenkénti részletes munkalap");
+            ui.label("- Szűrhető és színezett állapotok");
+            ui.label("- Grafikonok és összesített statisztikák");
 
             ui.add_space(8.0);
 
@@ -493,42 +521,64 @@ impl FluxVaultApp {
 
 impl eframe::App for FluxVaultApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        ui.add_space(6.0);
+        ui.vertical(|ui| {
+            ui.add_space(6.0);
 
-        self.safety_banner(ui);
+            self.safety_banner(ui);
 
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(6.0);
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
 
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(220.0);
-                self.navigation(ui);
-            });
+            let status_reserve = 72.0;
+            let content_height = (ui.available_height() - status_reserve).max(200.0);
+            let total_width = ui.available_width();
+            let navigation_width = 180.0;
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(total_width, content_height),
+                egui::Layout::left_to_right(egui::Align::TOP),
+                |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(navigation_width, content_height),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| {
+                            self.navigation(ui);
+                        },
+                    );
+
+                    ui.separator();
+
+                    let content_width = ui.available_width().max(200.0);
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(content_width, content_height),
+                        egui::Layout::top_down(egui::Align::LEFT),
+                        |ui| {
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                ui.set_max_width((content_width - 12.0).max(180.0));
+                                ui.add_space(4.0);
+
+                                self.current_page(ui);
+
+                                ui.add_space(12.0);
+                            });
+                        },
+                    );
+                },
+            );
 
             ui.separator();
+            ui.add_space(4.0);
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.set_min_width(600.0);
-                ui.add_space(4.0);
-
-                self.current_page(ui);
-
-                ui.add_space(12.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Allapot:");
+                ui.strong(&self.status);
             });
+
+            self.operator_log(ui);
+
+            ui.add_space(4.0);
         });
-
-        ui.separator();
-        ui.add_space(4.0);
-
-        ui.horizontal(|ui| {
-            ui.label("Állapot:");
-            ui.strong(&self.status);
-        });
-
-        self.operator_log(ui);
-
-        ui.add_space(4.0);
     }
 }
