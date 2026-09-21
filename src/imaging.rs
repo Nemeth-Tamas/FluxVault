@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{SystemTime, UNIX_EPOCH},
@@ -27,6 +27,8 @@ pub enum SectorReadState {
 pub struct ImagingResult {
     pub output_path: PathBuf,
     pub metadata_path: PathBuf,
+    pub disk_number: u32,
+    pub attempt_number: u32,
     pub sha256: String,
     pub total_sectors: usize,
     pub bad_sectors: Vec<u64>,
@@ -46,6 +48,8 @@ struct BadSectorMetadata {
 struct AcquisitionMetadata {
     fluxvault_version: &'static str,
     status: &'static str,
+    disk_number: u32,
+    attempt_number: u32,
     source_device: String,
     image_file: String,
     timestamp_unix_ms: u128,
@@ -94,12 +98,13 @@ pub enum ImagingEvent {
 pub fn start_imaging(
     drive: FloppyDrive,
     geometry: DiskGeometry,
+    disk_number: u32,
     sector_retries: usize,
 ) -> Receiver<ImagingEvent> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
-        if let Err(error) = run_imaging(drive, geometry, sector_retries, &sender) {
+        if let Err(error) = run_imaging(drive, geometry, disk_number, sector_retries, &sender) {
             let _ = sender.send(ImagingEvent::Failed(error));
         }
     });
@@ -110,10 +115,15 @@ pub fn start_imaging(
 fn run_imaging(
     drive: FloppyDrive,
     geometry: DiskGeometry,
+    disk_number: u32,
     sector_retries: usize,
     sender: &Sender<ImagingEvent>,
 ) -> Result<(), String> {
     MediaSafetyPolicy::assert_invariants();
+
+    if disk_number == 0 {
+        return Err("A lemezszám nem lehet 000.".to_owned());
+    }
 
     if !geometry.looks_like_floppy() {
         return Err(format!(
@@ -145,9 +155,12 @@ fn run_imaging(
         .map_err(|error| format!("Rendszerido hiba: {error}"))?
         .as_millis();
 
-    let stem = format!("capture_{}_{}", timestamp, std::process::id());
+    let attempt_number = next_attempt_number(Path::new("captures"), disk_number)?;
+
+    let stem = format!("{disk_number:03}_attempt_{attempt_number:03}");
 
     let partial_path = PathBuf::from("captures").join(format!("{stem}.partial.img"));
+
     let final_path = PathBuf::from("captures").join(format!("{stem}.img"));
 
     let metadata_partial_path = PathBuf::from("captures").join(format!("{stem}.partial.json"));
@@ -363,6 +376,8 @@ fn run_imaging(
     let metadata = AcquisitionMetadata {
         fluxvault_version: env!("CARGO_PKG_VERSION"),
         status: acquisition_status,
+        disk_number,
+        attempt_number,
         source_device: drive.device_path.clone(),
         image_file: final_path.display().to_string(),
         timestamp_unix_ms: timestamp,
@@ -432,6 +447,8 @@ fn run_imaging(
         .send(ImagingEvent::Completed(ImagingResult {
             output_path: final_path,
             metadata_path: metadata_final_path,
+            disk_number,
+            attempt_number,
             sha256,
             total_sectors,
             bad_sectors,
@@ -473,6 +490,35 @@ fn read_sector_with_retries(
     Err(last_error
         .map(|error| error.to_string())
         .unwrap_or_else(|| "Ismeretlen szektorolvasasi hiba.".to_owned()))
+}
+
+fn next_attempt_number(directory: &Path, disk_number: u32) -> Result<u32, String> {
+    let prefix = format!("{disk_number:03}_attempt_");
+    let mut highest_attempt = 0u32;
+
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("Nem sikerult megvizsgalni a captures mappat: {error}"))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Hibas captures mappa bejegyzes: {error}"))?;
+
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+
+        let Some(rest) = file_name.strip_prefix(&prefix) else {
+            continue;
+        };
+
+        let attempt_text = rest.split('.').next().unwrap_or_default();
+
+        let Ok(attempt) = attempt_text.parse::<u32>() else {
+            continue;
+        };
+
+        highest_attempt = highest_attempt.max(attempt);
+    }
+
+    Ok(highest_attempt.saturating_add(1).max(1))
 }
 
 fn bad_sector_metadata(lba: u64, geometry: DiskGeometry) -> BadSectorMetadata {

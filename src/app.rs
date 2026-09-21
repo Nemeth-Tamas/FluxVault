@@ -35,6 +35,7 @@ pub struct FluxVaultApp {
     page: Page,
     project_path: Option<String>,
     active_source: Option<String>,
+    current_disk_number: u32,
     floppy_drives: Vec<FloppyDrive>,
     selected_drive: Option<usize>,
     probe_result: Option<ProbeResult>,
@@ -57,6 +58,7 @@ impl FluxVaultApp {
             page: Page::Project,
             project_path: None,
             active_source: None,
+            current_disk_number: 1,
             floppy_drives: Vec::new(),
             selected_drive: None,
             probe_result: None,
@@ -83,12 +85,44 @@ impl FluxVaultApp {
         self.operator_log.push(message.into());
     }
 
+    fn advance_to_next_disk(&mut self) {
+        if self.imaging_running {
+            return;
+        }
+
+        self.current_disk_number = self.current_disk_number.saturating_add(1).max(1);
+
+        self.probe_result = None;
+        self.imaging_geometry = None;
+        self.imaging_states.clear();
+        self.imaging_completed_sectors = 0;
+        self.imaging_total_sectors = 0;
+        self.imaging_output = None;
+        self.imaging_result = None;
+        self.imaging_error = None;
+
+        self.status = format!(
+            "Következő lemez: {:03}. Helyezze be, majd végezzen próbaolvasást.",
+            self.current_disk_number
+        );
+
+        self.log(format!(
+            "Következő ügyféllemez kiválasztva: {:03}.",
+            self.current_disk_number
+        ));
+    }
+
     fn start_full_imaging(&mut self) {
         if self.imaging_running {
             return;
         }
 
         MediaSafetyPolicy::assert_invariants();
+
+        if self.current_disk_number == 0 {
+            self.status = "A lemezszám nem lehet 000.".to_owned();
+            return;
+        }
 
         let Some(index) = self.selected_drive else {
             self.status = "Nincs kiválasztott meghajtó.".to_owned();
@@ -126,13 +160,22 @@ impl FluxVaultApp {
         self.imaging_error = None;
         self.imaging_running = true;
 
-        self.status = format!("Teljes lemezkép készítése: {}", drive.root);
+        self.status = format!(
+            "Lemez {:03} teljes lemezképének készítése: {}",
+            self.current_disk_number, drive.root
+        );
+
         self.log(format!(
-            "Teljes READ ONLY lemezkép készítése indul: {}",
-            drive.device_path
+            "Lemez {:03} READ ONLY lemezkép készítése indul: {}",
+            self.current_disk_number, drive.device_path
         ));
 
-        self.imaging_receiver = Some(imaging::start_imaging(drive, geometry, 2));
+        self.imaging_receiver = Some(imaging::start_imaging(
+            drive,
+            geometry,
+            self.current_disk_number,
+            2,
+        ));
     }
 
     fn poll_imaging_events(&mut self) {
@@ -229,6 +272,7 @@ impl FluxVaultApp {
         ui.add_space(8.0);
 
         egui::ScrollArea::vertical()
+            .id_salt("sector_map_scroll")
             .max_height(380.0)
             .show(ui, |ui| {
                 for cylinder in 0..geometry.cylinders as usize {
@@ -474,6 +518,28 @@ impl FluxVaultApp {
 
             ui.add_space(6.0);
 
+            ui.horizontal(|ui| {
+                ui.label("Aktuális ügyféllemez:");
+
+                ui.add_enabled(
+                    !self.imaging_running,
+                    egui::DragValue::new(&mut self.current_disk_number).speed(1.0),
+                );
+
+                if self.current_disk_number == 0 {
+                    self.current_disk_number = 1;
+                }
+
+                ui.monospace(format!("{:03}", self.current_disk_number));
+            });
+
+            ui.weak(format!(
+                "Kimeneti név: {:03}_attempt_NNN.img",
+                self.current_disk_number
+            ));
+
+            ui.add_space(8.0);
+
             if ui
                 .add_enabled(
                     !self.imaging_running,
@@ -518,7 +584,7 @@ impl FluxVaultApp {
 
             ui.add_space(12.0);
 
-            let drive_selected = self.selected_drive.is_some();
+            let drive_selected = self.selected_drive.is_some() && !self.imaging_running;
 
             if ui
                 .add_enabled(
@@ -658,6 +724,11 @@ impl FluxVaultApp {
                 }
 
                 ui.label(format!(
+                    "Lemez: {:03} | Olvasási próbálkozás: {:03}",
+                    result.disk_number, result.attempt_number
+                ));
+
+                ui.label(format!(
                     "Retry után megmentett szektorok: {}",
                     result.retry_recovered
                 ));
@@ -676,6 +747,7 @@ impl FluxVaultApp {
 
                     if let Some(geometry) = self.imaging_geometry {
                         egui::ScrollArea::vertical()
+                            .id_salt("bad_sector_list_scroll")
                             .max_height(110.0)
                             .show(ui, |ui| {
                                 for lba in &result.bad_sectors {
@@ -699,6 +771,27 @@ impl FluxVaultApp {
                             });
                     }
                 }
+            }
+
+            if self.imaging_result.is_some() && !self.imaging_running {
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(format!(
+                            "Következő lemez: {:03}",
+                            self.current_disk_number.saturating_add(1)
+                        ))
+                        .clicked()
+                    {
+                        self.advance_to_next_disk();
+                    }
+
+                    ui.weak(
+                        "Ugyanennek a lemeznek az újraolvasásához ne léptessen tovább; \
+                         indítsa el újra a teljes lemezkép készítését.",
+                    );
+                });
             }
 
             if let Some(error) = &self.imaging_error {
@@ -842,6 +935,7 @@ impl FluxVaultApp {
 
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
+                .id_salt("operator_log_scroll")
                 .max_height(130.0)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
@@ -897,14 +991,16 @@ impl eframe::App for FluxVaultApp {
                         egui::vec2(content_width, content_height),
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| {
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                ui.set_max_width((content_width - 12.0).max(180.0));
-                                ui.add_space(4.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("main_content_scroll")
+                                .show(ui, |ui| {
+                                    ui.set_max_width((content_width - 12.0).max(180.0));
+                                    ui.add_space(4.0);
 
-                                self.current_page(ui);
+                                    self.current_page(ui);
 
-                                ui.add_space(12.0);
-                            });
+                                    ui.add_space(12.0);
+                                });
                         },
                     );
                 },
