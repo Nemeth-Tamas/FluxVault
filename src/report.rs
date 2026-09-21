@@ -136,7 +136,7 @@ fn build_hungarian_workbook(
         for (index, (label, value)) in summary_rows.iter().enumerate() {
             let row = 6 + index as u32;
 
-            worksheet.write_string_with_format(row, 0, label, &label_format)?;
+            worksheet.write_string_with_format(row, 0, *label, &label_format)?;
 
             worksheet.write_number_with_format(row, 1, *value, &center_format)?;
         }
@@ -189,7 +189,7 @@ fn build_hungarian_workbook(
         ];
 
         for (column, header) in headers.iter().enumerate() {
-            worksheet.write_string_with_format(0, column as u16, header, &header_format)?;
+            worksheet.write_string_with_format(0, column as u16, *header, &header_format)?;
         }
 
         for (index, disk) in statistics.disks.iter().enumerate() {
