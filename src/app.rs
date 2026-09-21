@@ -1,4 +1,8 @@
-use std::{path::Path, sync::mpsc::Receiver, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::Receiver,
+    time::Duration,
+};
 
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
@@ -8,6 +12,7 @@ use crate::{
     imaging::{
         self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, SectorReadState,
     },
+    project::{self, ProjectState},
     safety::{MediaSafetyPolicy, SourceMediaAccess},
 };
 
@@ -36,7 +41,7 @@ impl Page {
 
 pub struct FluxVaultApp {
     page: Page,
-    project_path: Option<String>,
+    project: Option<ProjectState>,
     active_source: Option<String>,
     current_disk_number: u32,
     floppy_drives: Vec<FloppyDrive>,
@@ -62,7 +67,7 @@ impl FluxVaultApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let mut app = Self {
             page: Page::Project,
-            project_path: None,
+            project: None,
             active_source: None,
             current_disk_number: 1,
             floppy_drives: Vec::new(),
@@ -87,6 +92,7 @@ impl FluxVaultApp {
         app.log("FluxVault elindult.");
         app.log("Forrás adathordozó biztonsági mód: CSAK OLVASHATÓ.");
 
+        app.restore_last_project();
         app.refresh_attempt_history();
 
         app
@@ -94,6 +100,98 @@ impl FluxVaultApp {
 
     fn log(&mut self, message: impl Into<String>) {
         self.operator_log.push(message.into());
+    }
+
+    fn acquisition_directory(&self) -> PathBuf {
+        self.project
+            .as_ref()
+            .map(ProjectState::images_dir)
+            .unwrap_or_else(|| PathBuf::from("captures"))
+    }
+
+    fn restore_last_project(&mut self) {
+        match project::load_last_project() {
+            Ok(Some(project)) => {
+                self.current_disk_number = project.current_disk_number();
+
+                let name = project.name().to_owned();
+                let root = project.root().display().to_string();
+
+                self.project = Some(project);
+
+                self.status = format!("Projekt visszaállítva: {name}");
+
+                self.log(format!("Legutóbbi projekt visszaállítva: {name} | {root}"));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.log(format!("Legutóbbi projekt visszaállítási hiba: {error}"));
+            }
+        }
+    }
+
+    fn activate_project(&mut self, project: ProjectState) {
+        let name = project.name().to_owned();
+        let root = project.root().display().to_string();
+        let disk_number = project.current_disk_number();
+
+        self.project = Some(project);
+        self.current_disk_number = disk_number;
+
+        self.probe_result = None;
+        self.imaging_geometry = None;
+        self.imaging_states.clear();
+        self.imaging_completed_sectors = 0;
+        self.imaging_total_sectors = 0;
+        self.imaging_output = None;
+        self.imaging_result = None;
+        self.imaging_error = None;
+
+        self.status = format!("Projekt megnyitva: {name}");
+
+        self.log(format!("Projekt aktiválva: {name} | {root}"));
+
+        self.refresh_attempt_history();
+    }
+
+    fn create_project_interactive(&mut self) {
+        let Some(root) = rfd::FileDialog::new()
+            .set_title("Új FluxVault projekt mappája")
+            .pick_folder()
+        else {
+            return;
+        };
+
+        match ProjectState::create(root) {
+            Ok(project) => {
+                self.activate_project(project);
+            }
+            Err(error) => {
+                self.status = "A projekt létrehozása sikertelen.".to_owned();
+
+                self.log(format!("Projekt létrehozási hiba: {error}"));
+            }
+        }
+    }
+
+    fn open_project_interactive(&mut self) {
+        let Some(root) = rfd::FileDialog::new()
+            .set_title("FluxVault projekt megnyitása")
+            .pick_folder()
+        else {
+            return;
+        };
+
+        match ProjectState::open(root) {
+            Ok(project) => {
+                self.activate_project(project);
+            }
+            Err(error) => {
+                self.status = "A projekt megnyitása sikertelen.".to_owned();
+
+                self.log(format!("Projekt megnyitási hiba: {error}"));
+            }
+        }
     }
 
     fn format_timestamp(timestamp_unix_ms: u128) -> String {
@@ -112,7 +210,9 @@ impl FluxVaultApp {
     }
 
     fn refresh_attempt_history(&mut self) {
-        match imaging::load_attempts_for_disk(Path::new("captures"), self.current_disk_number) {
+        let acquisition_directory = self.acquisition_directory();
+
+        match imaging::load_attempts_for_disk(&acquisition_directory, self.current_disk_number) {
             Ok(attempts) => {
                 self.attempt_comparison = imaging::compare_latest_attempts(&attempts);
 
@@ -152,7 +252,17 @@ impl FluxVaultApp {
         self.imaging_result = None;
         self.imaging_error = None;
 
-        self.status = format!("Aktuális ügyféllemez: {:03}.", self.current_disk_number);
+        self.status = "Készen áll".to_owned();
+
+        let project_save_error = self.project.as_mut().and_then(|project| {
+            project
+                .set_current_disk_number(self.current_disk_number)
+                .err()
+        });
+
+        if let Some(error) = project_save_error {
+            self.log(format!("Projektállapot mentési hiba: {error}"));
+        }
 
         self.log(format!(
             "Aktuális ügyféllemez kiválasztva: {:03}.",
@@ -230,9 +340,17 @@ impl FluxVaultApp {
             self.current_disk_number, drive.device_path
         ));
 
+        let acquisition_directory = self.acquisition_directory();
+
+        self.log(format!(
+            "Kimeneti mappa: {}",
+            acquisition_directory.display()
+        ));
+
         self.imaging_receiver = Some(imaging::start_imaging(
             drive,
             geometry,
+            acquisition_directory,
             self.current_disk_number,
             2,
         ));
@@ -476,9 +594,10 @@ impl FluxVaultApp {
 
         ui.label("Projekt:");
 
-        match &self.project_path {
-            Some(path) => {
-                ui.label(path);
+        match &self.project {
+            Some(project) => {
+                ui.strong(project.name());
+                ui.weak(project.root().display().to_string());
             }
             None => {
                 ui.weak("Nincs megnyitva");
@@ -539,16 +658,42 @@ impl FluxVaultApp {
         ui.add_space(16.0);
 
         ui.horizontal(|ui| {
-            if ui.button("Új projekt").clicked() {
-                self.status = "Projekt létrehozása még nincs implementálva.".to_owned();
-                self.log("Új projekt gomb megnyomva.");
+            if ui.button("Új projekt mappa...").clicked() {
+                self.create_project_interactive();
             }
 
-            if ui.button("Projekt megnyitása").clicked() {
-                self.status = "Projekt megnyitása még nincs implementálva.".to_owned();
-                self.log("Projekt megnyitása gomb megnyomva.");
+            if ui.button("Projekt megnyitása...").clicked() {
+                self.open_project_interactive();
             }
         });
+
+        ui.add_space(16.0);
+
+        if let Some(project) = &self.project {
+            ui.group(|ui| {
+                ui.label(egui::RichText::new("Aktív projekt").strong().size(16.0));
+
+                ui.add_space(6.0);
+
+                ui.label(format!("Név: {}", project.name()));
+
+                ui.label(format!("Gyökérmappa: {}", project.root().display()));
+
+                ui.label(format!("Lemezképek: {}", project.images_dir().display()));
+
+                ui.label(format!("Projektfájl: {}", project.project_file().display()));
+
+                ui.label(format!(
+                    "Aktuális ügyféllemez: {:03}",
+                    project.current_disk_number()
+                ));
+            });
+        } else {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 180, 80),
+                "[INFO] Nincs megnyitott projekt. A teszt acquisitions továbbra is a helyi captures mappába kerülnek.",
+            );
+        }
 
         ui.add_space(24.0);
 
@@ -559,7 +704,7 @@ impl FluxVaultApp {
             ui.label("[OK] Windows DPI manifest");
             ui.label("[OK] Központi read-only biztonsági szabály");
             ui.label("[OK] Navigáció és operátori napló");
-            ui.label("[TODO] Projektkezelés");
+            ui.label("[OK] Projekt létrehozás / megnyitás / állapotmentés");
             ui.label("[OK] Fizikai floppy meghajtó felismerése");
             ui.label("[WIP] Nyers, read-only lemezbeolvasás");
         });
@@ -687,10 +832,20 @@ impl FluxVaultApp {
 
             ui.add_space(8.0);
 
-            ui.weak(
+            let acquisition_directory = self.acquisition_directory();
+
+            ui.weak(format!(
                 "A forrás meghajtó kizárólag olvasási hozzáféréssel van megnyitva. \
-                 A lemezkép a helyi captures mappába készül.",
-            );
+                 Kimeneti mappa: {}",
+                acquisition_directory.display()
+            ));
+
+            if self.project.is_none() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 80),
+                    "[INFO] Teszt mód: nincs aktív projekt, ezért a captures mappa használatos.",
+                );
+            }
         });
 
         if let Some(result) = &self.probe_result {

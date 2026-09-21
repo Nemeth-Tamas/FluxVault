@@ -122,13 +122,21 @@ pub enum ImagingEvent {
 pub fn start_imaging(
     drive: FloppyDrive,
     geometry: DiskGeometry,
+    output_directory: PathBuf,
     disk_number: u32,
     sector_retries: usize,
 ) -> Receiver<ImagingEvent> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
-        if let Err(error) = run_imaging(drive, geometry, disk_number, sector_retries, &sender) {
+        if let Err(error) = run_imaging(
+            drive,
+            geometry,
+            output_directory,
+            disk_number,
+            sector_retries,
+            &sender,
+        ) {
             let _ = sender.send(ImagingEvent::Failed(error));
         }
     });
@@ -139,6 +147,7 @@ pub fn start_imaging(
 fn run_imaging(
     drive: FloppyDrive,
     geometry: DiskGeometry,
+    output_directory: PathBuf,
     disk_number: u32,
     sector_retries: usize,
     sender: &Sender<ImagingEvent>,
@@ -171,25 +180,29 @@ fn run_imaging(
     let total_tracks = usize::try_from(geometry.cylinders.saturating_mul(geometry.heads as u64))
         .map_err(|_| "Tul nagy savszam.".to_owned())?;
 
-    fs::create_dir_all("captures")
-        .map_err(|error| format!("Nem sikerult letrehozni a captures mappat: {error}"))?;
+    fs::create_dir_all(&output_directory).map_err(|error| {
+        format!(
+            "Nem sikerult letrehozni a kimeneti mappat {}: {error}",
+            output_directory.display()
+        )
+    })?;
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("Rendszerido hiba: {error}"))?
         .as_millis();
 
-    let attempt_number = next_attempt_number(Path::new("captures"), disk_number)?;
+    let attempt_number = next_attempt_number(&output_directory, disk_number)?;
 
     let stem = format!("{disk_number:03}_attempt_{attempt_number:03}");
 
-    let partial_path = PathBuf::from("captures").join(format!("{stem}.partial.img"));
+    let partial_path = output_directory.join(format!("{stem}.partial.img"));
 
-    let final_path = PathBuf::from("captures").join(format!("{stem}.img"));
+    let final_path = output_directory.join(format!("{stem}.img"));
 
-    let metadata_partial_path = PathBuf::from("captures").join(format!("{stem}.partial.json"));
+    let metadata_partial_path = output_directory.join(format!("{stem}.partial.json"));
 
-    let metadata_final_path = PathBuf::from("captures").join(format!("{stem}.json"));
+    let metadata_final_path = output_directory.join(format!("{stem}.json"));
 
     let mut source = File::open(&drive.device_path).map_err(|error| {
         format!(
