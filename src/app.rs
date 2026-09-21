@@ -42,6 +42,7 @@ pub struct FluxVaultApp {
     project: Option<ProjectState>,
     active_source: Option<String>,
     current_disk_number: u32,
+    sector_retries: usize,
     floppy_drives: Vec<FloppyDrive>,
     selected_drive: Option<usize>,
     probe_result: Option<ProbeResult>,
@@ -70,6 +71,7 @@ impl FluxVaultApp {
             project: None,
             active_source: None,
             current_disk_number: 1,
+            sector_retries: 2,
             floppy_drives: Vec::new(),
             selected_drive: None,
             probe_result: None,
@@ -109,6 +111,13 @@ impl FluxVaultApp {
         self.project
             .as_ref()
             .map(ProjectState::images_dir)
+            .unwrap_or_else(|| PathBuf::from("captures"))
+    }
+
+    fn acquisition_log_directory(&self) -> PathBuf {
+        self.project
+            .as_ref()
+            .map(ProjectState::logs_dir)
             .unwrap_or_else(|| PathBuf::from("captures"))
     }
 
@@ -398,18 +407,30 @@ impl FluxVaultApp {
         ));
 
         let acquisition_directory = self.acquisition_directory();
+        let acquisition_log_directory = self.acquisition_log_directory();
 
         self.log(format!(
             "Kimeneti mappa: {}",
             acquisition_directory.display()
         ));
 
+        self.log(format!(
+            "Napló mappa: {}",
+            acquisition_log_directory.display()
+        ));
+
+        self.log(format!(
+            "Hibás szektor retry beállítás: {}",
+            self.sector_retries
+        ));
+
         self.imaging_receiver = Some(imaging::start_imaging(
             drive,
             geometry,
             acquisition_directory,
+            acquisition_log_directory,
             self.current_disk_number,
-            2,
+            self.sector_retries,
         ));
     }
 
@@ -811,6 +832,24 @@ impl FluxVaultApp {
 
             ui.add_space(8.0);
 
+            ui.horizontal(|ui| {
+                ui.label("Hibás szektor újrapróbálások:");
+
+                ui.add_enabled(
+                    !self.imaging_running,
+                    egui::DragValue::new(&mut self.sector_retries)
+                        .range(0..=10)
+                        .speed(1.0),
+                );
+
+                ui.weak(format!(
+                    "{} összes olvasási próbálkozás / hibás szektor",
+                    self.sector_retries + 1
+                ));
+            });
+
+            ui.add_space(8.0);
+
             if ui
                 .add_enabled(
                     !self.imaging_running,
@@ -1020,6 +1059,7 @@ impl FluxVaultApp {
                 ));
                 ui.label(format!("Méret: {} bájt", result.bytes_written));
                 ui.label(format!("Metadata: {}", result.metadata_path.display()));
+                ui.label(format!("Napló: {}", result.log_path.display()));
                 ui.monospace(format!("SHA-256: {}", result.sha256));
 
                 if !result.bad_sectors.is_empty() {
@@ -1167,6 +1207,14 @@ impl FluxVaultApp {
                                 ui.label(format!("Kép: {}", attempt.image_file));
 
                                 ui.label(format!("Metadata: {}", attempt.metadata_path.display()));
+
+                                if !attempt.log_file.is_empty() {
+                                    ui.label(format!("Napló: {}", attempt.log_file));
+                                } else {
+                                    ui.weak(
+                                        "Napló: régi acquisition, nincs rögzített log artifact",
+                                    );
+                                }
 
                                 let short_sha = attempt.sha256.chars().take(16).collect::<String>();
 

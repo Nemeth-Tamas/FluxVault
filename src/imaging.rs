@@ -7,6 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -27,6 +28,7 @@ pub enum SectorReadState {
 pub struct ImagingResult {
     pub output_path: PathBuf,
     pub metadata_path: PathBuf,
+    pub log_path: PathBuf,
     pub disk_number: u32,
     pub attempt_number: u32,
     pub sha256: String,
@@ -50,8 +52,16 @@ struct AcquisitionMetadata {
     status: String,
     disk_number: u32,
     attempt_number: u32,
+
+    #[serde(default)]
+    source_backend: String,
+
     source_device: String,
     image_file: String,
+
+    #[serde(default)]
+    log_file: String,
+
     timestamp_unix_ms: u128,
 
     geometry: GeometryMetadata,
@@ -83,6 +93,7 @@ pub struct AttemptSummary {
     pub timestamp_unix_ms: u128,
     pub image_file: String,
     pub metadata_path: PathBuf,
+    pub log_file: String,
     pub sha256: String,
     pub total_sectors: usize,
     pub retry_recovered_sectors: usize,
@@ -147,6 +158,7 @@ pub fn start_imaging(
     drive: FloppyDrive,
     geometry: DiskGeometry,
     output_directory: PathBuf,
+    log_directory: PathBuf,
     disk_number: u32,
     sector_retries: usize,
 ) -> Receiver<ImagingEvent> {
@@ -157,6 +169,7 @@ pub fn start_imaging(
             drive,
             geometry,
             output_directory,
+            log_directory,
             disk_number,
             sector_retries,
             &sender,
@@ -172,6 +185,7 @@ fn run_imaging(
     drive: FloppyDrive,
     geometry: DiskGeometry,
     output_directory: PathBuf,
+    log_directory: PathBuf,
     disk_number: u32,
     sector_retries: usize,
     sender: &Sender<ImagingEvent>,
@@ -211,6 +225,13 @@ fn run_imaging(
         )
     })?;
 
+    fs::create_dir_all(&log_directory).map_err(|error| {
+        format!(
+            "Nem sikerult letrehozni a naplo mappat {}: {error}",
+            log_directory.display()
+        )
+    })?;
+
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("Rendszerido hiba: {error}"))?
@@ -227,6 +248,10 @@ fn run_imaging(
     let metadata_partial_path = output_directory.join(format!("{stem}.partial.json"));
 
     let metadata_final_path = output_directory.join(format!("{stem}.json"));
+
+    let log_partial_path = log_directory.join(format!("{stem}.partial.log"));
+
+    let log_final_path = log_directory.join(format!("{stem}.log"));
 
     let mut source = File::open(&drive.device_path).map_err(|error| {
         format!(
@@ -253,23 +278,50 @@ fn run_imaging(
         })
         .ok();
 
-    sender
-        .send(ImagingEvent::Log(format!(
-            "Kepkeszites indul: {} -> {}",
-            drive.device_path,
-            partial_path.display()
-        )))
-        .ok();
+    let mut human_log = Vec::new();
 
-    sender
-        .send(ImagingEvent::Log(format!(
-            "Geometria: {} cilinder, {} fej, {} szektor/sav, {} bajt/szektor.",
+    record_attempt_log(
+        sender,
+        &mut human_log,
+        format!(
+            "BEGIN | disk={disk_number:03} | attempt={attempt_number:03} | source={}",
+            drive.device_path
+        ),
+    );
+
+    record_attempt_log(
+        sender,
+        &mut human_log,
+        format!(
+            "IMAGE | partial={} | final={}",
+            partial_path.display(),
+            final_path.display()
+        ),
+    );
+
+    record_attempt_log(
+        sender,
+        &mut human_log,
+        format!(
+            "GEOMETRY | cylinders={} | heads={} | sectors_per_track={} | bytes_per_sector={} | total_sectors={} | total_bytes={}",
             geometry.cylinders,
             geometry.heads,
             geometry.sectors_per_track,
-            geometry.bytes_per_sector
-        )))
-        .ok();
+            geometry.bytes_per_sector,
+            total_sectors,
+            expected_bytes
+        ),
+    );
+
+    record_attempt_log(
+        sender,
+        &mut human_log,
+        format!(
+            "RETRY_POLICY | retries={} | total_attempts_per_failed_sector={}",
+            sector_retries,
+            sector_retries + 1
+        ),
+    );
 
     let mut hasher = Sha256::new();
     let mut completed = 0usize;
@@ -323,12 +375,13 @@ fn run_imaging(
                 }
             }
             Err(track_error) => {
-                sender
-                    .send(ImagingEvent::Log(format!(
-                        "Savolvasasi hiba C{cylinder:02} H{head}: {track_error}. \
-                         Atallas szektoronkenti olvasasra."
-                    )))
-                    .ok();
+                record_attempt_log(
+                    sender,
+                    &mut human_log,
+                    format!(
+                        "TRACK_READ_FAILED | C{cylinder:02} H{head} | {track_error} | fallback=sector"
+                    ),
+                );
 
                 for sector_index in 0..sectors_per_track {
                     let lba = track_lba + sector_index;
@@ -339,39 +392,74 @@ fn run_imaging(
 
                     let mut sector_buffer = vec![0u8; bytes_per_sector];
 
-                    let state = read_sector_with_retries(
+                    let read_result = read_sector_with_retries(
                         &mut source,
                         sector_offset,
                         &mut sector_buffer,
                         sector_retries,
                     );
 
-                    let state = match state {
-                        Ok(state) => {
+                    let state = match read_result {
+                        Ok((state, failed_attempts)) => {
+                            for (failed_index, error) in failed_attempts.iter().enumerate() {
+                                record_attempt_log(
+                                    sender,
+                                    &mut human_log,
+                                    format!(
+                                        "SECTOR_READ_FAILED | LBA={lba} | C{cylinder:02} H{head} S{:02} | attempt={}/{} | error={error}",
+                                        sector_index + 1,
+                                        failed_index + 1,
+                                        sector_retries + 1
+                                    ),
+                                );
+                            }
+
                             if state == SectorReadState::RetryRecovered {
                                 retry_recovered += 1;
 
-                                sender
-                                    .send(ImagingEvent::Log(format!(
-                                        "Szektor retry utan olvashato: LBA {lba}, \
-                                         C{cylinder:02} H{head} S{:02}.",
-                                        sector_index + 1
-                                    )))
-                                    .ok();
+                                record_attempt_log(
+                                    sender,
+                                    &mut human_log,
+                                    format!(
+                                        "SECTOR_RECOVERED_AFTER_RETRY | LBA={lba} | C{cylinder:02} H{head} S{:02} | retries_used={}",
+                                        sector_index + 1,
+                                        failed_attempts.len()
+                                    ),
+                                );
                             }
 
                             state
                         }
-                        Err(error) => {
+                        Err(failed_attempts) => {
+                            for (failed_index, error) in failed_attempts.iter().enumerate() {
+                                record_attempt_log(
+                                    sender,
+                                    &mut human_log,
+                                    format!(
+                                        "SECTOR_READ_FAILED | LBA={lba} | C{cylinder:02} H{head} S{:02} | attempt={}/{} | error={error}",
+                                        sector_index + 1,
+                                        failed_index + 1,
+                                        sector_retries + 1
+                                    ),
+                                );
+                            }
+
                             sector_buffer.fill(0);
                             bad_sectors.push(lba as u64);
 
-                            sender
-                                .send(ImagingEvent::Log(format!(
-                                    "HIBAS SZEKTOR: LBA {lba}, C{cylinder:02} H{head} S{:02}: {error}",
+                            let last_error = failed_attempts
+                                .last()
+                                .map(String::as_str)
+                                .unwrap_or("Ismeretlen olvasasi hiba.");
+
+                            record_attempt_log(
+                                sender,
+                                &mut human_log,
+                                format!(
+                                    "BAD_SECTOR | LBA={lba} | C{cylinder:02} H{head} S{:02} | zero_filled=true | error={last_error}",
                                     sector_index + 1
-                                )))
-                                .ok();
+                                ),
+                            );
 
                             SectorReadState::Bad
                         }
@@ -434,13 +522,38 @@ fn run_imaging(
         "PARTIAL"
     };
 
+    record_attempt_log(
+        sender,
+        &mut human_log,
+        format!(
+            "END | status={acquisition_status} | bad_sectors={} | retry_recovered={} | bytes={} | sha256={sha256}",
+            bad_sectors.len(),
+            retry_recovered,
+            actual_bytes
+        ),
+    );
+
+    record_attempt_log(
+        sender,
+        &mut human_log,
+        format!("METADATA | {}", metadata_final_path.display()),
+    );
+
+    record_attempt_log(
+        sender,
+        &mut human_log,
+        format!("LOG | {}", log_final_path.display()),
+    );
+
     let metadata = AcquisitionMetadata {
         fluxvault_version: env!("CARGO_PKG_VERSION").to_owned(),
         status: acquisition_status.to_owned(),
         disk_number,
         attempt_number,
+        source_backend: "windows-raw-sector".to_owned(),
         source_device: drive.device_path.clone(),
         image_file: final_path.display().to_string(),
+        log_file: log_final_path.display().to_string(),
         timestamp_unix_ms: timestamp,
 
         geometry: GeometryMetadata {
@@ -472,6 +585,33 @@ fn run_imaging(
         )
     })?;
 
+    let human_log_text = format!("{}\r\n", human_log.join("\r\n"));
+
+    let mut log_output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&log_partial_path)
+        .map_err(|error| {
+            format!(
+                "Nem sikerult letrehozni a human-readable naplot {}: {error}",
+                log_partial_path.display()
+            )
+        })?;
+
+    log_output
+        .write_all(human_log_text.as_bytes())
+        .map_err(|error| format!("Napló írási hiba: {error}"))?;
+
+    log_output
+        .flush()
+        .map_err(|error| format!("Napló flush hiba: {error}"))?;
+
+    log_output
+        .sync_all()
+        .map_err(|error| format!("Napló sync hiba: {error}"))?;
+
+    drop(log_output);
+
     fs::rename(&partial_path, &final_path).map_err(|error| {
         format!(
             "A kesz lemezkep atnevezese sikertelen. A partial fajl megmarad: {}: {error}",
@@ -483,6 +623,13 @@ fn run_imaging(
         format!(
             "A metadata fajl atnevezese sikertelen. A partial metadata megmarad: {}: {error}",
             metadata_partial_path.display()
+        )
+    })?;
+
+    fs::rename(&log_partial_path, &log_final_path).map_err(|error| {
+        format!(
+            "A naplofajl atnevezese sikertelen. A partial naplo megmarad: {}: {error}",
+            log_partial_path.display()
         )
     })?;
 
@@ -508,6 +655,7 @@ fn run_imaging(
         .send(ImagingEvent::Completed(ImagingResult {
             output_path: final_path,
             metadata_path: metadata_final_path,
+            log_path: log_final_path,
             disk_number,
             attempt_number,
             sha256,
@@ -521,13 +669,29 @@ fn run_imaging(
     Ok(())
 }
 
+fn record_attempt_log(
+    sender: &Sender<ImagingEvent>,
+    human_log: &mut Vec<String>,
+    message: impl Into<String>,
+) {
+    let message = message.into();
+
+    human_log.push(format!(
+        "[{}] {}",
+        Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+        message
+    ));
+
+    sender.send(ImagingEvent::Log(message)).ok();
+}
+
 fn read_sector_with_retries(
     source: &mut File,
     offset: u64,
     buffer: &mut [u8],
     retry_count: usize,
-) -> Result<SectorReadState, String> {
-    let mut last_error = None;
+) -> Result<(SectorReadState, Vec<String>), Vec<String>> {
+    let mut failed_attempts = Vec::new();
 
     for attempt in 0..=retry_count {
         let result = source
@@ -536,21 +700,21 @@ fn read_sector_with_retries(
 
         match result {
             Ok(()) => {
-                return Ok(if attempt == 0 {
+                let state = if attempt == 0 {
                     SectorReadState::Good
                 } else {
                     SectorReadState::RetryRecovered
-                });
+                };
+
+                return Ok((state, failed_attempts));
             }
             Err(error) => {
-                last_error = Some(error);
+                failed_attempts.push(error.to_string());
             }
         }
     }
 
-    Err(last_error
-        .map(|error| error.to_string())
-        .unwrap_or_else(|| "Ismeretlen szektorolvasasi hiba.".to_owned()))
+    Err(failed_attempts)
 }
 
 fn next_attempt_number(directory: &Path, disk_number: u32) -> Result<u32, String> {
@@ -654,6 +818,7 @@ pub fn load_attempts_for_disk(
             timestamp_unix_ms: metadata.timestamp_unix_ms,
             image_file: metadata.image_file,
             metadata_path: path,
+            log_file: metadata.log_file,
             sha256: metadata.sha256,
             total_sectors: metadata.total_sectors,
             retry_recovered_sectors: metadata.retry_recovered_sectors,

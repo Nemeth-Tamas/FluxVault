@@ -37,7 +37,7 @@
 - [x] Add `Flux` (or equivalent) for raw Greaseweazle captures.
 - [ ] Add a small FluxVault project metadata file (`project.json` or similar) containing project name, created time, operator settings, next floppy number, and tool paths/versions.
 - [ ] Model each floppy as a stable record with zero-padded number (`001`, `002`, ...), label/notes, acquisition attempts, current preferred image, extraction state, recovery state, conversion state, and audit state.
-- [ ] Model acquisition attempts as immutable records: source backend, timestamp, geometry/format, output artifacts, hashes, bad-sector map, status, and log path.
+- [x] Model acquisition attempts as immutable records: source backend, timestamp, geometry/format, output artifacts, hashes, bad-sector map, status, and log path.
 - [ ] Allow one attempt to be marked **preferred/current** without deleting older attempts.
 - [ ] Preserve enough provenance to answer: “Which read/pass produced this sector/file?”
 - [ ] Import an existing script-created archive as a project without forcing re-imaging.
@@ -75,14 +75,14 @@ This is the first “we can actually use FluxVault on customer media” target. 
 - [x] Read and display geometry: cylinders, heads, sectors/track, bytes/sector, total sectors, total bytes.
 - [x] Fast path: read one full track at a time.
 - [x] On track read failure, fall back to sector-by-sector reads for that track.
-- [ ] Configurable retry count for failed sector reads (initial default matching current tooling: 2 retries after first attempt).
-- [ ] Log every retry and recovery-after-retry event.
+- [x] Configurable retry count for failed sector reads (initial default matching current tooling: 2 retries after first attempt).
+- [x] Log every retry and recovery-after-retry event.
 - [x] Zero-fill sectors that remain unreadable **only in the derived sector image**, while separately recording their exact LBA/CHS status so zeros are never mistaken for valid recovered data.
 - [x] Write to `NNN_attempt_NNN.partial.img` first.
 - [x] Validate exact expected image size before promotion.
 - [x] Atomically promote completed output to the attempt image; do not leave a misleading “complete” file after a fatal error.
 - [x] Compute SHA-256 of completed image.
-- [ ] Save structured acquisition metadata plus a human-readable log.
+- [x] Save structured acquisition metadata plus a human-readable log.
 - [x] Show a live 80x2-ish track/head/sector heatmap: unread, good, retry-recovered, bad.
 - [x] End state clearly reports `OK`, `PARTIAL`, or `FAILED` and exact bad-sector count.
 - [x] Offer **Next floppy** while preserving manual operator confirmation.
@@ -263,8 +263,8 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 
 ## 17. Milestones
 
-- [ ] **M0 — Skeleton:** eframe window, DPI fix, module layout, settings, project open/create, worker/event plumbing.
-- [ ] **M1 — WORKING USB ARCHIVER:** safely image a real floppy, retry/fallback, bad-sector map, SHA-256, persistent project record.
+- [x] **M0 — Skeleton:** eframe window, DPI fix, module layout, settings, project open/create, worker/event plumbing.
+- [x] **M1 — WORKING USB ARCHIVER:** safely image a real floppy, retry/fallback, bad-sector map, SHA-256, persistent project record.
 - [ ] **M2 — SCRIPT REPLACEMENT CORE:** import legacy archives/logs, auto extraction, recovery queue, manifests.
 - [ ] **M3 — RECOVERY WORKBENCH:** multiple USB attempts, compare/composite with provenance, DMDE import workflow.
 - [ ] **M4 — GREASEWEAZLE READY WITHOUT HARDWARE:** tool detection, mocked backend, safe command construction, raw/derived artifact model.
