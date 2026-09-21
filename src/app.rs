@@ -1,5 +1,6 @@
 use std::{path::Path, sync::mpsc::Receiver, time::Duration};
 
+use chrono::{DateTime, Local, Utc};
 use eframe::egui;
 
 use crate::{
@@ -95,6 +96,21 @@ impl FluxVaultApp {
         self.operator_log.push(message.into());
     }
 
+    fn format_timestamp(timestamp_unix_ms: u128) -> String {
+        let Ok(timestamp_unix_ms) = i64::try_from(timestamp_unix_ms) else {
+            return "Ismeretlen időpont".to_owned();
+        };
+
+        let Some(timestamp_utc) = DateTime::<Utc>::from_timestamp_millis(timestamp_unix_ms) else {
+            return "Ismeretlen időpont".to_owned();
+        };
+
+        timestamp_utc
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string()
+    }
+
     fn refresh_attempt_history(&mut self) {
         match imaging::load_attempts_for_disk(Path::new("captures"), self.current_disk_number) {
             Ok(attempts) => {
@@ -113,12 +129,19 @@ impl FluxVaultApp {
         }
     }
 
-    fn advance_to_next_disk(&mut self) {
+    fn select_disk_number(&mut self, disk_number: u32) {
         if self.imaging_running {
             return;
         }
 
-        self.current_disk_number = self.current_disk_number.saturating_add(1).max(1);
+        let disk_number = disk_number.max(1);
+
+        if self.current_disk_number == disk_number {
+            self.refresh_attempt_history();
+            return;
+        }
+
+        self.current_disk_number = disk_number;
 
         self.probe_result = None;
         self.imaging_geometry = None;
@@ -129,17 +152,24 @@ impl FluxVaultApp {
         self.imaging_result = None;
         self.imaging_error = None;
 
-        self.status = format!(
-            "Következő lemez: {:03}. Helyezze be, majd végezzen próbaolvasást.",
-            self.current_disk_number
-        );
+        self.status = format!("Aktuális ügyféllemez: {:03}.", self.current_disk_number);
 
         self.log(format!(
-            "Következő ügyféllemez kiválasztva: {:03}.",
+            "Aktuális ügyféllemez kiválasztva: {:03}.",
             self.current_disk_number
         ));
 
         self.refresh_attempt_history();
+    }
+
+    fn advance_to_next_disk(&mut self) {
+        let next_disk = self.current_disk_number.saturating_add(1).max(1);
+        self.select_disk_number(next_disk);
+    }
+
+    fn return_to_previous_disk(&mut self) {
+        let previous_disk = self.current_disk_number.saturating_sub(1).max(1);
+        self.select_disk_number(previous_disk);
     }
 
     fn start_full_imaging(&mut self) {
@@ -549,20 +579,27 @@ impl FluxVaultApp {
 
             ui.add_space(6.0);
 
+            let mut requested_disk_number = self.current_disk_number;
+            let mut disk_number_changed = false;
+
             ui.horizontal(|ui| {
                 ui.label("Aktuális ügyféllemez:");
 
-                ui.add_enabled(
+                let response = ui.add_enabled(
                     !self.imaging_running,
-                    egui::DragValue::new(&mut self.current_disk_number).speed(1.0),
+                    egui::DragValue::new(&mut requested_disk_number)
+                        .range(1..=999_999)
+                        .speed(1.0),
                 );
 
-                if self.current_disk_number == 0 {
-                    self.current_disk_number = 1;
-                }
+                disk_number_changed = response.changed();
 
-                ui.monospace(format!("{:03}", self.current_disk_number));
+                ui.monospace(format!("{:03}", requested_disk_number));
             });
+
+            if disk_number_changed {
+                self.select_disk_number(requested_disk_number);
+            }
 
             ui.weak(format!(
                 "Kimeneti név: {:03}_attempt_NNN.img",
@@ -827,7 +864,7 @@ impl FluxVaultApp {
 
             ui.strong(format!("Lemez {:03}", self.current_disk_number));
 
-            if ui.button("Előzmények frissítése").clicked() {
+            if ui.button("Előzmények újratöltése").clicked() {
                 self.refresh_attempt_history();
             }
         });
@@ -903,6 +940,11 @@ impl FluxVaultApp {
                                         attempt.retry_recovered_sectors
                                     ));
                                 });
+
+                                ui.label(format!(
+                                    "Időpont: {}",
+                                    Self::format_timestamp(attempt.timestamp_unix_ms)
+                                ));
 
                                 ui.label(format!("Kép: {}", attempt.image_file));
 
@@ -1205,14 +1247,27 @@ impl eframe::App for FluxVaultApp {
 
                 ui.strong(format!("Aktualis lemez: {:03}", self.current_disk_number));
 
-                if self.imaging_result.is_some() && !self.imaging_running {
+                if !self.imaging_running {
                     ui.separator();
+
+                    if ui
+                        .add_enabled(
+                            self.current_disk_number > 1,
+                            egui::Button::new(format!(
+                                "< ELOZO: {:03}",
+                                self.current_disk_number.saturating_sub(1).max(1)
+                            )),
+                        )
+                        .clicked()
+                    {
+                        self.return_to_previous_disk();
+                    }
 
                     if ui
                         .add_sized(
                             [190.0, 30.0],
                             egui::Button::new(format!(
-                                "KOVETKEZO LEMEZ: {:03}",
+                                "KOVETKEZO LEMEZ: {:03} >",
                                 self.current_disk_number.saturating_add(1)
                             )),
                         )
