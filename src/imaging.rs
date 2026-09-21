@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -36,7 +36,7 @@ pub struct ImagingResult {
     pub bytes_written: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BadSectorMetadata {
     lba: u64,
     cylinder: u64,
@@ -44,10 +44,10 @@ struct BadSectorMetadata {
     sector: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AcquisitionMetadata {
-    fluxvault_version: &'static str,
-    status: &'static str,
+    fluxvault_version: String,
+    status: String,
     disk_number: u32,
     attempt_number: u32,
     source_device: String,
@@ -66,7 +66,7 @@ struct AcquisitionMetadata {
     sha256: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct GeometryMetadata {
     cylinders: u64,
     heads: u32,
@@ -74,6 +74,30 @@ struct GeometryMetadata {
     bytes_per_sector: u32,
     total_bytes: u64,
     format_guess: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttemptSummary {
+    pub attempt_number: u32,
+    pub status: String,
+    pub timestamp_unix_ms: u128,
+    pub image_file: String,
+    pub metadata_path: PathBuf,
+    pub sha256: String,
+    pub total_sectors: usize,
+    pub retry_recovered_sectors: usize,
+    pub bad_sectors: Vec<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttemptComparison {
+    pub older_attempt: u32,
+    pub newer_attempt: u32,
+    pub older_bad_count: usize,
+    pub newer_bad_count: usize,
+    pub recovered_sectors: Vec<u64>,
+    pub newly_bad_sectors: Vec<u64>,
+    pub still_bad_sectors: Vec<u64>,
 }
 
 #[derive(Debug)]
@@ -374,8 +398,8 @@ fn run_imaging(
     };
 
     let metadata = AcquisitionMetadata {
-        fluxvault_version: env!("CARGO_PKG_VERSION"),
-        status: acquisition_status,
+        fluxvault_version: env!("CARGO_PKG_VERSION").to_owned(),
+        status: acquisition_status.to_owned(),
         disk_number,
         attempt_number,
         source_device: drive.device_path.clone(),
@@ -537,4 +561,115 @@ fn bad_sector_metadata(lba: u64, geometry: DiskGeometry) -> BadSectorMetadata {
         head,
         sector,
     }
+}
+
+pub fn load_attempts_for_disk(
+    directory: &Path,
+    disk_number: u32,
+) -> Result<Vec<AttemptSummary>, String> {
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+
+    let prefix = format!("{disk_number:03}_attempt_");
+    let mut attempts = Vec::new();
+
+    let entries = fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Nem sikerült megvizsgálni a(z) {} mappát: {error}",
+            directory.display()
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Hibás captures mappa bejegyzés: {error}"))?;
+
+        let path = entry.path();
+
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if !file_name.starts_with(&prefix)
+            || !file_name.ends_with(".json")
+            || file_name.ends_with(".partial.json")
+        {
+            continue;
+        }
+
+        let json = fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "Nem sikerült beolvasni a metadata fájlt {}: {error}",
+                path.display()
+            )
+        })?;
+
+        let metadata: AcquisitionMetadata = serde_json::from_str(&json)
+            .map_err(|error| format!("Hibás metadata JSON {}: {error}", path.display()))?;
+
+        if metadata.disk_number != disk_number {
+            continue;
+        }
+
+        attempts.push(AttemptSummary {
+            attempt_number: metadata.attempt_number,
+            status: metadata.status,
+            timestamp_unix_ms: metadata.timestamp_unix_ms,
+            image_file: metadata.image_file,
+            metadata_path: path,
+            sha256: metadata.sha256,
+            total_sectors: metadata.total_sectors,
+            retry_recovered_sectors: metadata.retry_recovered_sectors,
+            bad_sectors: metadata
+                .bad_sectors
+                .into_iter()
+                .map(|sector| sector.lba)
+                .collect(),
+        });
+    }
+
+    attempts.sort_by_key(|attempt| attempt.attempt_number);
+
+    Ok(attempts)
+}
+
+pub fn compare_latest_attempts(attempts: &[AttemptSummary]) -> Option<AttemptComparison> {
+    if attempts.len() < 2 {
+        return None;
+    }
+
+    let older = &attempts[attempts.len() - 2];
+    let newer = &attempts[attempts.len() - 1];
+
+    if older.total_sectors != newer.total_sectors {
+        return None;
+    }
+
+    let older_bad = older
+        .bad_sectors
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let newer_bad = newer
+        .bad_sectors
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let recovered_sectors = older_bad.difference(&newer_bad).copied().collect();
+
+    let newly_bad_sectors = newer_bad.difference(&older_bad).copied().collect();
+
+    let still_bad_sectors = older_bad.intersection(&newer_bad).copied().collect();
+
+    Some(AttemptComparison {
+        older_attempt: older.attempt_number,
+        newer_attempt: newer.attempt_number,
+        older_bad_count: older.bad_sectors.len(),
+        newer_bad_count: newer.bad_sectors.len(),
+        recovered_sectors,
+        newly_bad_sectors,
+        still_bad_sectors,
+    })
 }

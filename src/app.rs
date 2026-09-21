@@ -1,10 +1,12 @@
-use std::{sync::mpsc::Receiver, time::Duration};
+use std::{path::Path, sync::mpsc::Receiver, time::Duration};
 
 use eframe::egui;
 
 use crate::{
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
-    imaging::{self, ImagingEvent, ImagingResult, SectorReadState},
+    imaging::{
+        self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, SectorReadState,
+    },
     safety::{MediaSafetyPolicy, SourceMediaAccess},
 };
 
@@ -48,6 +50,9 @@ pub struct FluxVaultApp {
     imaging_output: Option<String>,
     imaging_result: Option<ImagingResult>,
     imaging_error: Option<String>,
+    attempt_history: Vec<AttemptSummary>,
+    attempt_comparison: Option<AttemptComparison>,
+    attempt_history_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -71,6 +76,9 @@ impl FluxVaultApp {
             imaging_output: None,
             imaging_result: None,
             imaging_error: None,
+            attempt_history: Vec::new(),
+            attempt_comparison: None,
+            attempt_history_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -78,11 +86,31 @@ impl FluxVaultApp {
         app.log("FluxVault elindult.");
         app.log("Forrás adathordozó biztonsági mód: CSAK OLVASHATÓ.");
 
+        app.refresh_attempt_history();
+
         app
     }
 
     fn log(&mut self, message: impl Into<String>) {
         self.operator_log.push(message.into());
+    }
+
+    fn refresh_attempt_history(&mut self) {
+        match imaging::load_attempts_for_disk(Path::new("captures"), self.current_disk_number) {
+            Ok(attempts) => {
+                self.attempt_comparison = imaging::compare_latest_attempts(&attempts);
+
+                self.attempt_history = attempts;
+                self.attempt_history_error = None;
+            }
+            Err(error) => {
+                self.attempt_history.clear();
+                self.attempt_comparison = None;
+                self.attempt_history_error = Some(error.clone());
+
+                self.log(format!("Próbálkozási előzmények betöltési hibája: {error}"));
+            }
+        }
     }
 
     fn advance_to_next_disk(&mut self) {
@@ -110,6 +138,8 @@ impl FluxVaultApp {
             "Következő ügyféllemez kiválasztva: {:03}.",
             self.current_disk_number
         ));
+
+        self.refresh_attempt_history();
     }
 
     fn start_full_imaging(&mut self) {
@@ -248,6 +278,7 @@ impl FluxVaultApp {
 
         if finished {
             self.imaging_receiver = None;
+            self.refresh_attempt_history();
         }
     }
 
@@ -773,27 +804,6 @@ impl FluxVaultApp {
                 }
             }
 
-            if self.imaging_result.is_some() && !self.imaging_running {
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .button(format!(
-                            "Következő lemez: {:03}",
-                            self.current_disk_number.saturating_add(1)
-                        ))
-                        .clicked()
-                    {
-                        self.advance_to_next_disk();
-                    }
-
-                    ui.weak(
-                        "Ugyanennek a lemeznek az újraolvasásához ne léptessen tovább; \
-                         indítsa el újra a teljes lemezkép készítését.",
-                    );
-                });
-            }
-
             if let Some(error) = &self.imaging_error {
                 ui.add_space(8.0);
                 ui.colored_label(
@@ -810,18 +820,196 @@ impl FluxVaultApp {
     }
 
     fn recovery_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Adatmentés");
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("Adatmentés");
+
+            ui.separator();
+
+            ui.strong(format!("Lemez {:03}", self.current_disk_number));
+
+            if ui.button("Előzmények frissítése").clicked() {
+                self.refresh_attempt_history();
+            }
+        });
 
         ui.add_space(8.0);
 
         ui.label(
-            "A hibás vagy részlegesen olvasható lemezek több próbálkozása, \
-             DMDE eredményei és később a Greaseweazle flux mentések itt kerülnek össze.",
+            "A lemez több, egymástól független olvasási próbálkozása itt \
+             hasonlítható össze. Az eredeti próbálkozások változatlanul megmaradnak.",
         );
+
+        if let Some(error) = &self.attempt_history_error {
+            ui.add_space(12.0);
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 70, 70),
+                "[HIBA] Nem sikerült betölteni a próbálkozásokat.",
+            );
+
+            ui.monospace(error);
+
+            return;
+        }
 
         ui.add_space(16.0);
 
-        ui.weak("Az adatmentési munkapad még nincs implementálva.");
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new("Olvasási próbálkozások")
+                    .strong()
+                    .size(16.0),
+            );
+
+            ui.add_space(6.0);
+
+            if self.attempt_history.is_empty() {
+                ui.weak(format!(
+                    "A(z) {:03} lemezhez még nincs számozott FluxVault próbálkozás.",
+                    self.current_disk_number
+                ));
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("attempt_history_scroll")
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for attempt in &self.attempt_history {
+                            ui.group(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.strong(format!("Próbálkozás {:03}", attempt.attempt_number));
+
+                                    ui.separator();
+
+                                    ui.label(&attempt.status);
+
+                                    ui.separator();
+
+                                    if attempt.bad_sectors.is_empty() {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(70, 200, 120),
+                                            "0 hibás szektor",
+                                        );
+                                    } else {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(220, 180, 80),
+                                            format!("{} hibás szektor", attempt.bad_sectors.len()),
+                                        );
+                                    }
+
+                                    ui.separator();
+
+                                    ui.label(format!(
+                                        "{} retry után mentett",
+                                        attempt.retry_recovered_sectors
+                                    ));
+                                });
+
+                                ui.label(format!("Kép: {}", attempt.image_file));
+
+                                ui.label(format!("Metadata: {}", attempt.metadata_path.display()));
+
+                                let short_sha = attempt.sha256.chars().take(16).collect::<String>();
+
+                                ui.monospace(format!("SHA-256: {short_sha}..."));
+                            });
+
+                            ui.add_space(6.0);
+                        }
+                    });
+            }
+        });
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new("Legutóbbi két próbálkozás összehasonlítása")
+                    .strong()
+                    .size(16.0),
+            );
+
+            ui.add_space(8.0);
+
+            let Some(comparison) = &self.attempt_comparison else {
+                ui.weak("Legalább két, azonos méretű próbálkozás szükséges az összehasonlításhoz.");
+                return;
+            };
+
+            ui.label(format!(
+                "{:03} -> {:03}",
+                comparison.older_attempt, comparison.newer_attempt
+            ));
+
+            ui.label(format!(
+                "Korábbi hibás szektorok: {}",
+                comparison.older_bad_count
+            ));
+
+            ui.label(format!(
+                "Újabb hibás szektorok: {}",
+                comparison.newer_bad_count
+            ));
+
+            ui.add_space(8.0);
+
+            ui.colored_label(
+                egui::Color32::from_rgb(70, 200, 120),
+                format!(
+                    "Korábban hibás, most olvasható: {}",
+                    comparison.recovered_sectors.len()
+                ),
+            );
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 180, 80),
+                format!(
+                    "Mindkét próbálkozásban hibás: {}",
+                    comparison.still_bad_sectors.len()
+                ),
+            );
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 70, 70),
+                format!(
+                    "Korábban olvasható, most hibás: {}",
+                    comparison.newly_bad_sectors.len()
+                ),
+            );
+
+            ui.add_space(12.0);
+
+            ui.columns(2, |columns| {
+                columns[0].strong("Most visszanyert LBA-k");
+
+                egui::ScrollArea::vertical()
+                    .id_salt("recovered_sector_comparison_scroll")
+                    .max_height(180.0)
+                    .show(&mut columns[0], |ui| {
+                        if comparison.recovered_sectors.is_empty() {
+                            ui.weak("Nincs.");
+                        } else {
+                            for lba in &comparison.recovered_sectors {
+                                ui.monospace(format!("LBA {lba}"));
+                            }
+                        }
+                    });
+
+                columns[1].strong("Most elveszett LBA-k");
+
+                egui::ScrollArea::vertical()
+                    .id_salt("new_bad_sector_comparison_scroll")
+                    .max_height(180.0)
+                    .show(&mut columns[1], |ui| {
+                        if comparison.newly_bad_sectors.is_empty() {
+                            ui.weak("Nincs.");
+                        } else {
+                            for lba in &comparison.newly_bad_sectors {
+                                ui.monospace(format!("LBA {lba}"));
+                            }
+                        }
+                    });
+            });
+        });
     }
 
     fn files_page(&mut self, ui: &mut egui::Ui) {
@@ -1012,6 +1200,27 @@ impl eframe::App for FluxVaultApp {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Allapot:");
                 ui.strong(&self.status);
+
+                ui.separator();
+
+                ui.strong(format!("Aktualis lemez: {:03}", self.current_disk_number));
+
+                if self.imaging_result.is_some() && !self.imaging_running {
+                    ui.separator();
+
+                    if ui
+                        .add_sized(
+                            [190.0, 30.0],
+                            egui::Button::new(format!(
+                                "KOVETKEZO LEMEZ: {:03}",
+                                self.current_disk_number.saturating_add(1)
+                            )),
+                        )
+                        .clicked()
+                    {
+                        self.advance_to_next_disk();
+                    }
+                }
             });
 
             self.operator_log(ui);
