@@ -100,6 +100,30 @@ pub struct AttemptComparison {
     pub still_bad_sectors: Vec<u64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DiskSummary {
+    pub disk_number: u32,
+    pub attempt_count: usize,
+    pub latest_attempt_number: u32,
+    pub latest_status: String,
+    pub latest_bad_sectors: usize,
+    pub latest_timestamp_unix_ms: u128,
+    pub best_attempt_number: u32,
+    pub best_bad_sectors: usize,
+    pub total_sectors: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProjectStatistics {
+    pub disk_count: usize,
+    pub total_attempts: usize,
+    pub ok_disks: usize,
+    pub partial_disks: usize,
+    pub latest_bad_sectors: usize,
+    pub best_known_bad_sectors: usize,
+    pub disks: Vec<DiskSummary>,
+}
+
 #[derive(Debug)]
 pub enum ImagingEvent {
     Started {
@@ -685,4 +709,120 @@ pub fn compare_latest_attempts(attempts: &[AttemptSummary]) -> Option<AttemptCom
         newly_bad_sectors,
         still_bad_sectors,
     })
+}
+
+pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, String> {
+    let mut statistics = ProjectStatistics::default();
+
+    if !directory.exists() {
+        return Ok(statistics);
+    }
+
+    let mut attempts_by_disk = std::collections::BTreeMap::<u32, Vec<AcquisitionMetadata>>::new();
+
+    let entries = fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Nem sikerült megvizsgálni a(z) {} mappát: {error}",
+            directory.display()
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Hibás acquisition mappa bejegyzés: {error}"))?;
+
+        let path = entry.path();
+
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if file_name.ends_with(".partial.json") {
+            continue;
+        }
+
+        let Some(stem) = file_name.strip_suffix(".json") else {
+            continue;
+        };
+
+        let Some((disk_text, attempt_text)) = stem.split_once("_attempt_") else {
+            continue;
+        };
+
+        let Ok(file_disk_number) = disk_text.parse::<u32>() else {
+            continue;
+        };
+
+        let Ok(file_attempt_number) = attempt_text.parse::<u32>() else {
+            continue;
+        };
+
+        let json = fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "Nem sikerült beolvasni a metadata fájlt {}: {error}",
+                path.display()
+            )
+        })?;
+
+        let metadata: AcquisitionMetadata = match serde_json::from_str(&json) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                continue;
+            }
+        };
+
+        if metadata.disk_number != file_disk_number
+            || metadata.attempt_number != file_attempt_number
+        {
+            continue;
+        }
+
+        attempts_by_disk
+            .entry(metadata.disk_number)
+            .or_default()
+            .push(metadata);
+    }
+
+    for (disk_number, mut attempts) in attempts_by_disk {
+        attempts.sort_by_key(|attempt| attempt.attempt_number);
+
+        let Some(latest) = attempts.last() else {
+            continue;
+        };
+
+        let Some(best) = attempts.iter().min_by(|left, right| {
+            left.bad_sector_count
+                .cmp(&right.bad_sector_count)
+                .then_with(|| right.attempt_number.cmp(&left.attempt_number))
+        }) else {
+            continue;
+        };
+
+        let attempt_count = attempts.len();
+
+        statistics.total_attempts += attempt_count;
+        statistics.latest_bad_sectors += latest.bad_sector_count;
+        statistics.best_known_bad_sectors += best.bad_sector_count;
+
+        if best.bad_sector_count == 0 {
+            statistics.ok_disks += 1;
+        } else {
+            statistics.partial_disks += 1;
+        }
+
+        statistics.disks.push(DiskSummary {
+            disk_number,
+            attempt_count,
+            latest_attempt_number: latest.attempt_number,
+            latest_status: latest.status.clone(),
+            latest_bad_sectors: latest.bad_sector_count,
+            latest_timestamp_unix_ms: latest.timestamp_unix_ms,
+            best_attempt_number: best.attempt_number,
+            best_bad_sectors: best.bad_sector_count,
+            total_sectors: best.total_sectors,
+        });
+    }
+
+    statistics.disk_count = statistics.disks.len();
+
+    Ok(statistics)
 }

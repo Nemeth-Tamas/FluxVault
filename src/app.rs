@@ -1,8 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::mpsc::Receiver,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::mpsc::Receiver, time::Duration};
 
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
@@ -10,7 +6,8 @@ use eframe::egui;
 use crate::{
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
     imaging::{
-        self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, SectorReadState,
+        self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, ProjectStatistics,
+        SectorReadState,
     },
     project::{self, ProjectState},
     safety::{MediaSafetyPolicy, SourceMediaAccess},
@@ -59,6 +56,8 @@ pub struct FluxVaultApp {
     attempt_history: Vec<AttemptSummary>,
     attempt_comparison: Option<AttemptComparison>,
     attempt_history_error: Option<String>,
+    project_statistics: Option<ProjectStatistics>,
+    project_statistics_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -85,6 +84,8 @@ impl FluxVaultApp {
             attempt_history: Vec::new(),
             attempt_comparison: None,
             attempt_history_error: None,
+            project_statistics: None,
+            project_statistics_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -94,6 +95,7 @@ impl FluxVaultApp {
 
         app.restore_last_project();
         app.refresh_attempt_history();
+        app.refresh_project_statistics();
 
         app
     }
@@ -152,6 +154,7 @@ impl FluxVaultApp {
         self.log(format!("Projekt aktiválva: {name} | {root}"));
 
         self.refresh_attempt_history();
+        self.refresh_project_statistics();
     }
 
     fn create_project_interactive(&mut self) {
@@ -225,6 +228,23 @@ impl FluxVaultApp {
                 self.attempt_history_error = Some(error.clone());
 
                 self.log(format!("Próbálkozási előzmények betöltési hibája: {error}"));
+            }
+        }
+    }
+
+    fn refresh_project_statistics(&mut self) {
+        let acquisition_directory = self.acquisition_directory();
+
+        match imaging::load_project_statistics(&acquisition_directory) {
+            Ok(statistics) => {
+                self.project_statistics = Some(statistics);
+                self.project_statistics_error = None;
+            }
+            Err(error) => {
+                self.project_statistics = None;
+                self.project_statistics_error = Some(error.clone());
+
+                self.log(format!("Projektstatisztika betöltési hiba: {error}"));
             }
         }
     }
@@ -427,6 +447,7 @@ impl FluxVaultApp {
         if finished {
             self.imaging_receiver = None;
             self.refresh_attempt_history();
+            self.refresh_project_statistics();
         }
     }
 
@@ -1225,42 +1246,174 @@ impl FluxVaultApp {
     }
 
     fn reports_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Jelentések és statisztikák");
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("Jelentések és statisztikák");
+
+            ui.separator();
+
+            if ui.button("Statisztika újratöltése").clicked() {
+                self.refresh_project_statistics();
+            }
+        });
 
         ui.add_space(8.0);
 
         ui.label(
-            "A FluxVault közvetlenül fog professzionális Excel jelentéseket \
-             készíteni az archiválási és adatmentési eredményekből.",
+            "Ez a nézet közvetlenül az acquisition metadata fájlokból épül fel. \
+             Ugyanez az adatmodell lesz a későbbi Excel jelentések alapja.",
         );
+
+        if let Some(error) = &self.project_statistics_error {
+            ui.add_space(12.0);
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 70, 70),
+                "[HIBA] A projektstatisztika nem tölthető be.",
+            );
+
+            ui.monospace(error);
+
+            return;
+        }
+
+        let Some(statistics) = &self.project_statistics else {
+            ui.add_space(16.0);
+            ui.weak("Nincs elérhető statisztika.");
+            return;
+        };
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Projekt összesítő").strong().size(16.0));
+
+            ui.add_space(8.0);
+
+            egui::Grid::new("project_statistics_summary")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Feldolgozott lemezek");
+                    ui.strong(statistics.disk_count.to_string());
+                    ui.end_row();
+
+                    ui.label("Összes olvasási próbálkozás");
+                    ui.strong(statistics.total_attempts.to_string());
+                    ui.end_row();
+
+                    ui.label("Hibamentes lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        statistics.ok_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Részleges lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        statistics.partial_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Legutóbbi próbálkozások hibás szektorai");
+                    ui.strong(statistics.latest_bad_sectors.to_string());
+                    ui.end_row();
+
+                    ui.label("Legjobb ismert állapot hibás szektorai");
+                    ui.strong(statistics.best_known_bad_sectors.to_string());
+                    ui.end_row();
+                });
+        });
 
         ui.add_space(16.0);
 
         ui.group(|ui| {
             ui.label(
-                egui::RichText::new("Tervezett Excel jelentés")
+                egui::RichText::new("Lemezenkénti állapot")
                     .strong()
                     .size(16.0),
             );
 
+            ui.add_space(8.0);
+
+            if statistics.disks.is_empty() {
+                ui.weak("Még nincs számozott FluxVault acquisition ebben a munkaterületben.");
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("project_disk_statistics_scroll")
+                    .max_height(340.0)
+                    .show(ui, |ui| {
+                        for disk in &statistics.disks {
+                            ui.group(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.strong(format!("Lemez {:03}", disk.disk_number));
+
+                                    ui.separator();
+
+                                    ui.label(format!("{} próbálkozás", disk.attempt_count));
+
+                                    ui.separator();
+
+                                    if disk.best_bad_sectors == 0 {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(70, 200, 120),
+                                            "OK",
+                                        );
+                                    } else {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(220, 180, 80),
+                                            "PARTIAL",
+                                        );
+                                    }
+                                });
+
+                                ui.label(format!(
+                                    "Legutóbbi: #{:03} | {} | {} hibás szektor",
+                                    disk.latest_attempt_number,
+                                    disk.latest_status,
+                                    disk.latest_bad_sectors
+                                ));
+
+                                ui.label(format!(
+                                    "Legjobb: #{:03} | {} hibás szektor",
+                                    disk.best_attempt_number, disk.best_bad_sectors
+                                ));
+
+                                ui.label(format!(
+                                    "Utolsó olvasás: {}",
+                                    Self::format_timestamp(disk.latest_timestamp_unix_ms)
+                                ));
+
+                                ui.weak(format!(
+                                    "Lemez szektorainak száma: {}",
+                                    disk.total_sectors
+                                ));
+                            });
+
+                            ui.add_space(6.0);
+                        }
+                    });
+            }
+        });
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Excel jelentés").strong().size(16.0));
+
             ui.add_space(6.0);
 
-            ui.label("- Összesítő dashboard");
-            ui.label("- Feldolgozott floppy lemezek száma");
-            ui.label("- Hibátlan / részleges / sikertelen beolvasások");
-            ui.label("- Hibás és újrapróbált szektorok statisztikája");
-            ui.label("- Visszaállított fájlok száma és mérete");
-            ui.label("- Adatmentési módszerek megoszlása");
-            ui.label("- Konverziós eredmények");
-            ui.label("- Lemezenkénti részletes munkalap");
-            ui.label("- Szűrhető és színezett állapotok");
-            ui.label("- Grafikonok és összesített statisztikák");
+            ui.label(
+                "A következő reporting lépés ezt a már működő statisztikai \
+                 adatmodellt exportálja formázott XLSX munkafüzetbe.",
+            );
+
+            ui.label("Elsődleges nyelv: magyar");
+            ui.label("Később: angol export ugyanebből az adatmodellből.");
 
             ui.add_space(8.0);
 
-            ui.label(egui::RichText::new("Elsődleges nyelv: magyar").strong());
-
-            ui.label("Később ugyanebből az adatmodellből angol jelentés is készül.");
+            ui.add_enabled(false, egui::Button::new("Excel jelentés készítése"));
         });
     }
 
