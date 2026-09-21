@@ -8,11 +8,12 @@ use rust_xlsxwriter::{
     Chart, ChartType, Color, Format, FormatAlign, FormatBorder, Workbook, XlsxError,
 };
 
-use crate::imaging::ProjectStatistics;
+use crate::imaging::{self, AttemptSummary, ProjectStatistics};
 
 pub fn export_hungarian_report(
     project_name: &str,
     reports_directory: &Path,
+    acquisition_directory: &Path,
     statistics: &ProjectStatistics,
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(reports_directory).map_err(|error| {
@@ -29,12 +30,25 @@ pub fn export_hungarian_report(
 
     let output_path = reports_directory.join(file_name);
 
-    build_hungarian_workbook(project_name, statistics, &output_path).map_err(|error| {
-        format!(
-            "Excel jelentés készítési hiba {}: {error}",
-            output_path.display()
-        )
-    })?;
+    let mut attempts = Vec::<(u32, AttemptSummary)>::new();
+
+    for disk in &statistics.disks {
+        let disk_attempts =
+            imaging::load_attempts_for_disk(acquisition_directory, disk.disk_number)?;
+
+        for attempt in disk_attempts {
+            attempts.push((disk.disk_number, attempt));
+        }
+    }
+
+    build_hungarian_workbook(project_name, statistics, &attempts, &output_path).map_err(
+        |error| {
+            format!(
+                "Excel jelentés készítési hiba {}: {error}",
+                output_path.display()
+            )
+        },
+    )?;
 
     Ok(output_path)
 }
@@ -42,6 +56,7 @@ pub fn export_hungarian_report(
 fn build_hungarian_workbook(
     project_name: &str,
     statistics: &ProjectStatistics,
+    attempts: &[(u32, AttemptSummary)],
     output_path: &Path,
 ) -> Result<(), XlsxError> {
     let mut workbook = Workbook::new();
@@ -271,6 +286,102 @@ fn build_hungarian_workbook(
         worksheet.set_column_width(7, 22)?;
         worksheet.set_column_width(8, 16)?;
         worksheet.set_column_width(9, 22)?;
+    }
+
+    {
+        let worksheet = workbook.add_worksheet().set_name("Próbálkozások")?;
+
+        let headers = [
+            "Lemez",
+            "Próbálkozás",
+            "Státusz",
+            "Hibás szektorok",
+            "Retry után mentett",
+            "Összes szektor",
+            "Időpont",
+            "SHA-256",
+            "Lemezkép",
+            "Metadata",
+        ];
+
+        for (column, header) in headers.iter().enumerate() {
+            worksheet.write_string_with_format(0, column as u16, *header, &header_format)?;
+        }
+
+        for (index, (disk_number, attempt)) in attempts.iter().enumerate() {
+            let row = index as u32 + 1;
+
+            worksheet.write_number_with_format(row, 0, *disk_number as f64, &center_format)?;
+
+            worksheet.write_number_with_format(
+                row,
+                1,
+                attempt.attempt_number as f64,
+                &center_format,
+            )?;
+
+            if attempt.bad_sectors.is_empty() {
+                worksheet.write_string_with_format(row, 2, &attempt.status, &ok_format)?;
+            } else {
+                worksheet.write_string_with_format(row, 2, &attempt.status, &partial_format)?;
+            }
+
+            worksheet.write_number_with_format(
+                row,
+                3,
+                attempt.bad_sectors.len() as f64,
+                &center_format,
+            )?;
+
+            worksheet.write_number_with_format(
+                row,
+                4,
+                attempt.retry_recovered_sectors as f64,
+                &center_format,
+            )?;
+
+            worksheet.write_number_with_format(
+                row,
+                5,
+                attempt.total_sectors as f64,
+                &center_format,
+            )?;
+
+            worksheet.write_string_with_format(
+                row,
+                6,
+                &format_timestamp(attempt.timestamp_unix_ms),
+                &value_format,
+            )?;
+
+            worksheet.write_string_with_format(row, 7, &attempt.sha256, &value_format)?;
+
+            worksheet.write_string_with_format(row, 8, &attempt.image_file, &value_format)?;
+
+            worksheet.write_string_with_format(
+                row,
+                9,
+                &attempt.metadata_path.display().to_string(),
+                &value_format,
+            )?;
+        }
+
+        worksheet.set_freeze_panes(1, 0)?;
+
+        if !attempts.is_empty() {
+            worksheet.autofilter(0, 0, attempts.len() as u32, 9)?;
+        }
+
+        worksheet.set_column_width(0, 10)?;
+        worksheet.set_column_width(1, 14)?;
+        worksheet.set_column_width(2, 14)?;
+        worksheet.set_column_width(3, 18)?;
+        worksheet.set_column_width(4, 20)?;
+        worksheet.set_column_width(5, 16)?;
+        worksheet.set_column_width(6, 22)?;
+        worksheet.set_column_width(7, 68)?;
+        worksheet.set_column_width(8, 54)?;
+        worksheet.set_column_width(9, 54)?;
     }
 
     workbook.save(output_path)?;

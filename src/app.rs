@@ -211,10 +211,16 @@ impl FluxVaultApp {
 
         let project_name = project.name().to_owned();
         let reports_directory = project.reports_dir();
+        let acquisition_directory = project.images_dir();
 
         self.status = "Excel jelentés készítése...".to_owned();
 
-        match report::export_hungarian_report(&project_name, &reports_directory, &statistics) {
+        match report::export_hungarian_report(
+            &project_name,
+            &reports_directory,
+            &acquisition_directory,
+            &statistics,
+        ) {
             Ok(path) => {
                 self.status = "Excel jelentés elkészült.".to_owned();
 
@@ -891,6 +897,11 @@ impl FluxVaultApp {
                  Kimeneti mappa: {}",
                 acquisition_directory.display()
             ));
+
+            ui.weak(
+                "Ügyféllemeznél használja a floppy fizikai írásvédő kapcsolóját is, \
+                 ha a lemez típusa rendelkezik vele.",
+            );
 
             if self.project.is_none() {
                 ui.colored_label(

@@ -10,13 +10,13 @@
 - [x] GUI: `eframe` / `egui` unless we discover a concrete blocker.
 - [x] Use the same Windows DPI-manifest pattern already proven in BareEye / QuadBench / EagleCast: `embed_manifest` + `DpiAwareness::System` in `build.rs`.
 - [ ] Keep the GUI responsive: floppy reads, hashing, extraction, conversion, packaging, and Greaseweazle processes run on worker threads/processes and report progress/events back to the UI.
-- [ ] User edits files locally; assistant does not hand-wave patches.
-- [ ] Before every code patch, assistant reads the current file from GitHub and supplies exact FIND and REPLACE blocks with indentation copied from the repository.
-- [ ] Intermediate states are pushed even when they do not compile, so the repository is always the source of truth.
-- [ ] Git workflow always uses `git add .`.
-- [ ] Do not use selective `git add <file>` instructions.
-- [ ] Prefer small modules with explicit responsibilities over a giant `main.rs`.
-- [ ] Errors shown to the operator must preserve the underlying technical detail in logs.
+- [x] User edits files locally; assistant does not hand-wave patches.
+- [x] Before every code patch, assistant reads the current file from GitHub and supplies exact FIND and REPLACE blocks with indentation copied from the repository.
+- [x] Intermediate states are pushed even when they do not compile, so the repository is always the source of truth.
+- [x] Git workflow always uses `git add .`.
+- [x] Do not use selective `git add <file>` instructions.
+- [x] Prefer small modules with explicit responsibilities over a giant `main.rs`.
+- [x] Errors shown to the operator must preserve the underlying technical detail in logs.
 
 ## 1. Safety invariants — must exist before real media testing
 
@@ -26,7 +26,7 @@
 - [ ] Greaseweazle integration exposes acquisition/info/convert operations only.
 - [ ] Never expose or invoke `gw write`, erase, clean, or another destructive Greaseweazle operation.
 - [x] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
-- [ ] Recommend the physical write-protect tab for customer disks when available.
+- [x] Recommend the physical write-protect tab for customer disks when available.
 - [ ] Keep a command/audit log for every external tool invocation.
 - [x] Never silently overwrite a previous acquisition/recovery attempt.
 
@@ -92,8 +92,8 @@ This is the first “we can actually use FluxVault on customer media” target. 
 ### MVP acceptance test
 
 - [ ] Insert a known-good 1.44 MB floppy -> FluxVault creates a 1,474,560-byte image, zero bad sectors, SHA-256, log, and project record without writing to source media.
-- [ ] Insert a known-bad floppy -> FluxVault completes a correctly sized image where possible, identifies exact unreadable sectors, preserves the partial status, and routes the disk to Recovery.
-- [ ] Re-run the same floppy -> creates/preserves a new attempt instead of destroying the previous evidence.
+- [x] Insert a known-bad floppy -> FluxVault completes a correctly sized image where possible, identifies exact unreadable sectors, preserves the partial status, and routes the disk to Recovery.
+- [x] Re-run the same floppy -> creates/preserves a new attempt instead of destroying the previous evidence.
 
 ## 6. Existing archive/log compatibility
 
@@ -130,8 +130,8 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 
 - [ ] Recovery queue ordered by severity/attention state.
 - [ ] Show current image, bad-sector count/list, source log, extraction result, prior attempts, and manual notes in one screen.
-- [ ] **Re-read with USB drive** action creates another immutable acquisition attempt.
-- [ ] Compare attempts sector-by-sector.
+- [x] **Re-read with USB drive** action creates another immutable acquisition attempt.
+- [x] Compare attempts sector-by-sector.
 - [ ] Build an optional **best composite sector image** from multiple attempts, but only with a provenance map recording the source attempt for every replaced sector.
 - [ ] Never destroy original attempt images when creating a composite.
 - [ ] Allow import of a DMDE-recovered folder and DMDE log, replacing today’s “manually rescan then rerun scripts” dance.
@@ -218,7 +218,7 @@ Replace the current updater/audit script chain with one in-app source of truth w
 - [x] Include charts for useful project-wide metrics such as imaging status, bad-sector counts, recovery results, file counts, and conversion outcomes.
 - [x] Detailed per-floppy worksheet/table with filtering, frozen headers, sensible column widths, status highlighting, and consistent formatting.
 - [ ] Separate recovered-file, conversion, issue, and integrity tables where useful.
-- [ ] Reports should be presentable to a customer without requiring manual cleanup in Excel.
+- [x] Reports should be presentable to a customer without requiring manual cleanup in Excel.
 - [ ] Audit must be re-runnable/idempotent and never alter source floppy media.
 
 ## 14. Customer package builder
