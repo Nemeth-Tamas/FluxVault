@@ -167,6 +167,10 @@ impl ProjectState {
         self.root.join("Images")
     }
 
+    pub fn reports_dir(&self) -> PathBuf {
+        self.root.join("Reports")
+    }
+
     pub fn project_file(&self) -> PathBuf {
         self.root.join(PROJECT_FILE_NAME)
     }

@@ -10,6 +10,7 @@ use crate::{
         SectorReadState,
     },
     project::{self, ProjectState},
+    report,
     safety::{MediaSafetyPolicy, SourceMediaAccess},
 };
 
@@ -193,6 +194,36 @@ impl FluxVaultApp {
                 self.status = "A projekt megnyitása sikertelen.".to_owned();
 
                 self.log(format!("Projekt megnyitási hiba: {error}"));
+            }
+        }
+    }
+
+    fn export_excel_report(&mut self) {
+        let Some(project) = &self.project else {
+            self.status = "Excel jelentéshez aktív projekt szükséges.".to_owned();
+            return;
+        };
+
+        let Some(statistics) = self.project_statistics.clone() else {
+            self.status = "Nincs exportálható projektstatisztika.".to_owned();
+            return;
+        };
+
+        let project_name = project.name().to_owned();
+        let reports_directory = project.reports_dir();
+
+        self.status = "Excel jelentés készítése...".to_owned();
+
+        match report::export_hungarian_report(&project_name, &reports_directory, &statistics) {
+            Ok(path) => {
+                self.status = "Excel jelentés elkészült.".to_owned();
+
+                self.log(format!("Excel jelentés elkészült: {}", path.display()));
+            }
+            Err(error) => {
+                self.status = "Excel jelentés készítése sikertelen.".to_owned();
+
+                self.log(format!("Excel jelentés készítési hiba: {error}"));
             }
         }
     }
@@ -1398,14 +1429,18 @@ impl FluxVaultApp {
 
         ui.add_space(16.0);
 
+        let report_ready = self.project.is_some() && self.project_statistics.is_some();
+
+        let mut export_requested = false;
+
         ui.group(|ui| {
             ui.label(egui::RichText::new("Excel jelentés").strong().size(16.0));
 
             ui.add_space(6.0);
 
             ui.label(
-                "A következő reporting lépés ezt a már működő statisztikai \
-                 adatmodellt exportálja formázott XLSX munkafüzetbe.",
+                "A projekt aktuális acquisition statisztikáiból közvetlenül \
+                 formázott XLSX munkafüzet készül.",
             );
 
             ui.label("Elsődleges nyelv: magyar");
@@ -1413,8 +1448,21 @@ impl FluxVaultApp {
 
             ui.add_space(8.0);
 
-            ui.add_enabled(false, egui::Button::new("Excel jelentés készítése"));
+            if ui
+                .add_enabled(report_ready, egui::Button::new("Excel jelentés készítése"))
+                .clicked()
+            {
+                export_requested = true;
+            }
+
+            if self.project.is_none() {
+                ui.weak("A jelentéshez előbb nyisson meg vagy hozzon létre projektet.");
+            }
         });
+
+        if export_requested {
+            self.export_excel_report();
+        }
     }
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
@@ -1531,8 +1579,9 @@ impl eframe::App for FluxVaultApp {
                         |ui| {
                             egui::ScrollArea::vertical()
                                 .id_salt("main_content_scroll")
+                                .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    ui.set_max_width((content_width - 12.0).max(180.0));
+                                    ui.set_min_width((content_width - 12.0).max(180.0));
                                     ui.add_space(4.0);
 
                                     self.current_page(ui);

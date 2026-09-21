@@ -6,9 +6,9 @@
 
 ## 0. Development contract / project rules
 
-- [ ] Rust stable, Windows-first application.
-- [ ] GUI: `eframe` / `egui` unless we discover a concrete blocker.
-- [ ] Use the same Windows DPI-manifest pattern already proven in BareEye / QuadBench / EagleCast: `embed_manifest` + `DpiAwareness::System` in `build.rs`.
+- [x] Rust stable, Windows-first application.
+- [x] GUI: `eframe` / `egui` unless we discover a concrete blocker.
+- [x] Use the same Windows DPI-manifest pattern already proven in BareEye / QuadBench / EagleCast: `embed_manifest` + `DpiAwareness::System` in `build.rs`.
 - [ ] Keep the GUI responsive: floppy reads, hashing, extraction, conversion, packaging, and Greaseweazle processes run on worker threads/processes and report progress/events back to the UI.
 - [ ] User edits files locally; assistant does not hand-wave patches.
 - [ ] Before every code patch, assistant reads the current file from GitHub and supplies exact FIND and REPLACE blocks with indentation copied from the repository.
@@ -20,21 +20,21 @@
 
 ## 1. Safety invariants — must exist before real media testing
 
-- [ ] Create a central `MediaSafetyPolicy` / equivalent that marks all physical-floppy operations as READ ONLY.
-- [ ] Windows USB-floppy backend opens `\\.\A:` (or selected drive) with read access only; never request write access.
-- [ ] No code path may call a filesystem write operation against the floppy drive letter.
+- [x] Create a central `MediaSafetyPolicy` / equivalent that marks all physical-floppy operations as READ ONLY.
+- [x] Windows USB-floppy backend opens `\\.\A:` (or selected drive) with read access only; never request write access.
+- [x] No code path may call a filesystem write operation against the floppy drive letter.
 - [ ] Greaseweazle integration exposes acquisition/info/convert operations only.
 - [ ] Never expose or invoke `gw write`, erase, clean, or another destructive Greaseweazle operation.
-- [ ] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
+- [x] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
 - [ ] Recommend the physical write-protect tab for customer disks when available.
 - [ ] Keep a command/audit log for every external tool invocation.
-- [ ] Never silently overwrite a previous acquisition/recovery attempt.
+- [x] Never silently overwrite a previous acquisition/recovery attempt.
 
 ## 2. Project/session data model
 
-- [ ] Define a FluxVault project root while remaining compatible with the current archive layout during migration.
-- [ ] Recognize/use the existing directories where present: `Images`, `Logs`, `Extracted`, `Converted`, `Recovery`, `Reports`.
-- [ ] Add `Flux` (or equivalent) for raw Greaseweazle captures.
+- [x] Define a FluxVault project root while remaining compatible with the current archive layout during migration.
+- [x] Recognize/use the existing directories where present: `Images`, `Logs`, `Extracted`, `Converted`, `Recovery`, `Reports`.
+- [x] Add `Flux` (or equivalent) for raw Greaseweazle captures.
 - [ ] Add a small FluxVault project metadata file (`project.json` or similar) containing project name, created time, operator settings, next floppy number, and tool paths/versions.
 - [ ] Model each floppy as a stable record with zero-padded number (`001`, `002`, ...), label/notes, acquisition attempts, current preferred image, extraction state, recovery state, conversion state, and audit state.
 - [ ] Model acquisition attempts as immutable records: source backend, timestamp, geometry/format, output artifacts, hashes, bad-sector map, status, and log path.
@@ -44,10 +44,10 @@
 
 ## 3. GUI shell
 
-- [ ] Main window with left navigation and central work area.
+- [x] Main window with left navigation and central work area.
 - [ ] Suggested pages: **Project**, **Acquire**, **Recovery**, **Files**, **Conversions**, **Audit**, **Package**, **Settings / Tools**.
 - [ ] Project header: project path, disk count, next number, active source device, current job.
-- [ ] Bottom status area: worker status, progress, current operation, last error/warning.
+- [x] Bottom status area: worker status, progress, current operation, last error/warning.
 - [ ] Non-blocking modal/dialog for “Insert floppy #NNN”.
 - [ ] Operator log panel with timestamps and copy button.
 - [ ] Persistent per-job cancel button where cancellation is safe.
@@ -69,23 +69,23 @@
 
 This is the first “we can actually use FluxVault on customer media” target. It should replace the manual `FloppyArchiver_v1.5_manual.ps1` workflow before we chase fancy recovery features.
 
-- [ ] Enumerate/select floppy drives on Windows; A: must work with the current USB floppy reader.
-- [ ] Manual insertion/removal workflow. Do not depend on flaky automatic USB-floppy media detection.
-- [ ] Probe media safely by opening the raw device read-only, requesting geometry, and performing a tiny real read.
-- [ ] Read and display geometry: cylinders, heads, sectors/track, bytes/sector, total sectors, total bytes.
-- [ ] Fast path: read one full track at a time.
-- [ ] On track read failure, fall back to sector-by-sector reads for that track.
+- [x] Enumerate/select floppy drives on Windows; A: must work with the current USB floppy reader.
+- [x] Manual insertion/removal workflow. Do not depend on flaky automatic USB-floppy media detection.
+- [x] Probe media safely by opening the raw device read-only, requesting geometry, and performing a tiny real read.
+- [x] Read and display geometry: cylinders, heads, sectors/track, bytes/sector, total sectors, total bytes.
+- [x] Fast path: read one full track at a time.
+- [x] On track read failure, fall back to sector-by-sector reads for that track.
 - [ ] Configurable retry count for failed sector reads (initial default matching current tooling: 2 retries after first attempt).
 - [ ] Log every retry and recovery-after-retry event.
-- [ ] Zero-fill sectors that remain unreadable **only in the derived sector image**, while separately recording their exact LBA/CHS status so zeros are never mistaken for valid recovered data.
-- [ ] Write to `NNN.partial.bin` first.
-- [ ] Validate exact expected image size before promotion.
-- [ ] Atomically promote completed output to the attempt image; do not leave a misleading “complete” file after a fatal error.
-- [ ] Compute SHA-256 of completed image.
+- [x] Zero-fill sectors that remain unreadable **only in the derived sector image**, while separately recording their exact LBA/CHS status so zeros are never mistaken for valid recovered data.
+- [x] Write to `NNN_attempt_NNN.partial.img` first.
+- [x] Validate exact expected image size before promotion.
+- [x] Atomically promote completed output to the attempt image; do not leave a misleading “complete” file after a fatal error.
+- [x] Compute SHA-256 of completed image.
 - [ ] Save structured acquisition metadata plus a human-readable log.
-- [ ] Show a live 80x2-ish track/head/sector heatmap: unread, good, retry-recovered, bad.
-- [ ] End state clearly reports `OK`, `PARTIAL`, or `FAILED` and exact bad-sector count.
-- [ ] Offer **Next floppy** while preserving manual operator confirmation.
+- [x] Show a live 80x2-ish track/head/sector heatmap: unread, good, retry-recovered, bad.
+- [x] End state clearly reports `OK`, `PARTIAL`, or `FAILED` and exact bad-sector count.
+- [x] Offer **Next floppy** while preserving manual operator confirmation.
 - [ ] Add audible completion/error cues optionally (configurable).
 - [ ] Test against several known-good disks and several damaged disks from the current batch.
 
@@ -211,12 +211,12 @@ Replace the current updater/audit script chain with one in-app source of truth w
 - [ ] Delivery-file manifest.
 - [ ] Export CSV/text reports.
 - [ ] Export `FloppyFinalReport.xlsx` equivalent from the app or a dedicated report exporter.
-- [ ] Generate polished XLSX reports directly rather than depending on Excel COM automation.
-- [ ] Primary report language is Hungarian.
+- [x] Generate polished XLSX reports directly rather than depending on Excel COM automation.
+- [x] Primary report language is Hungarian.
 - [ ] Add English report export from the same underlying report data model.
-- [ ] Excel summary/dashboard sheet with major KPIs and project statistics.
-- [ ] Include charts for useful project-wide metrics such as imaging status, bad-sector counts, recovery results, file counts, and conversion outcomes.
-- [ ] Detailed per-floppy worksheet/table with filtering, frozen headers, sensible column widths, status highlighting, and consistent formatting.
+- [x] Excel summary/dashboard sheet with major KPIs and project statistics.
+- [x] Include charts for useful project-wide metrics such as imaging status, bad-sector counts, recovery results, file counts, and conversion outcomes.
+- [x] Detailed per-floppy worksheet/table with filtering, frozen headers, sensible column widths, status highlighting, and consistent formatting.
 - [ ] Separate recovered-file, conversion, issue, and integrity tables where useful.
 - [ ] Reports should be presentable to a customer without requiring manual cleanup in Excel.
 - [ ] Audit must be re-runnable/idempotent and never alter source floppy media.
@@ -274,11 +274,11 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 
 ## 18. First implementation session after repository is created
 
-- [ ] Read the new GitHub repository exactly as pushed.
-- [ ] Read BareEye / QuadBench / EagleCast reference files needed for eframe setup and DPI behavior.
-- [ ] Add dependencies/build-dependencies and Windows manifest support.
-- [ ] Split the hello-world project into the initial module skeleton.
-- [ ] Create the first real GUI shell.
+- [x] Read the new GitHub repository exactly as pushed.
+- [x] Read BareEye / QuadBench / EagleCast reference files needed for eframe setup and DPI behavior.
+- [x] Add dependencies/build-dependencies and Windows manifest support.
+- [x] Split the hello-world project into the initial module skeleton.
+- [x] Create the first real GUI shell.
 - [ ] Add project create/open and settings/tool-health structures.
-- [ ] Push the first checkpoint even if some planned pieces are still stubbed.
-- [ ] Then start the Windows read-only floppy backend immediately; do not spend three days making pretty cards before we can read a disk. :D
+- [x] Push the first checkpoint even if some planned pieces are still stubbed.
+- [x] Then start the Windows read-only floppy backend immediately; do not spend three days making pretty cards before we can read a disk. :D
