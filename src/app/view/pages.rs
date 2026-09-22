@@ -4,6 +4,10 @@ use super::super::{FluxVaultApp, Page};
 use crate::{
     external_tools::{ToolHealth, ToolKind},
     extraction::ExtractionPresence,
+    greaseweazle::{
+        GreaseweazleBackend, GreaseweazleCommand, GreaseweazleProfile, MockGreaseweazleBackend,
+        ProcessGreaseweazleBackend,
+    },
     ui as ui_theme,
 };
 
@@ -1902,6 +1906,66 @@ impl FluxVaultApp {
 
             ui.add_space(10.0);
         }
+
+        ui_theme::section(ui, "Greaseweazle read-only backend előnézet", |ui| {
+            ui.label(
+                "A hardver megérkezése előtt mock módban ellenőrzött parancsok. Csak info, raw-flux read és fájl-fájl convert művelet építhető; write/erase/clean/update nem.",
+            );
+
+            let previews = [
+                ("IBM PC 1.44 MB / HD", GreaseweazleProfile::Ibm1440),
+                ("IBM PC 720 KB / DD", GreaseweazleProfile::Ibm720),
+            ];
+            for (label, profile) in previews {
+                let raw = GreaseweazleCommand::raw_flux_read(
+                    profile,
+                    'A',
+                    3,
+                    std::path::Path::new("Flux/NNN_attempt_001.scp"),
+                );
+                let convert = GreaseweazleCommand::convert_flux_to_sector_image(
+                    profile,
+                    std::path::Path::new("Flux/NNN_attempt_001.scp"),
+                    std::path::Path::new("Images/NNN_flux_decode_001.img"),
+                );
+                if let (Ok(raw), Ok(convert)) = (raw, convert) {
+                    ui.strong(label);
+                    ui.monospace(format!("gw {}", raw.arguments().join(" ")));
+                    ui.monospace(format!("gw {}", convert.arguments().join(" ")));
+                }
+            }
+
+            let mut mock = MockGreaseweazleBackend::default();
+            if let Ok(execution) = mock.execute(&GreaseweazleCommand::info()) {
+                ui.weak(format!(
+                    "Mock mód: {:?} | success={} | exit={:?} | stdout={} | stderr={} | command=gw {} | rögzített parancsok={}",
+                    execution.mode,
+                    execution.success,
+                    execution.exit_code,
+                    execution.stdout,
+                    execution.stderr,
+                    execution.command.arguments().join(" "),
+                    mock.commands().len()
+                ));
+            }
+
+            if let Some(executable) = self.ready_tool_path(ToolKind::Greaseweazle) {
+                match ProcessGreaseweazleBackend::new(executable, self.tool_audit_path()) {
+                    Ok(backend) => ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        format!("Valós backend előkészíthető: {:?}", backend.mode()),
+                    ),
+                    Err(error) => ui.colored_label(
+                        egui::Color32::from_rgb(220, 70, 70),
+                        format!("Backend hiba: {error}"),
+                    ),
+                };
+            } else {
+                ui.weak("Hardveres backend nincs aktiválva: gw.exe jelenleg nem elérhető.");
+            }
+        });
+
+        ui.add_space(10.0);
 
         ui_theme::section(ui, "Biztonsági szabályok", |ui| {
             ui.label("Fizikai floppy írás: TILTOTT");

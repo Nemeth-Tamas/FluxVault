@@ -23,8 +23,8 @@
 - [x] Create a central `MediaSafetyPolicy` / equivalent that marks all physical-floppy operations as READ ONLY.
 - [x] Windows USB-floppy backend opens `\\.\A:` (or selected drive) with read access only; never request write access.
 - [x] No code path may call a filesystem write operation against the floppy drive letter.
-- [ ] Greaseweazle integration exposes acquisition/info/convert operations only.
-- [ ] Never expose or invoke `gw write`, erase, clean, or another destructive Greaseweazle operation.
+- [x] Greaseweazle integration exposes acquisition/info/convert operations only.
+- [x] Never expose or invoke `gw write`, erase, clean, or another destructive Greaseweazle operation.
 - [x] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
 - [x] Recommend the physical write-protect tab for customer disks when available.
 - [x] Keep a command/audit log for every external tool invocation.
@@ -145,10 +145,10 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 
 Greaseweazle host tools are intentionally wrapped rather than reimplemented initially. Current upstream supports Windows `gw.exe`, raw-flux formats including SCP/KryoFlux, and a separate `gw convert` path, so we can build/test command generation and output parsing before the board arrives.
 
-- [ ] Create `GreaseweazleBackend` abstraction with a mock/no-hardware mode.
+- [x] Create `GreaseweazleBackend` abstraction with a mock/no-hardware mode.
 - [ ] Detect `gw.exe`, run info/version command, and show device status.
-- [ ] Build commands as argument arrays, never shell-concatenated strings.
-- [ ] Unit-test command generation without hardware.
+- [x] Build commands as argument arrays, never shell-concatenated strings.
+- [x] Unit-test command generation without hardware.
 - [ ] Parse `gw` stderr/stdout incrementally into GUI progress/events.
 - [ ] Store full command, version, start/end time, exit status, and captured output for every run.
 - [ ] Add “hardware not connected” UI state rather than error-spamming.
@@ -157,14 +157,14 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 
 - [ ] Detect board + connected drive and display device/firmware info.
 - [ ] **Preservation capture defaults to true raw flux**, e.g. SCP/KryoFlux, not regenerated “perfect” flux.
-- [ ] Important guardrail: if `gw read --format=...` is used for a raw-flux file, pair it with `--raw`; otherwise Greaseweazle may regenerate flux and fill undecodable sectors rather than preserving the physical capture.
+- [x] Important guardrail: if `gw read --format=...` is used for a raw-flux file, pair it with `--raw`; otherwise Greaseweazle may regenerate flux and fill undecodable sectors rather than preserving the physical capture.
 - [ ] Default recovery workflow: first capture raw flux once, then perform as much decoding/re-decoding as possible from that preserved capture instead of repeatedly stressing fragile media.
 - [ ] Allow configurable revolutions for raw capture where the selected image type supports it.
 - [ ] Preserve every raw acquisition as an immutable attempt with SHA-256.
 - [ ] Derive sector images from raw captures using `gw convert --format=<profile>`; derived images are separate artifacts, never replacements for raw flux.
-- [ ] Profiles initially required for this collection:
-  - [ ] IBM PC 1.44 MB / HD.
-  - [ ] IBM PC 720 KB / DD.
+- [x] Profiles initially required for this collection:
+  - [x] IBM PC 1.44 MB / HD.
+  - [x] IBM PC 720 KB / DD.
 - [ ] Later expose other Greaseweazle disk definitions without hardcoding the whole universe into FluxVault.
 - [ ] Track/head selection and step settings available under **Advanced**, not in the basic happy path.
 - [ ] Keep direct physical re-reads operator-controlled; no endless automatic hammering of a fragile disk.
@@ -256,13 +256,13 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [x] Unit tests for legacy archiver-log parsing.
 - [x] Unit tests for DMDE multi-pass map replay (later successful `C` replaces earlier `E`).
 - [ ] Unit tests for path cleanup / delivery naming / collision handling.
-- [ ] Unit tests for Greaseweazle command construction, especially raw-flux safety flags.
+- [x] Unit tests for Greaseweazle command construction, especially raw-flux safety flags.
 - [ ] Unit tests for project persistence and migrations.
 - [ ] Unit tests for SHA/integrity helpers.
 - [ ] Fixture-based tests using scrubbed/sample logs and tiny synthetic images; never require a customer floppy for automated tests.
 - [x] Integration test for 7-Zip adapter.
 - [ ] Integration test for LibreOffice adapter when installed.
-- [ ] Greaseweazle hardware tests marked/isolated so normal `cargo test` works without hardware.
+- [x] Greaseweazle hardware tests marked/isolated so normal `cargo test` works without hardware.
 
 ## 17. CLI / automation interface
 
