@@ -1,0 +1,896 @@
+use eframe::egui;
+
+use super::super::{FluxVaultApp, Page};
+use crate::ui as ui_theme;
+
+impl FluxVaultApp {
+    fn project_page(&mut self, ui: &mut egui::Ui) {
+        ui_theme::page_header(
+            ui,
+            "Projekt",
+            "Projektkezelés, munkamenet és az archiválási munka összesített állapota.",
+        );
+
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Új projekt...").clicked() {
+                self.create_project_interactive();
+            }
+
+            if ui.button("Projekt megnyitása...").clicked() {
+                self.open_project_interactive();
+            }
+        });
+
+        ui.add_space(16.0);
+
+        let Some(project) = &self.project else {
+            ui_theme::section(ui, "Nincs aktív projekt", |ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 80),
+                    "A teljes archiválási munkafolyamathoz hozzon létre vagy nyisson meg egy projektet.",
+                );
+
+                ui.add_space(6.0);
+
+                ui.weak(
+                    "Projekt nélkül a teszt acquisitions továbbra is a helyi captures mappába kerülnek.",
+                );
+            });
+
+            return;
+        };
+
+        ui_theme::section(ui, "Projekt adatai", |ui| {
+            egui::Grid::new("project_details_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Név");
+                    ui.strong(project.name());
+                    ui.end_row();
+
+                    ui.label("Gyökérmappa");
+                    ui.monospace(project.root().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Lemezképek");
+                    ui.monospace(project.images_dir().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Naplók");
+                    ui.monospace(project.logs_dir().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Jelentések");
+                    ui.monospace(project.reports_dir().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Projektfájl");
+                    ui.monospace(project.project_file().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Aktuális ügyféllemez");
+                    ui.strong(format!("{:03}", project.current_disk_number()));
+                    ui.end_row();
+                });
+        });
+
+        ui.add_space(16.0);
+
+        ui_theme::section(ui, "Archiválási áttekintés", |ui| {
+            let Some(statistics) = &self.project_statistics else {
+                ui.weak("Még nincs elérhető projektstatisztika.");
+                return;
+            };
+
+            egui::Grid::new("project_overview_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Feldolgozott lemezek");
+                    ui.strong(statistics.disk_count.to_string());
+                    ui.end_row();
+
+                    ui.label("Olvasási próbálkozások");
+                    ui.strong(statistics.total_attempts.to_string());
+                    ui.end_row();
+
+                    ui.label("Hibamentes lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        statistics.ok_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Részleges lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        statistics.partial_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Legjobb ismert hibás szektorok");
+                    ui.strong(statistics.best_known_bad_sectors.to_string());
+                    ui.end_row();
+                });
+        });
+    }
+
+    fn acquire_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Lemez beolvasása");
+
+        ui.add_space(8.0);
+
+        ui.label("Itt készül majd a forrás floppy bitpontos szektoros lemezképe.");
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Forrás meghajtó").strong().size(16.0));
+
+            ui.add_space(6.0);
+
+            let mut requested_disk_number = self.current_disk_number;
+            let mut disk_number_changed = false;
+
+            ui.horizontal(|ui| {
+                ui.label("Aktuális ügyféllemez:");
+
+                let response = ui.add_enabled(
+                    !self.imaging_running,
+                    egui::DragValue::new(&mut requested_disk_number)
+                        .range(1..=999_999)
+                        .speed(1.0),
+                );
+
+                disk_number_changed = response.changed();
+
+                ui.monospace(format!("{:03}", requested_disk_number));
+            });
+
+            if disk_number_changed {
+                self.select_disk_number(requested_disk_number);
+            }
+
+            ui.weak(format!(
+                "Kimeneti név: {:03}_attempt_NNN.img",
+                self.current_disk_number
+            ));
+
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                ui.label("Hibás szektor újrapróbálások:");
+
+                ui.add_enabled(
+                    !self.imaging_running,
+                    egui::DragValue::new(&mut self.sector_retries)
+                        .range(0..=10)
+                        .speed(1.0),
+                );
+
+                ui.weak(format!(
+                    "{} összes olvasási próbálkozás / hibás szektor",
+                    self.sector_retries + 1
+                ));
+            });
+
+            ui.add_space(8.0);
+
+            if ui
+                .add_enabled(
+                    !self.imaging_running,
+                    egui::Button::new("Meghajtók frissítése"),
+                )
+                .clicked()
+            {
+                self.refresh_floppy_drives();
+            }
+
+            ui.add_space(8.0);
+
+            if self.floppy_drives.is_empty() {
+                ui.weak("Még nincs felismert cserélhető meghajtó.");
+            } else {
+                ui.label("Felismert cserélhető meghajtók:");
+
+                let mut newly_selected = None;
+
+                for (index, drive) in self.floppy_drives.iter().enumerate() {
+                    let selected = self.selected_drive == Some(index);
+
+                    let drive_clicked = ui
+                        .selectable_label(selected, drive.display_name())
+                        .clicked();
+
+                    if !self.imaging_running && drive_clicked {
+                        newly_selected = Some(index);
+                    }
+                }
+
+                if let Some(index) = newly_selected {
+                    self.selected_drive = Some(index);
+                    self.probe_result = None;
+
+                    if let Some(drive) = self.floppy_drives.get(index) {
+                        self.active_source = Some(drive.root.clone());
+                        self.status = format!("Forrás meghajtó kiválasztva: {}", drive.root);
+                    }
+                }
+            }
+
+            ui.add_space(12.0);
+
+            let drive_selected = self.selected_drive.is_some() && !self.imaging_running;
+
+            if ui
+                .add_enabled(
+                    drive_selected,
+                    egui::Button::new("Read-only próbaolvasás (512 bájt)"),
+                )
+                .clicked()
+            {
+                self.probe_selected_drive();
+            }
+
+            let imaging_ready = self
+                .probe_result
+                .as_ref()
+                .and_then(|result| result.geometry)
+                .map(|geometry| geometry.looks_like_floppy())
+                .unwrap_or(false)
+                && !self.imaging_running;
+
+            let imaging_button_text = if self.imaging_running {
+                "Lemezkép készítése folyamatban..."
+            } else {
+                "Teljes READ ONLY lemezkép készítése"
+            };
+
+            if ui
+                .add_enabled(imaging_ready, egui::Button::new(imaging_button_text))
+                .clicked()
+            {
+                self.start_full_imaging();
+            }
+
+            ui.add_space(8.0);
+
+            let acquisition_directory = self.acquisition_directory();
+
+            ui.weak(format!(
+                "A forrás meghajtó kizárólag olvasási hozzáféréssel van megnyitva. \
+                 Kimeneti mappa: {}",
+                acquisition_directory.display()
+            ));
+
+            ui.weak(
+                "Ügyféllemeznél használja a floppy fizikai írásvédő kapcsolóját is, \
+                 ha a lemez típusa rendelkezik vele.",
+            );
+
+            if self.project.is_none() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 80),
+                    "[INFO] Teszt mód: nincs aktív projekt, ezért a captures mappa használatos.",
+                );
+            }
+        });
+
+        if let Some(result) = &self.probe_result {
+            ui.add_space(16.0);
+
+            ui.group(|ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    egui::RichText::new("[READ OK] Fizikai floppy olvashato")
+                        .strong()
+                        .size(18.0),
+                );
+
+                ui.add_space(8.0);
+
+                ui.label(format!("Beolvasott bajtok: {}", result.bytes_read));
+                ui.monospace(format!("Elso 16 bajt: {}", result.first_bytes_hex()));
+                ui.label(format!("510-511. bajt: {}", result.boot_signature_hex()));
+
+                if result.boot_signature == Some([0x55, 0xAA]) {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        "[OK] 55 AA boot signature megtalalva.",
+                    );
+                } else if result.bytes_read >= 512 {
+                    ui.weak("[INFO] Klasszikus 55 AA boot signature nincs.");
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.label(
+                    egui::RichText::new("Windows lemezgeometria")
+                        .strong()
+                        .size(16.0),
+                );
+
+                if let Some(geometry) = result.geometry {
+                    ui.label(format!("Formatum becsles: {}", geometry.format_guess()));
+                    ui.label(format!("Cilinderek: {}", geometry.cylinders));
+                    ui.label(format!("Fejek: {}", geometry.heads));
+                    ui.label(format!("Szektor / sav: {}", geometry.sectors_per_track));
+                    ui.label(format!("Bajt / szektor: {}", geometry.bytes_per_sector));
+                    ui.label(format!("Osszes szektor: {}", geometry.total_sectors()));
+                    ui.label(format!("Varhato meret: {} bajt", geometry.total_bytes()));
+                    ui.label(format!("Windows media type kod: {}", geometry.media_type));
+                } else if let Some(error) = &result.geometry_error {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        "[WARN] A szektor olvasasa sikerult, de a geometria lekerdezese nem.",
+                    );
+                    ui.monospace(error);
+                }
+            });
+        }
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Élő lemeztérkép").strong().size(16.0));
+
+            ui.add_space(8.0);
+
+            if self.imaging_total_sectors > 0 {
+                let progress =
+                    self.imaging_completed_sectors as f32 / self.imaging_total_sectors as f32;
+
+                ui.add(
+                    egui::ProgressBar::new(progress)
+                        .show_percentage()
+                        .text(format!(
+                            "{} / {} szektor",
+                            self.imaging_completed_sectors, self.imaging_total_sectors
+                        )),
+                );
+            }
+
+            if let Some(output) = &self.imaging_output {
+                ui.label(format!("Kimenet: {output}"));
+            }
+
+            if let Some(result) = &self.imaging_result {
+                ui.add_space(8.0);
+
+                if result.bad_sectors.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        "[OK] Hibamentes lemezkép.",
+                    );
+                } else {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        format!(
+                            "[PARTIAL] {} olvashatatlan szektor.",
+                            result.bad_sectors.len()
+                        ),
+                    );
+                }
+
+                ui.label(format!(
+                    "Lemez: {:03} | Olvasási próbálkozás: {:03}",
+                    result.disk_number, result.attempt_number
+                ));
+
+                ui.label(format!(
+                    "Retry után megmentett szektorok: {}",
+                    result.retry_recovered
+                ));
+                ui.label(format!("Méret: {} bájt", result.bytes_written));
+                ui.label(format!("Metadata: {}", result.metadata_path.display()));
+                ui.label(format!("Napló: {}", result.log_path.display()));
+                ui.monospace(format!("SHA-256: {}", result.sha256));
+
+                if !result.bad_sectors.is_empty() {
+                    ui.add_space(10.0);
+
+                    ui.label(
+                        egui::RichText::new("Olvashatatlan szektorok")
+                            .strong()
+                            .size(15.0),
+                    );
+
+                    if let Some(geometry) = self.imaging_geometry {
+                        egui::ScrollArea::vertical()
+                            .id_salt("bad_sector_list_scroll")
+                            .max_height(110.0)
+                            .show(ui, |ui| {
+                                for lba in &result.bad_sectors {
+                                    let sectors_per_cylinder =
+                                        geometry.heads as u64 * geometry.sectors_per_track as u64;
+
+                                    let cylinder = *lba / sectors_per_cylinder;
+
+                                    let within_cylinder = *lba % sectors_per_cylinder;
+
+                                    let head = within_cylinder / geometry.sectors_per_track as u64;
+
+                                    let sector =
+                                        within_cylinder % geometry.sectors_per_track as u64 + 1;
+
+                                    ui.monospace(format!(
+                                        "LBA {:4} | C{:02} H{} S{:02}",
+                                        lba, cylinder, head, sector
+                                    ));
+                                }
+                            });
+                    }
+                }
+            }
+
+            if let Some(error) = &self.imaging_error {
+                ui.add_space(8.0);
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[FAILED] A lemezkép készítése megszakadt.",
+                );
+                ui.monospace(error);
+            }
+
+            ui.add_space(10.0);
+
+            self.draw_sector_map(ui);
+        });
+    }
+
+    fn recovery_page(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("Adatmentés");
+
+            ui.separator();
+
+            ui.strong(format!("Lemez {:03}", self.current_disk_number));
+
+            if ui.button("Előzmények újratöltése").clicked() {
+                self.refresh_attempt_history();
+            }
+        });
+
+        ui.add_space(8.0);
+
+        ui.label(
+            "A lemez több, egymástól független olvasási próbálkozása itt \
+             hasonlítható össze. Az eredeti próbálkozások változatlanul megmaradnak.",
+        );
+
+        if let Some(error) = &self.attempt_history_error {
+            ui.add_space(12.0);
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 70, 70),
+                "[HIBA] Nem sikerült betölteni a próbálkozásokat.",
+            );
+
+            ui.monospace(error);
+
+            return;
+        }
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new("Olvasási próbálkozások")
+                    .strong()
+                    .size(16.0),
+            );
+
+            ui.add_space(6.0);
+
+            if self.attempt_history.is_empty() {
+                ui.weak(format!(
+                    "A(z) {:03} lemezhez még nincs számozott FluxVault próbálkozás.",
+                    self.current_disk_number
+                ));
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("attempt_history_scroll")
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for attempt in &self.attempt_history {
+                            ui.group(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.strong(format!("Próbálkozás {:03}", attempt.attempt_number));
+
+                                    ui.separator();
+
+                                    ui.label(&attempt.status);
+
+                                    ui.separator();
+
+                                    if attempt.bad_sectors.is_empty() {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(70, 200, 120),
+                                            "0 hibás szektor",
+                                        );
+                                    } else {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(220, 180, 80),
+                                            format!("{} hibás szektor", attempt.bad_sectors.len()),
+                                        );
+                                    }
+
+                                    ui.separator();
+
+                                    ui.label(format!(
+                                        "{} retry után mentett",
+                                        attempt.retry_recovered_sectors
+                                    ));
+                                });
+
+                                ui.label(format!(
+                                    "Időpont: {}",
+                                    Self::format_timestamp(attempt.timestamp_unix_ms)
+                                ));
+
+                                ui.label(format!("Kép: {}", attempt.image_file));
+
+                                ui.label(format!("Metadata: {}", attempt.metadata_path.display()));
+
+                                if !attempt.log_file.is_empty() {
+                                    ui.label(format!("Napló: {}", attempt.log_file));
+                                } else {
+                                    ui.weak(
+                                        "Napló: régi acquisition, nincs rögzített log artifact",
+                                    );
+                                }
+
+                                let short_sha = attempt.sha256.chars().take(16).collect::<String>();
+
+                                ui.monospace(format!("SHA-256: {short_sha}..."));
+                            });
+
+                            ui.add_space(6.0);
+                        }
+                    });
+            }
+        });
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new("Legutóbbi két próbálkozás összehasonlítása")
+                    .strong()
+                    .size(16.0),
+            );
+
+            ui.add_space(8.0);
+
+            let Some(comparison) = &self.attempt_comparison else {
+                ui.weak("Legalább két, azonos méretű próbálkozás szükséges az összehasonlításhoz.");
+                return;
+            };
+
+            ui.label(format!(
+                "{:03} -> {:03}",
+                comparison.older_attempt, comparison.newer_attempt
+            ));
+
+            ui.label(format!(
+                "Korábbi hibás szektorok: {}",
+                comparison.older_bad_count
+            ));
+
+            ui.label(format!(
+                "Újabb hibás szektorok: {}",
+                comparison.newer_bad_count
+            ));
+
+            ui.add_space(8.0);
+
+            ui.colored_label(
+                egui::Color32::from_rgb(70, 200, 120),
+                format!(
+                    "Korábban hibás, most olvasható: {}",
+                    comparison.recovered_sectors.len()
+                ),
+            );
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 180, 80),
+                format!(
+                    "Mindkét próbálkozásban hibás: {}",
+                    comparison.still_bad_sectors.len()
+                ),
+            );
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 70, 70),
+                format!(
+                    "Korábban olvasható, most hibás: {}",
+                    comparison.newly_bad_sectors.len()
+                ),
+            );
+
+            ui.add_space(12.0);
+
+            ui.columns(2, |columns| {
+                columns[0].strong("Most visszanyert LBA-k");
+
+                egui::ScrollArea::vertical()
+                    .id_salt("recovered_sector_comparison_scroll")
+                    .max_height(180.0)
+                    .show(&mut columns[0], |ui| {
+                        if comparison.recovered_sectors.is_empty() {
+                            ui.weak("Nincs.");
+                        } else {
+                            for lba in &comparison.recovered_sectors {
+                                ui.monospace(format!("LBA {lba}"));
+                            }
+                        }
+                    });
+
+                columns[1].strong("Most elveszett LBA-k");
+
+                egui::ScrollArea::vertical()
+                    .id_salt("new_bad_sector_comparison_scroll")
+                    .max_height(180.0)
+                    .show(&mut columns[1], |ui| {
+                        if comparison.newly_bad_sectors.is_empty() {
+                            ui.weak("Nincs.");
+                        } else {
+                            for lba in &comparison.newly_bad_sectors {
+                                ui.monospace(format!("LBA {lba}"));
+                            }
+                        }
+                    });
+            });
+        });
+    }
+
+    fn files_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Fájlok");
+
+        ui.add_space(8.0);
+
+        ui.label(
+            "Kinyert fájlok, SHA-256 értékek, eredeti útvonalak és \
+             helyreállítási módszerek áttekintése.",
+        );
+
+        ui.add_space(16.0);
+
+        ui.weak("A fájlindex még nincs implementálva.");
+    }
+
+    fn reports_page(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.heading("Jelentések és statisztikák");
+
+            ui.separator();
+
+            if ui.button("Statisztika újratöltése").clicked() {
+                self.refresh_project_statistics();
+            }
+        });
+
+        ui.add_space(8.0);
+
+        ui.label(
+            "Ez a nézet közvetlenül az acquisition metadata fájlokból épül fel. \
+             Ugyanez az adatmodell lesz a későbbi Excel jelentések alapja.",
+        );
+
+        if let Some(error) = &self.project_statistics_error {
+            ui.add_space(12.0);
+
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 70, 70),
+                "[HIBA] A projektstatisztika nem tölthető be.",
+            );
+
+            ui.monospace(error);
+
+            return;
+        }
+
+        let Some(statistics) = &self.project_statistics else {
+            ui.add_space(16.0);
+            ui.weak("Nincs elérhető statisztika.");
+            return;
+        };
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Projekt összesítő").strong().size(16.0));
+
+            ui.add_space(8.0);
+
+            egui::Grid::new("project_statistics_summary")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Feldolgozott lemezek");
+                    ui.strong(statistics.disk_count.to_string());
+                    ui.end_row();
+
+                    ui.label("Összes olvasási próbálkozás");
+                    ui.strong(statistics.total_attempts.to_string());
+                    ui.end_row();
+
+                    ui.label("Hibamentes lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        statistics.ok_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Részleges lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        statistics.partial_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Legutóbbi próbálkozások hibás szektorai");
+                    ui.strong(statistics.latest_bad_sectors.to_string());
+                    ui.end_row();
+
+                    ui.label("Legjobb ismert állapot hibás szektorai");
+                    ui.strong(statistics.best_known_bad_sectors.to_string());
+                    ui.end_row();
+                });
+        });
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new("Lemezenkénti állapot")
+                    .strong()
+                    .size(16.0),
+            );
+
+            ui.add_space(8.0);
+
+            if statistics.disks.is_empty() {
+                ui.weak("Még nincs számozott FluxVault acquisition ebben a munkaterületben.");
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("project_disk_statistics_scroll")
+                    .max_height(340.0)
+                    .show(ui, |ui| {
+                        for disk in &statistics.disks {
+                            ui.group(|ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.strong(format!("Lemez {:03}", disk.disk_number));
+
+                                    ui.separator();
+
+                                    ui.label(format!("{} próbálkozás", disk.attempt_count));
+
+                                    ui.separator();
+
+                                    if disk.best_bad_sectors == 0 {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(70, 200, 120),
+                                            "OK",
+                                        );
+                                    } else {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(220, 180, 80),
+                                            "PARTIAL",
+                                        );
+                                    }
+                                });
+
+                                ui.label(format!(
+                                    "Legutóbbi: #{:03} | {} | {} hibás szektor",
+                                    disk.latest_attempt_number,
+                                    disk.latest_status,
+                                    disk.latest_bad_sectors
+                                ));
+
+                                ui.label(format!(
+                                    "Legjobb: #{:03} | {} hibás szektor",
+                                    disk.best_attempt_number, disk.best_bad_sectors
+                                ));
+
+                                ui.label(format!(
+                                    "Utolsó olvasás: {}",
+                                    Self::format_timestamp(disk.latest_timestamp_unix_ms)
+                                ));
+
+                                ui.weak(format!(
+                                    "Lemez szektorainak száma: {}",
+                                    disk.total_sectors
+                                ));
+                            });
+
+                            ui.add_space(6.0);
+                        }
+                    });
+            }
+        });
+
+        ui.add_space(16.0);
+
+        let report_ready = self.project.is_some() && self.project_statistics.is_some();
+
+        let mut export_requested = false;
+
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Excel jelentés").strong().size(16.0));
+
+            ui.add_space(6.0);
+
+            ui.label(
+                "A projekt aktuális acquisition statisztikáiból közvetlenül \
+                 formázott XLSX munkafüzet készül.",
+            );
+
+            ui.label("Elsődleges nyelv: magyar");
+            ui.label("Később: angol export ugyanebből az adatmodellből.");
+
+            ui.add_space(8.0);
+
+            if ui
+                .add_enabled(report_ready, egui::Button::new("Excel jelentés készítése"))
+                .clicked()
+            {
+                export_requested = true;
+            }
+
+            if self.project.is_none() {
+                ui.weak("A jelentéshez előbb nyisson meg vagy hozzon létre projektet.");
+            }
+        });
+
+        if export_requested {
+            self.export_excel_report();
+        }
+    }
+
+    fn settings_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Beállítások");
+
+        ui.add_space(8.0);
+
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("Külső eszközök").strong().size(16.0));
+
+            ui.add_space(6.0);
+
+            ui.label("7-Zip: még nincs ellenőrizve");
+            ui.label("LibreOffice: még nincs ellenőrizve");
+            ui.label("Greaseweazle: még nincs ellenőrizve");
+        });
+
+        ui.add_space(16.0);
+
+        ui.group(|ui| {
+            ui.label(
+                egui::RichText::new("Biztonsági szabályok")
+                    .strong()
+                    .size(16.0),
+            );
+
+            ui.add_space(6.0);
+
+            ui.label("Fizikai floppy írás: TILTOTT");
+            ui.label("Greaseweazle írás: TILTOTT");
+            ui.label("Forrás média hozzáférés: CSAK OLVASHATÓ");
+        });
+    }
+
+    pub(super) fn current_page(&mut self, ui: &mut egui::Ui) {
+        match self.page {
+            Page::Project => self.project_page(ui),
+            Page::Acquire => self.acquire_page(ui),
+            Page::Recovery => self.recovery_page(ui),
+            Page::Files => self.files_page(ui),
+            Page::Reports => self.reports_page(ui),
+            Page::Settings => self.settings_page(ui),
+        }
+    }
+}
