@@ -46,7 +46,7 @@
 
 - [x] Main window with left navigation and central work area.
 - [ ] Suggested pages: **Project**, **Acquire**, **Recovery**, **Files**, **Conversions**, **Audit**, **Package**, **Settings / Tools**.
-- [ ] Project header: project path, disk count, next number, active source device, current job.
+- [x] Project header: project path, disk count, next number, active source device, current job.
 - [x] Bottom status area: worker status, progress, current operation, last error/warning.
 - [ ] Non-blocking modal/dialog for “Insert floppy #NNN”.
 - [ ] Operator log panel with timestamps and copy button.
@@ -279,6 +279,6 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [x] Add dependencies/build-dependencies and Windows manifest support.
 - [x] Split the hello-world project into the initial module skeleton.
 - [x] Create the first real GUI shell.
-- [ ] Add project create/open and settings/tool-health structures.
+- [x] Add project create/open and settings/tool-health structures.
 - [x] Push the first checkpoint even if some planned pieces are still stubbed.
 - [x] Then start the Windows read-only floppy backend immediately; do not spend three days making pretty cards before we can read a disk. :D

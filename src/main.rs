@@ -4,6 +4,7 @@ mod imaging;
 mod project;
 mod report;
 mod safety;
+mod ui;
 
 use app::FluxVaultApp;
 

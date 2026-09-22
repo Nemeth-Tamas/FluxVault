@@ -12,6 +12,7 @@ use crate::{
     project::{self, ProjectState},
     report,
     safety::{MediaSafetyPolicy, SourceMediaAccess},
+    ui as ui_theme,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +66,9 @@ pub struct FluxVaultApp {
 }
 
 impl FluxVaultApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        ui_theme::configure_context(&cc.egui_ctx);
+
         let mut app = Self {
             page: Page::Project,
             project: None,
@@ -653,29 +656,48 @@ impl FluxVaultApp {
     }
 
     fn navigation(&mut self, ui: &mut egui::Ui) {
-        ui.heading("FluxVault");
-        ui.label("Floppy archiváló és adatmentő rendszer");
+        ui_theme::subsection_label(ui, "MUNKAFOLYAMAT");
 
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(4.0);
 
         ui.selectable_value(&mut self.page, Page::Project, Page::Project.title());
+
         ui.selectable_value(&mut self.page, Page::Acquire, Page::Acquire.title());
+
         ui.selectable_value(&mut self.page, Page::Recovery, Page::Recovery.title());
+
         ui.selectable_value(&mut self.page, Page::Files, Page::Files.title());
+
+        ui.add_space(18.0);
+
+        ui_theme::subsection_label(ui, "KIMENET");
+
+        ui.add_space(4.0);
+
         ui.selectable_value(&mut self.page, Page::Reports, Page::Reports.title());
+
+        ui.add_space(18.0);
+
+        ui_theme::subsection_label(ui, "RENDSZER");
+
+        ui.add_space(4.0);
+
         ui.selectable_value(&mut self.page, Page::Settings, Page::Settings.title());
 
-        ui.add_space(16.0);
+        ui.add_space(24.0);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(12.0);
 
-        ui.label("Projekt:");
+        ui_theme::subsection_label(ui, "AKTÍV PROJEKT");
+
+        ui.add_space(4.0);
 
         match &self.project {
             Some(project) => {
                 ui.strong(project.name());
+
+                ui.add_space(2.0);
+
                 ui.weak(project.root().display().to_string());
             }
             None => {
@@ -683,13 +705,15 @@ impl FluxVaultApp {
             }
         }
 
-        ui.add_space(8.0);
+        ui.add_space(12.0);
 
-        ui.label("Forrás:");
+        ui_theme::subsection_label(ui, "FORRÁS");
+
+        ui.add_space(4.0);
 
         match &self.active_source {
             Some(source) => {
-                ui.label(source);
+                ui.monospace(source);
             }
             None => {
                 ui.weak("Nincs kiválasztva");
@@ -697,47 +721,102 @@ impl FluxVaultApp {
         }
     }
 
-    fn safety_banner(&self, ui: &mut egui::Ui) {
+    fn workspace_header(&self, ui: &mut egui::Ui) {
         let read_only = MediaSafetyPolicy::SOURCE_MEDIA_ACCESS == SourceMediaAccess::ReadOnly
             && !MediaSafetyPolicy::ALLOW_PHYSICAL_MEDIA_WRITES;
 
         ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new("FluxVault").strong().size(22.0));
+
+            ui.weak("Floppy archiváló és adatmentő rendszer");
+
+            ui.separator();
+
             if read_only {
                 ui.colored_label(
                     egui::Color32::from_rgb(70, 200, 120),
-                    egui::RichText::new("[READ ONLY] FORRASLEMEZ: CSAK OLVASHATO")
-                        .strong()
-                        .size(15.0),
+                    egui::RichText::new("[READ ONLY]").strong().size(14.0),
                 );
             } else {
                 ui.colored_label(
                     egui::Color32::RED,
-                    egui::RichText::new("[VESZELY] IRASI HOZZAFERES ENGEDELYEZVE")
+                    egui::RichText::new("[VESZELY: IRAS ENGEDELYEZVE]")
                         .strong()
-                        .size(15.0),
+                        .size(14.0),
                 );
+            }
+        });
+
+        ui.add_space(6.0);
+
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Projekt:");
+
+            match &self.project {
+                Some(project) => {
+                    ui.strong(project.name());
+                    ui.weak(project.root().display().to_string());
+                }
+                None => {
+                    ui.weak("nincs");
+                }
             }
 
             ui.separator();
 
-            ui.weak("A FluxVault soha nem irhat az ugyfel eredeti floppy lemezere.");
+            ui.weak("Feldolgozott lemezek:");
+
+            ui.strong(
+                self.project_statistics
+                    .as_ref()
+                    .map(|statistics| statistics.disk_count)
+                    .unwrap_or(0)
+                    .to_string(),
+            );
+
+            ui.separator();
+
+            ui.weak("Aktuális:");
+
+            ui.monospace(format!("{:03}", self.current_disk_number));
+
+            ui.separator();
+
+            ui.weak("Következő:");
+
+            ui.monospace(format!("{:03}", self.current_disk_number.saturating_add(1)));
+
+            ui.separator();
+
+            ui.weak("Forrás:");
+
+            match &self.active_source {
+                Some(source) => {
+                    ui.monospace(source);
+                }
+                None => {
+                    ui.weak("nincs");
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Művelet:");
+            ui.label(&self.status);
         });
     }
 
     fn project_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Projekt");
-
-        ui.add_space(8.0);
-
-        ui.label(
-            "A FluxVault projekt fogja össze a lemezképeket, naplókat, \
-             kinyert fájlokat, adatmentési próbálkozásokat és jelentéseket.",
+        ui_theme::page_header(
+            ui,
+            "Projekt",
+            "Projektkezelés, munkamenet és az archiválási munka összesített állapota.",
         );
 
-        ui.add_space(16.0);
-
-        ui.horizontal(|ui| {
-            if ui.button("Új projekt mappa...").clicked() {
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Új projekt...").clicked() {
                 self.create_project_interactive();
             }
 
@@ -748,44 +827,96 @@ impl FluxVaultApp {
 
         ui.add_space(16.0);
 
-        if let Some(project) = &self.project {
-            ui.group(|ui| {
-                ui.label(egui::RichText::new("Aktív projekt").strong().size(16.0));
+        let Some(project) = &self.project else {
+            ui_theme::section(ui, "Nincs aktív projekt", |ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 80),
+                    "A teljes archiválási munkafolyamathoz hozzon létre vagy nyisson meg egy projektet.",
+                );
 
                 ui.add_space(6.0);
 
-                ui.label(format!("Név: {}", project.name()));
-
-                ui.label(format!("Gyökérmappa: {}", project.root().display()));
-
-                ui.label(format!("Lemezképek: {}", project.images_dir().display()));
-
-                ui.label(format!("Projektfájl: {}", project.project_file().display()));
-
-                ui.label(format!(
-                    "Aktuális ügyféllemez: {:03}",
-                    project.current_disk_number()
-                ));
+                ui.weak(
+                    "Projekt nélkül a teszt acquisitions továbbra is a helyi captures mappába kerülnek.",
+                );
             });
-        } else {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 180, 80),
-                "[INFO] Nincs megnyitott projekt. A teszt acquisitions továbbra is a helyi captures mappába kerülnek.",
-            );
-        }
 
-        ui.add_space(24.0);
+            return;
+        };
 
-        ui.group(|ui| {
-            ui.heading("M0 állapot");
+        ui_theme::section(ui, "Projekt adatai", |ui| {
+            egui::Grid::new("project_details_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Név");
+                    ui.strong(project.name());
+                    ui.end_row();
 
-            ui.label("[OK] eframe / egui GUI");
-            ui.label("[OK] Windows DPI manifest");
-            ui.label("[OK] Központi read-only biztonsági szabály");
-            ui.label("[OK] Navigáció és operátori napló");
-            ui.label("[OK] Projekt létrehozás / megnyitás / állapotmentés");
-            ui.label("[OK] Fizikai floppy meghajtó felismerése");
-            ui.label("[WIP] Nyers, read-only lemezbeolvasás");
+                    ui.label("Gyökérmappa");
+                    ui.monospace(project.root().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Lemezképek");
+                    ui.monospace(project.images_dir().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Naplók");
+                    ui.monospace(project.logs_dir().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Jelentések");
+                    ui.monospace(project.reports_dir().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Projektfájl");
+                    ui.monospace(project.project_file().display().to_string());
+                    ui.end_row();
+
+                    ui.label("Aktuális ügyféllemez");
+                    ui.strong(format!("{:03}", project.current_disk_number()));
+                    ui.end_row();
+                });
+        });
+
+        ui.add_space(16.0);
+
+        ui_theme::section(ui, "Archiválási áttekintés", |ui| {
+            let Some(statistics) = &self.project_statistics else {
+                ui.weak("Még nincs elérhető projektstatisztika.");
+                return;
+            };
+
+            egui::Grid::new("project_overview_grid")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("Feldolgozott lemezek");
+                    ui.strong(statistics.disk_count.to_string());
+                    ui.end_row();
+
+                    ui.label("Olvasási próbálkozások");
+                    ui.strong(statistics.total_attempts.to_string());
+                    ui.end_row();
+
+                    ui.label("Hibamentes lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        statistics.ok_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Részleges lemezek");
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        statistics.partial_disks.to_string(),
+                    );
+                    ui.end_row();
+
+                    ui.label("Legjobb ismert hibás szektorok");
+                    ui.strong(statistics.best_known_bad_sectors.to_string());
+                    ui.end_row();
+                });
         });
     }
 
@@ -1605,16 +1736,17 @@ impl eframe::App for FluxVaultApp {
         ui.vertical(|ui| {
             ui.add_space(6.0);
 
-            self.safety_banner(ui);
+            self.workspace_header(ui);
 
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(6.0);
 
-            let status_reserve = 190.0;
-            let content_height = (ui.available_height() - status_reserve).max(200.0);
+            let content_height =
+                (ui.available_height() - ui_theme::BOTTOM_RESERVED_HEIGHT).max(200.0);
+
             let total_width = ui.available_width();
-            let navigation_width = 180.0;
+            let navigation_width = ui_theme::NAVIGATION_WIDTH;
 
             ui.allocate_ui_with_layout(
                 egui::vec2(total_width, content_height),
@@ -1640,12 +1772,21 @@ impl eframe::App for FluxVaultApp {
                                 .id_salt("main_content_scroll")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    ui.set_min_width((content_width - 12.0).max(180.0));
-                                    ui.add_space(4.0);
+                                    ui.set_min_width((content_width - 24.0).max(180.0));
 
-                                    self.current_page(ui);
+                                    ui.add_space(8.0);
 
-                                    ui.add_space(12.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0);
+
+                                        ui.vertical(|ui| {
+                                            ui.set_min_width((content_width - 40.0).max(180.0));
+
+                                            self.current_page(ui);
+
+                                            ui.add_space(16.0);
+                                        });
+                                    });
                                 });
                         },
                     );
