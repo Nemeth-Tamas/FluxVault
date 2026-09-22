@@ -16,6 +16,7 @@ use crate::{
         self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, ProjectStatistics,
         SectorReadState,
     },
+    manifest::{self, ManifestEvent, ManifestResult},
     project::{self, ProjectState},
     recovery_backup::{self, RecoveryBackupEvent, RecoveryBackupResult},
     report,
@@ -102,6 +103,11 @@ pub struct FluxVaultApp {
     recovery_backup_stage: String,
     recovery_backup_result: Option<RecoveryBackupResult>,
     recovery_backup_error: Option<String>,
+    manifest_receiver: Option<Receiver<ManifestEvent>>,
+    manifest_running: bool,
+    manifest_stage: String,
+    manifest_result: Option<ManifestResult>,
+    manifest_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -164,6 +170,11 @@ impl FluxVaultApp {
             recovery_backup_stage: "Nincs aktív pass1 backup.".to_owned(),
             recovery_backup_result: None,
             recovery_backup_error: None,
+            manifest_receiver: None,
+            manifest_running: false,
+            manifest_stage: "Nincs aktív manifest-készítés.".to_owned(),
+            manifest_result: None,
+            manifest_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -760,6 +771,83 @@ impl FluxVaultApp {
 
         if !finished {
             self.recovery_backup_receiver = Some(receiver);
+        }
+    }
+
+    fn start_recovered_manifest(&mut self) {
+        if self.manifest_running {
+            return;
+        }
+
+        let Some(project) = &self.project else {
+            self.status = "Manifest készítéséhez nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let request = manifest::ManifestRequest {
+            extracted_root: project.extracted_dir(),
+            images_directory: project.images_dir(),
+            reports_directory: project.reports_dir(),
+        };
+
+        self.manifest_receiver = Some(manifest::spawn_manifest(request));
+        self.manifest_running = true;
+        self.manifest_stage = "Recovered fájl manifest készítése...".to_owned();
+        self.manifest_result = None;
+        self.manifest_error = None;
+        self.status = self.manifest_stage.clone();
+        self.log("MasterFileList.csv frissítése elindult.");
+    }
+
+    fn poll_manifest_events(&mut self) {
+        let Some(receiver) = self.manifest_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(ManifestEvent::Stage(stage)) => self.manifest_stage = stage,
+                Ok(ManifestEvent::Finished(result)) => {
+                    finished = true;
+                    self.manifest_running = false;
+
+                    match result {
+                        Ok(result) => {
+                            self.manifest_stage = "Recovered fájl manifest elkészült.".to_owned();
+                            self.status = self.manifest_stage.clone();
+                            self.log(format!(
+                                "MasterFileList.csv: {} lemez, {} fájl.",
+                                result.disk_count, result.file_count
+                            ));
+                            self.manifest_result = Some(result);
+                            self.manifest_error = None;
+                        }
+                        Err(error) => {
+                            self.manifest_stage = "Manifest készítése sikertelen.".to_owned();
+                            self.status = self.manifest_stage.clone();
+                            self.log(format!("Manifest hiba: {error}"));
+                            self.manifest_result = None;
+                            self.manifest_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.manifest_running = false;
+                    self.manifest_stage = "A manifest háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.manifest_stage.clone();
+                    self.manifest_error =
+                        Some("A manifest háttérfolyamat eredmény nélkül leállt.".to_owned());
+                    self.log("A manifest háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.manifest_receiver = Some(receiver);
         }
     }
 

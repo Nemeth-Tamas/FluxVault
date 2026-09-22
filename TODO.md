@@ -118,7 +118,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Record the source image SHA-256 marker so unchanged images do not need needless re-extraction.
 - [x] Detect an operator-created recovery folder without the auto-extraction marker as **manual recovery present**.
 - [x] Preserve the current concept of an immutable first recovery backup (`Recovery/NNN/pass1` or equivalent).
-- [ ] Build/update a project-wide recovered-file manifest.
+- [x] Build/update a project-wide recovered-file manifest.
 - [ ] Route these cases to Recovery instead of pretending success:
   - [ ] non-clean image / unreadable sectors;
   - [ ] missing/unfinished/unrecognized acquisition log;

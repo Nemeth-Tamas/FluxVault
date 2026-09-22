@@ -1333,6 +1333,50 @@ impl FluxVaultApp {
 
         ui.add_space(12.0);
 
+        ui_theme::section(ui, "Projekt recovered fájl manifest", |ui| {
+            ui.label(
+                "A MasterFileList.csv egyesíti a manuális recovery és a legutóbbi kezelt extraction fájljait, lemezszámmal és forráskép-hashsel.",
+            );
+
+            if ui
+                .add_enabled(
+                    self.project.is_some() && !self.manifest_running,
+                    egui::Button::new(if self.manifest_running {
+                        "Manifest készítése folyamatban..."
+                    } else {
+                        "MasterFileList.csv frissítése"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_recovered_manifest();
+            }
+
+            ui.label(&self.manifest_stage);
+
+            if let Some(error) = &self.manifest_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] A recovered fájl manifest sikertelen.",
+                );
+                ui.monospace(error);
+            }
+
+            if let Some(result) = &self.manifest_result {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    "[MASTER FILE LIST KESZ]",
+                );
+                ui.label(format!(
+                    "{} lemez | {} fájl | {} bájt",
+                    result.disk_count, result.file_count, result.total_bytes
+                ));
+                ui.monospace(format!("Manifest: {}", result.path.display()));
+            }
+        });
+
+        ui.add_space(12.0);
+
         ui_theme::section(ui, "Biztonság és megőrzés", |ui| {
             ui.label("A forrás fizikai floppyhoz ez a művelet nem fér hozzá.");
             ui.label(

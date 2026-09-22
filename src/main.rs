@@ -6,6 +6,7 @@ mod extraction;
 mod floppy;
 mod imaging;
 mod legacy_logs;
+mod manifest;
 mod project;
 mod recovery_backup;
 mod report;
