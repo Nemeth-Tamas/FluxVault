@@ -717,6 +717,90 @@ impl FluxVaultApp {
 
                                 if !attempt.log_file.is_empty() {
                                     ui.label(format!("Napló: {}", attempt.log_file));
+
+                                    if let Some(parsed_log) = &attempt.parsed_log {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(format!(
+                                                "Napló állapot: {}",
+                                                parsed_log.status.label()
+                                            ));
+                                            ui.separator();
+                                            ui.label(format!(
+                                                "{} hibás LBA, {} retry után mentett",
+                                                parsed_log.bad_sectors.len(),
+                                                parsed_log.retry_recovered
+                                            ));
+
+                                            if !parsed_log.end_seen {
+                                                ui.separator();
+                                                ui.colored_label(
+                                                    egui::Color32::from_rgb(220, 180, 80),
+                                                    "Befejezetlen napló",
+                                                );
+                                            }
+                                        });
+
+                                        ui.collapsing("Napló részletei", |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(format!(
+                                                    "Rekord: lemez {}, próbálkozás {}",
+                                                    parsed_log
+                                                        .disk_number
+                                                        .map(|value| format!("{value:03}"))
+                                                        .unwrap_or_else(|| "?".to_owned()),
+                                                    parsed_log
+                                                        .attempt_number
+                                                        .map(|value| format!("{value:03}"))
+                                                        .unwrap_or_else(|| "?".to_owned())
+                                                ));
+                                                ui.separator();
+                                                ui.label(format!(
+                                                    "Forrás: {}",
+                                                    parsed_log.source.as_deref().unwrap_or("nincs")
+                                                ));
+                                            });
+
+                                            ui.label(format!(
+                                                "Geometria: {} cilinder, {} fej, {} szektor/sáv, {} bájt/szektor",
+                                                parsed_log
+                                                    .geometry
+                                                    .cylinders
+                                                    .map(|value| value.to_string())
+                                                    .unwrap_or_else(|| "?".to_owned()),
+                                                parsed_log
+                                                    .geometry
+                                                    .heads
+                                                    .map(|value| value.to_string())
+                                                    .unwrap_or_else(|| "?".to_owned()),
+                                                parsed_log
+                                                    .geometry
+                                                    .sectors_per_track
+                                                    .map(|value| value.to_string())
+                                                    .unwrap_or_else(|| "?".to_owned()),
+                                                parsed_log
+                                                    .geometry
+                                                    .bytes_per_sector
+                                                    .map(|value| value.to_string())
+                                                    .unwrap_or_else(|| "?".to_owned())
+                                            ));
+
+                                            ui.label(format!(
+                                                "Retry hibák: {} | Kiírt bájtok: {} | BEGIN: {}",
+                                                parsed_log.retry_failures,
+                                                parsed_log
+                                                    .bytes_written
+                                                    .map(|value| value.to_string())
+                                                    .unwrap_or_else(|| "?".to_owned()),
+                                                if parsed_log.begin_seen { "igen" } else { "nem" }
+                                            ));
+
+                                            if let Some(sha256) = &parsed_log.sha256 {
+                                                ui.monospace(format!("Napló SHA-256: {sha256}"));
+                                            }
+                                        });
+                                    } else {
+                                        ui.weak("A napló nem olvasható vagy nem felismerhető.");
+                                    }
                                 } else {
                                     ui.weak(
                                         "Napló: régi acquisition, nincs rögzített log artifact",

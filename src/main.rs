@@ -3,6 +3,7 @@ mod external_tools;
 mod extraction;
 mod floppy;
 mod imaging;
+mod legacy_logs;
 mod project;
 mod report;
 mod safety;

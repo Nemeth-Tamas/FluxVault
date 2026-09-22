@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     floppy::{DiskGeometry, FloppyDrive},
+    legacy_logs::{self, ParsedArchiverLog},
     safety::MediaSafetyPolicy,
 };
 
@@ -95,6 +96,7 @@ pub struct AttemptSummary {
     pub image_file: String,
     pub metadata_path: PathBuf,
     pub log_file: String,
+    pub parsed_log: Option<ParsedArchiverLog>,
     pub sha256: String,
     pub total_sectors: usize,
     pub retry_recovered_sectors: usize,
@@ -895,13 +897,23 @@ pub fn load_attempts_for_disk(
             continue;
         }
 
+        let resolved_log_path =
+            resolve_archiver_log_path(directory, &metadata.log_file, metadata.disk_number);
+        let parsed_log = resolved_log_path
+            .as_deref()
+            .and_then(|log_path| legacy_logs::parse_archiver_log_file(log_path).ok());
+        let log_file = resolved_log_path
+            .map(|path| path.display().to_string())
+            .unwrap_or(metadata.log_file);
+
         attempts.push(AttemptSummary {
             attempt_number: metadata.attempt_number,
             status: metadata.status,
             timestamp_unix_ms: metadata.timestamp_unix_ms,
             image_file: metadata.image_file,
             metadata_path: path,
-            log_file: metadata.log_file,
+            log_file,
+            parsed_log,
             sha256: metadata.sha256,
             total_sectors: metadata.total_sectors,
             retry_recovered_sectors: metadata.retry_recovered_sectors,
@@ -916,6 +928,45 @@ pub fn load_attempts_for_disk(
     attempts.sort_by_key(|attempt| attempt.attempt_number);
 
     Ok(attempts)
+}
+
+fn resolve_archiver_log_path(
+    image_directory: &Path,
+    configured_log: &str,
+    disk_number: u32,
+) -> Option<PathBuf> {
+    if !configured_log.is_empty() {
+        let configured_path = PathBuf::from(configured_log);
+        let candidates = if configured_path.is_absolute() {
+            vec![configured_path]
+        } else {
+            let mut candidates = vec![image_directory.join(&configured_path)];
+
+            if let Some(project_root) = image_directory.parent() {
+                candidates.push(project_root.join(&configured_path));
+            }
+
+            candidates
+        };
+
+        if let Some(existing) = candidates.into_iter().find(|path| path.is_file()) {
+            return Some(existing);
+        }
+    }
+
+    let logs_directory = image_directory.parent()?.join("Logs");
+    let log_paths = fs::read_dir(logs_directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
+        })
+        .collect::<Vec<_>>();
+
+    legacy_logs::choose_primary_log(log_paths.iter(), disk_number)
 }
 
 pub fn compare_latest_attempts(attempts: &[AttemptSummary]) -> Option<AttemptComparison> {
