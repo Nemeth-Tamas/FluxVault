@@ -720,6 +720,70 @@ impl FluxVaultApp {
 
         ui.add_space(16.0);
 
+        let manual_import_ready = self.project.is_some()
+            && !self.manual_recovery_import_running
+            && !self.batch_extraction_running
+            && !matches!(
+                self.extraction_presence,
+                Some(ExtractionPresence::ManualRecovery { .. })
+            );
+
+        ui_theme::section(ui, "DMDE recovery import", |ui| {
+            ui.label(
+                "Egy operátor által DMDE-vel helyreállított mappát és a hozzá tartozó naplót védett manual recovery eredményként importál. A forrásmappa, a lemezkép és a fizikai floppy változatlan marad.",
+            );
+            if matches!(
+                self.extraction_presence,
+                Some(ExtractionPresence::ManualRecovery { .. })
+            ) {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 80),
+                    "Ehhez a lemezhez már létezik manual recovery; új import nem írhatja felül.",
+                );
+            }
+            if ui
+                .add_enabled(
+                    manual_import_ready,
+                    egui::Button::new(if self.manual_recovery_import_running {
+                        "Manual recovery import folyamatban..."
+                    } else {
+                        "Recovered mappa + DMDE napló importálása"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_manual_recovery_import();
+            }
+            ui.label(&self.manual_recovery_import_stage);
+
+            if let Some(error) = &self.manual_recovery_import_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] A manual recovery import sikertelen.",
+                );
+                ui.monospace(error);
+            }
+            if let Some(result) = &self.manual_recovery_import_result {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    "[MANUAL RECOVERY IMPORT KESZ]",
+                );
+                ui.label(format!(
+                    "{} fájl | {} bájt",
+                    result.file_count, result.total_bytes
+                ));
+                ui.monospace(format!(
+                    "Recovered fájlok: {}",
+                    result.output_directory.display()
+                ));
+                ui.monospace(format!("Evidence: {}", result.evidence_directory.display()));
+                ui.monospace(format!("DMDE napló: {}", result.copied_log_path.display()));
+                ui.monospace(format!("Provenance: {}", result.manifest_path.display()));
+            }
+        });
+
+        ui.add_space(16.0);
+
         let composite_ready = self.project.is_some()
             && self.attempt_history.len() >= 2
             && self

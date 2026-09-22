@@ -18,6 +18,9 @@ use crate::{
         SectorReadState,
     },
     manifest::{self, ManifestEvent, ManifestResult},
+    manual_recovery_import::{
+        self, ManualRecoveryImportEvent, ManualRecoveryImportRequest, ManualRecoveryImportResult,
+    },
     project::{self, ProjectState},
     recovery_backup::{self, RecoveryBackupEvent, RecoveryBackupResult},
     report,
@@ -111,6 +114,11 @@ pub struct FluxVaultApp {
     recovery_backup_stage: String,
     recovery_backup_result: Option<RecoveryBackupResult>,
     recovery_backup_error: Option<String>,
+    manual_recovery_import_receiver: Option<Receiver<ManualRecoveryImportEvent>>,
+    manual_recovery_import_running: bool,
+    manual_recovery_import_stage: String,
+    manual_recovery_import_result: Option<ManualRecoveryImportResult>,
+    manual_recovery_import_error: Option<String>,
     manifest_receiver: Option<Receiver<ManifestEvent>>,
     manifest_running: bool,
     manifest_stage: String,
@@ -185,6 +193,11 @@ impl FluxVaultApp {
             recovery_backup_stage: "Nincs aktív pass1 backup.".to_owned(),
             recovery_backup_result: None,
             recovery_backup_error: None,
+            manual_recovery_import_receiver: None,
+            manual_recovery_import_running: false,
+            manual_recovery_import_stage: "Nincs aktív manual recovery import.".to_owned(),
+            manual_recovery_import_result: None,
+            manual_recovery_import_error: None,
             manifest_receiver: None,
             manifest_running: false,
             manifest_stage: "Nincs aktív manifest-készítés.".to_owned(),
@@ -887,6 +900,119 @@ impl FluxVaultApp {
 
         if !finished {
             self.recovery_backup_receiver = Some(receiver);
+        }
+    }
+
+    fn start_manual_recovery_import(&mut self) {
+        if self.manual_recovery_import_running {
+            return;
+        }
+        if matches!(
+            self.extraction_presence,
+            Some(ExtractionPresence::ManualRecovery { .. })
+        ) {
+            self.status =
+                "Ehhez a lemezhez már létezik védett manual recovery eredmény.".to_owned();
+            return;
+        }
+        let Some(project) = &self.project else {
+            self.status = "Manual recovery import előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let Some(source_directory) = rfd::FileDialog::new()
+            .set_title("DMDE recovered fájlmappa kiválasztása")
+            .pick_folder()
+        else {
+            return;
+        };
+        let Some(dmde_log_path) = rfd::FileDialog::new()
+            .set_title("A recoveryhez tartozó DMDE napló kiválasztása")
+            .add_filter("DMDE napló", &["log", "txt"])
+            .pick_file()
+        else {
+            self.status = "A manual recovery import megszakítva: nincs DMDE napló.".to_owned();
+            return;
+        };
+
+        let request = ManualRecoveryImportRequest {
+            source_directory: source_directory.clone(),
+            dmde_log_path: dmde_log_path.clone(),
+            extracted_root: project.extracted_dir(),
+            recovery_root: project.recovery_dir(),
+            disk_number: self.current_disk_number,
+        };
+        self.manual_recovery_import_receiver = Some(manual_recovery_import::spawn_import(request));
+        self.manual_recovery_import_running = true;
+        self.manual_recovery_import_stage = "Manual recovery import előkészítése...".to_owned();
+        self.manual_recovery_import_result = None;
+        self.manual_recovery_import_error = None;
+        self.status = self.manual_recovery_import_stage.clone();
+        self.log(format!(
+            "Manual recovery import indult: {} | DMDE napló: {}",
+            source_directory.display(),
+            dmde_log_path.display()
+        ));
+    }
+
+    fn poll_manual_recovery_import_events(&mut self) {
+        let Some(receiver) = self.manual_recovery_import_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(ManualRecoveryImportEvent::Stage(stage)) => {
+                    self.manual_recovery_import_stage = stage;
+                }
+                Ok(ManualRecoveryImportEvent::Finished(result)) => {
+                    finished = true;
+                    self.manual_recovery_import_running = false;
+                    match result {
+                        Ok(result) => {
+                            self.manual_recovery_import_stage =
+                                "Manual recovery import elkészült; manifest frissítése..."
+                                    .to_owned();
+                            self.status = self.manual_recovery_import_stage.clone();
+                            self.log(format!(
+                                "Manual recovery import kész: {} fájl, {} bájt.",
+                                result.file_count, result.total_bytes
+                            ));
+                            self.manual_recovery_import_result = Some(result);
+                            self.manual_recovery_import_error = None;
+                            self.refresh_extraction_presence();
+                            self.start_recovered_manifest();
+                        }
+                        Err(error) => {
+                            self.manual_recovery_import_stage =
+                                "Manual recovery import sikertelen.".to_owned();
+                            self.status = self.manual_recovery_import_stage.clone();
+                            self.log(format!("Manual recovery import hiba: {error}"));
+                            self.manual_recovery_import_result = None;
+                            self.manual_recovery_import_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.manual_recovery_import_running = false;
+                    self.manual_recovery_import_stage =
+                        "A manual recovery import háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.manual_recovery_import_stage.clone();
+                    self.manual_recovery_import_error = Some(
+                        "A manual recovery import háttérfolyamat eredmény nélkül leállt."
+                            .to_owned(),
+                    );
+                    self.log("A manual recovery import háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.manual_recovery_import_receiver = Some(receiver);
         }
     }
 

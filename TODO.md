@@ -137,7 +137,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] For 1-2 bad sectors, attempt evidence-based mirrored-FAT reconstruction into a separate derived image with per-sector provenance; never guess arbitrary bytes.
 - [x] Build an optional **best composite sector image** from multiple attempts, but only with a provenance map recording the source attempt for every replaced sector.
 - [x] Never destroy original attempt images when creating a composite.
-- [ ] Allow import of a DMDE-recovered folder and DMDE log, replacing today’s “manually rescan then rerun scripts” dance.
+- [x] Allow import of a DMDE-recovered folder and DMDE log, replacing today’s “manually rescan then rerun scripts” dance.
 - [ ] Immediately re-run extraction/audit state after a new recovery result is imported.
 - [ ] Hex/sector inspector for selected sectors with LBA + CHS + attempt provenance.
 

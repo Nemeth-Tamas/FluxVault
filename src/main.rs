@@ -8,6 +8,7 @@ mod floppy;
 mod imaging;
 mod legacy_logs;
 mod manifest;
+mod manual_recovery_import;
 mod project;
 mod recovery_backup;
 mod report;
