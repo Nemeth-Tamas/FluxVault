@@ -45,11 +45,11 @@
 ## 3. GUI shell
 
 - [x] Main window with left navigation and central work area.
-- [ ] Suggested pages: **Project**, **Acquire**, **Recovery**, **Files**, **Conversions**, **Audit**, **Package**, **Settings / Tools**.
+- [x] Suggested pages: **Project**, **Acquire**, **Recovery**, **Files**, **Conversions**, **Audit**, **Package**, **Settings / Tools**.
 - [x] Project header: project path, disk count, next number, active source device, current job.
 - [x] Bottom status area: worker status, progress, current operation, last error/warning.
 - [ ] Non-blocking modal/dialog for “Insert floppy #NNN”.
-- [ ] Operator log panel with timestamps and copy button.
+- [x] Operator log panel with timestamps and copy button.
 - [ ] Persistent per-job cancel button where cancellation is safe.
 - [ ] Do not fake capabilities: controls for unavailable hardware/tools are disabled with a useful reason.
 

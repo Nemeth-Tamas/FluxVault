@@ -966,6 +966,60 @@ impl FluxVaultApp {
         }
     }
 
+    fn conversions_page(&mut self, ui: &mut egui::Ui) {
+        ui_theme::page_header(
+            ui,
+            "Konverziók",
+            "Régi Office dokumentumok ellenőrzött DOCX, XLSX, PPTX és PDF átalakítása.",
+        );
+
+        ui_theme::section(ui, "Még nem elérhető", |ui| {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 180, 80),
+                "A konverziós futtatás még nincs implementálva, ezért nincs aktív indítógomb.",
+            );
+            ui.label(
+                "A LibreOffice felismerése és egészségügyi ellenőrzése már a Beállítások oldalon működik.",
+            );
+        });
+    }
+
+    fn audit_page(&mut self, ui: &mut egui::Ui) {
+        ui_theme::page_header(
+            ui,
+            "Audit",
+            "Acquisition, extraction, recovery és konverziós bizonyítékok egyesített ellenőrzése.",
+        );
+
+        ui_theme::section(ui, "Még nem elérhető", |ui| {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 180, 80),
+                "Az egyesített auditmotor még nincs implementálva.",
+            );
+            ui.label(
+                "A jelenlegi acquisition metadata, 7-Zip listing, fájlleltár és külsőparancs-napló változatlanul megmarad későbbi auditáláshoz.",
+            );
+        });
+    }
+
+    fn package_page(&mut self, ui: &mut egui::Ui) {
+        ui_theme::page_header(
+            ui,
+            "Ügyfélcsomag",
+            "Ellenőrzött customer-delivery mappák, manifestek és ZIP csomagok készítése.",
+        );
+
+        ui_theme::section(ui, "Még nem elérhető", |ui| {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 180, 80),
+                "A csomagépítő még nincs implementálva, ezért nem ír célmappába.",
+            );
+            ui.label(
+                "A későbbi megvalósítás külön célmappát kér majd, és megakadályozza a projekt- vagy forrásfa felülírását.",
+            );
+        });
+    }
+
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         ui_theme::page_header(
             ui,
@@ -1113,7 +1167,10 @@ impl FluxVaultApp {
             Page::Acquire => self.acquire_page(ui),
             Page::Recovery => self.recovery_page(ui),
             Page::Files => self.files_page(ui),
+            Page::Conversions => self.conversions_page(ui),
+            Page::Audit => self.audit_page(ui),
             Page::Reports => self.reports_page(ui),
+            Page::Package => self.package_page(ui),
             Page::Settings => self.settings_page(ui),
         }
     }

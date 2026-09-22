@@ -27,7 +27,10 @@ enum Page {
     Acquire,
     Recovery,
     Files,
+    Conversions,
+    Audit,
     Reports,
+    Package,
     Settings,
 }
 
@@ -38,7 +41,10 @@ impl Page {
             Self::Acquire => "Lemez beolvasása",
             Self::Recovery => "Adatmentés",
             Self::Files => "Fájlok",
+            Self::Conversions => "Konverziók",
+            Self::Audit => "Audit",
             Self::Reports => "Jelentések",
+            Self::Package => "Csomag",
             Self::Settings => "Beállítások",
         }
     }
@@ -141,7 +147,11 @@ impl FluxVaultApp {
     }
 
     fn log(&mut self, message: impl Into<String>) {
-        self.operator_log.push(message.into());
+        self.operator_log.push(format!(
+            "[{}] {}",
+            Local::now().format("%H:%M:%S"),
+            message.into()
+        ));
     }
 
     fn tool_audit_path(&self) -> PathBuf {

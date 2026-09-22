@@ -96,13 +96,19 @@ impl FluxVaultApp {
 
         ui.selectable_value(&mut self.page, Page::Files, Page::Files.title());
 
+        ui.selectable_value(&mut self.page, Page::Conversions, Page::Conversions.title());
+
         ui.add_space(18.0);
 
         ui_theme::subsection_label(ui, "KIMENET");
 
         ui.add_space(4.0);
 
+        ui.selectable_value(&mut self.page, Page::Audit, Page::Audit.title());
+
         ui.selectable_value(&mut self.page, Page::Reports, Page::Reports.title());
+
+        ui.selectable_value(&mut self.page, Page::Package, Page::Package.title());
 
         ui.add_space(18.0);
 
@@ -162,7 +168,14 @@ impl FluxVaultApp {
                     ui.selectable_value(&mut self.page, Page::Acquire, Page::Acquire.title());
                     ui.selectable_value(&mut self.page, Page::Recovery, Page::Recovery.title());
                     ui.selectable_value(&mut self.page, Page::Files, Page::Files.title());
+                    ui.selectable_value(
+                        &mut self.page,
+                        Page::Conversions,
+                        Page::Conversions.title(),
+                    );
+                    ui.selectable_value(&mut self.page, Page::Audit, Page::Audit.title());
                     ui.selectable_value(&mut self.page, Page::Reports, Page::Reports.title());
+                    ui.selectable_value(&mut self.page, Page::Package, Page::Package.title());
                     ui.selectable_value(&mut self.page, Page::Settings, Page::Settings.title());
                 });
             });
@@ -285,6 +298,10 @@ impl FluxVaultApp {
             ui.separator();
 
             ui.weak(format!("{} bejegyzés", self.operator_log.len()));
+
+            if ui.button("Másolás").clicked() {
+                ui.ctx().copy_text(self.operator_log.join("\n"));
+            }
         });
 
         ui.add_space(4.0);
