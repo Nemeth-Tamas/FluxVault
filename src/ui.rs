@@ -4,13 +4,15 @@ pub const NAVIGATION_WIDTH: f32 = 220.0;
 pub const BOTTOM_RESERVED_HEIGHT: f32 = 190.0;
 
 pub fn configure_context(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        let mut style = (*ctx.style_of(theme)).clone();
 
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(10.0, 6.0);
-    style.spacing.interact_size.y = 28.0;
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        style.spacing.interact_size.y = 28.0;
 
-    ctx.set_style(style);
+        ctx.set_style_of(theme, style);
+    }
 }
 
 pub fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
