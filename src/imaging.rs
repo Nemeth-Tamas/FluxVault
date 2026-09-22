@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -317,15 +318,14 @@ fn run_imaging(
         sender,
         &mut human_log,
         format!(
-            "RETRY_POLICY | retries={} | total_attempts_per_failed_sector={}",
+            "RETRY_POLICY | retries={} | total_attempts_per_failed_sector={} | retry_1=backward | retry_2=forward | additional=alternating",
             sector_retries,
             sector_retries + 1
         ),
     );
 
-    let mut hasher = Sha256::new();
     let mut completed = 0usize;
-    let mut bad_sectors = Vec::new();
+    let mut pending_bad_sectors = BTreeMap::<usize, Vec<String>>::new();
     let mut retry_recovered = 0usize;
 
     for track_index in 0..total_tracks {
@@ -351,8 +351,6 @@ fn run_imaging(
                 output
                     .write_all(&track_buffer)
                     .map_err(|error| format!("Lemezkep irasi hiba: {error}"))?;
-
-                hasher.update(&track_buffer);
 
                 for sector_index in 0..sectors_per_track {
                     let lba = track_lba + sector_index;
@@ -392,74 +390,27 @@ fn run_imaging(
 
                     let mut sector_buffer = vec![0u8; bytes_per_sector];
 
-                    let read_result = read_sector_with_retries(
-                        &mut source,
-                        sector_offset,
-                        &mut sector_buffer,
-                        sector_retries,
-                    );
+                    let read_result = source
+                        .seek(SeekFrom::Start(sector_offset))
+                        .and_then(|_| source.read_exact(&mut sector_buffer));
 
                     let state = match read_result {
-                        Ok((state, failed_attempts)) => {
-                            for (failed_index, error) in failed_attempts.iter().enumerate() {
-                                record_attempt_log(
-                                    sender,
-                                    &mut human_log,
-                                    format!(
-                                        "SECTOR_READ_FAILED | LBA={lba} | C{cylinder:02} H{head} S{:02} | attempt={}/{} | error={error}",
-                                        sector_index + 1,
-                                        failed_index + 1,
-                                        sector_retries + 1
-                                    ),
-                                );
-                            }
-
-                            if state == SectorReadState::RetryRecovered {
-                                retry_recovered += 1;
-
-                                record_attempt_log(
-                                    sender,
-                                    &mut human_log,
-                                    format!(
-                                        "SECTOR_RECOVERED_AFTER_RETRY | LBA={lba} | C{cylinder:02} H{head} S{:02} | retries_used={}",
-                                        sector_index + 1,
-                                        failed_attempts.len()
-                                    ),
-                                );
-                            }
-
-                            state
-                        }
-                        Err(failed_attempts) => {
-                            for (failed_index, error) in failed_attempts.iter().enumerate() {
-                                record_attempt_log(
-                                    sender,
-                                    &mut human_log,
-                                    format!(
-                                        "SECTOR_READ_FAILED | LBA={lba} | C{cylinder:02} H{head} S{:02} | attempt={}/{} | error={error}",
-                                        sector_index + 1,
-                                        failed_index + 1,
-                                        sector_retries + 1
-                                    ),
-                                );
-                            }
-
-                            sector_buffer.fill(0);
-                            bad_sectors.push(lba as u64);
-
-                            let last_error = failed_attempts
-                                .last()
-                                .map(String::as_str)
-                                .unwrap_or("Ismeretlen olvasasi hiba.");
+                        Ok(()) => SectorReadState::Good,
+                        Err(error) => {
+                            let error = error.to_string();
 
                             record_attempt_log(
                                 sender,
                                 &mut human_log,
                                 format!(
-                                    "BAD_SECTOR | LBA={lba} | C{cylinder:02} H{head} S{:02} | zero_filled=true | error={last_error}",
-                                    sector_index + 1
+                                    "SECTOR_READ_FAILED | LBA={lba} | C{cylinder:02} H{head} S{:02} | pass=initial_forward | attempt=1/{} | error={error}",
+                                    sector_index + 1,
+                                    sector_retries + 1
                                 ),
                             );
+
+                            sector_buffer.fill(0);
+                            pending_bad_sectors.insert(lba, vec![error]);
 
                             SectorReadState::Bad
                         }
@@ -468,8 +419,6 @@ fn run_imaging(
                     output
                         .write_all(&sector_buffer)
                         .map_err(|error| format!("Lemezkep irasi hiba: {error}"))?;
-
-                    hasher.update(&sector_buffer);
 
                     sender.send(ImagingEvent::Sector { lba, state }).ok();
 
@@ -484,6 +433,129 @@ fn run_imaging(
                 }
             }
         }
+    }
+
+    for retry_pass in 1..=sector_retries {
+        if pending_bad_sectors.is_empty() {
+            break;
+        }
+
+        let direction = retry_direction(retry_pass);
+        let retry_lbas = retry_lba_order(pending_bad_sectors.keys().copied().collect(), retry_pass);
+        let pending_at_start = retry_lbas.len();
+        let mut recovered_in_pass = 0usize;
+
+        record_attempt_log(
+            sender,
+            &mut human_log,
+            format!(
+                "RETRY_PASS_BEGIN | pass={retry_pass}/{sector_retries} | direction={direction} | pending={pending_at_start}"
+            ),
+        );
+
+        for lba in retry_lbas {
+            let sector_offset = (lba as u64)
+                .checked_mul(geometry.bytes_per_sector as u64)
+                .ok_or_else(|| "Retry szektor offset tulcsordulas.".to_owned())?;
+            let mut sector_buffer = vec![0u8; bytes_per_sector];
+            let read_result = source
+                .seek(SeekFrom::Start(sector_offset))
+                .and_then(|_| source.read_exact(&mut sector_buffer));
+            let location = bad_sector_metadata(lba as u64, geometry);
+
+            match read_result {
+                Ok(()) => {
+                    let previous_failures = pending_bad_sectors
+                        .get(&lba)
+                        .map(Vec::len)
+                        .unwrap_or(retry_pass);
+
+                    output
+                        .seek(SeekFrom::Start(sector_offset))
+                        .and_then(|_| output.write_all(&sector_buffer))
+                        .map_err(|error| {
+                            format!("Retry utan visszanyert szektor irasi hiba: {error}")
+                        })?;
+
+                    pending_bad_sectors.remove(&lba);
+                    retry_recovered += 1;
+                    recovered_in_pass += 1;
+
+                    sender
+                        .send(ImagingEvent::Sector {
+                            lba,
+                            state: SectorReadState::RetryRecovered,
+                        })
+                        .ok();
+
+                    record_attempt_log(
+                        sender,
+                        &mut human_log,
+                        format!(
+                            "SECTOR_RECOVERED_AFTER_RETRY | LBA={lba} | C{:02} H{} S{:02} | retry_pass={retry_pass} | direction={direction} | attempts_used={}",
+                            location.cylinder,
+                            location.head,
+                            location.sector,
+                            previous_failures + 1
+                        ),
+                    );
+                }
+                Err(error) => {
+                    let error = error.to_string();
+
+                    if let Some(errors) = pending_bad_sectors.get_mut(&lba) {
+                        errors.push(error.clone());
+                    }
+
+                    record_attempt_log(
+                        sender,
+                        &mut human_log,
+                        format!(
+                            "SECTOR_RETRY_FAILED | LBA={lba} | C{:02} H{} S{:02} | retry_pass={retry_pass}/{sector_retries} | direction={direction} | attempt={}/{} | error={error}",
+                            location.cylinder,
+                            location.head,
+                            location.sector,
+                            retry_pass + 1,
+                            sector_retries + 1
+                        ),
+                    );
+                }
+            }
+        }
+
+        record_attempt_log(
+            sender,
+            &mut human_log,
+            format!(
+                "RETRY_PASS_END | pass={retry_pass}/{sector_retries} | direction={direction} | recovered={recovered_in_pass} | remaining={}",
+                pending_bad_sectors.len()
+            ),
+        );
+    }
+
+    let bad_sectors = pending_bad_sectors
+        .keys()
+        .map(|lba| *lba as u64)
+        .collect::<Vec<_>>();
+
+    for (lba, errors) in &pending_bad_sectors {
+        let location = bad_sector_metadata(*lba as u64, geometry);
+        let last_error = errors
+            .last()
+            .map(String::as_str)
+            .unwrap_or("Ismeretlen olvasasi hiba.");
+
+        record_attempt_log(
+            sender,
+            &mut human_log,
+            format!(
+                "BAD_SECTOR | LBA={lba} | C{:02} H{} S{:02} | attempts={} | zero_filled=true | error={last_error}",
+                location.cylinder,
+                location.head,
+                location.sector,
+                errors.len()
+            ),
+        );
     }
 
     output
@@ -508,7 +580,7 @@ fn run_imaging(
         ));
     }
 
-    let sha256 = format!("{:x}", hasher.finalize());
+    let sha256 = sha256_file(&partial_path)?;
 
     let bad_sector_metadata = bad_sectors
         .iter()
@@ -685,36 +757,47 @@ fn record_attempt_log(
     sender.send(ImagingEvent::Log(message)).ok();
 }
 
-fn read_sector_with_retries(
-    source: &mut File,
-    offset: u64,
-    buffer: &mut [u8],
-    retry_count: usize,
-) -> Result<(SectorReadState, Vec<String>), Vec<String>> {
-    let mut failed_attempts = Vec::new();
+fn retry_direction(retry_pass: usize) -> &'static str {
+    if retry_pass % 2 == 1 {
+        "backward"
+    } else {
+        "forward"
+    }
+}
 
-    for attempt in 0..=retry_count {
-        let result = source
-            .seek(SeekFrom::Start(offset))
-            .and_then(|_| source.read_exact(buffer));
+fn retry_lba_order(mut lbas: Vec<usize>, retry_pass: usize) -> Vec<usize> {
+    lbas.sort_unstable();
 
-        match result {
-            Ok(()) => {
-                let state = if attempt == 0 {
-                    SectorReadState::Good
-                } else {
-                    SectorReadState::RetryRecovered
-                };
-
-                return Ok((state, failed_attempts));
-            }
-            Err(error) => {
-                failed_attempts.push(error.to_string());
-            }
-        }
+    if retry_pass % 2 == 1 {
+        lbas.reverse();
     }
 
-    Err(failed_attempts)
+    lbas
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| {
+        format!(
+            "Nem sikerult megnyitni a lemezkepet hash-eleshez {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+
+    loop {
+        let bytes_read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Lemezkep hash olvasasi hiba {}: {error}", path.display()))?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn next_attempt_number(directory: &Path, disk_number: u32) -> Result<u32, String> {
@@ -990,4 +1073,27 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
     statistics.disk_count = statistics.disks.len();
 
     Ok(statistics)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_retry_pass_reads_bad_sectors_backward() {
+        assert_eq!(retry_direction(1), "backward");
+        assert_eq!(retry_lba_order(vec![16, 24, 3], 1), vec![24, 16, 3]);
+    }
+
+    #[test]
+    fn second_retry_pass_reads_remaining_sectors_forward() {
+        assert_eq!(retry_direction(2), "forward");
+        assert_eq!(retry_lba_order(vec![16, 24, 3], 2), vec![3, 16, 24]);
+    }
+
+    #[test]
+    fn additional_retry_passes_continue_alternating() {
+        assert_eq!(retry_direction(3), "backward");
+        assert_eq!(retry_direction(4), "forward");
+    }
 }

@@ -163,7 +163,7 @@ impl FluxVaultApp {
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
-                ui.label("Hibás szektor újrapróbálások:");
+                ui.label("Hibás szektor retry passzok:");
 
                 ui.add_enabled(
                     !self.imaging_running,
@@ -173,10 +173,18 @@ impl FluxVaultApp {
                 );
 
                 ui.weak(format!(
-                    "{} összes olvasási próbálkozás / hibás szektor",
-                    self.sector_retries + 1
+                    "1 kezdeti előre olvasás + {} váltott irányú retry passz",
+                    self.sector_retries
                 ));
             });
+
+            if self.sector_retries >= 1 {
+                ui.weak("Retry 1: visszafelé a hibás szektorokon.");
+            }
+
+            if self.sector_retries >= 2 {
+                ui.weak("Retry 2: előrefelé a még hibás szektorokon.");
+            }
 
             ui.add_space(8.0);
 
@@ -1069,19 +1077,19 @@ impl FluxVaultApp {
                 ui.horizontal_wrapped(|ui| {
                     match status.health {
                         ToolHealth::Ready => {
-                            ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "● KÉSZ");
+                            ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "[KESZ]");
                         }
                         ToolHealth::Missing => {
-                            ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "● HIÁNYZIK");
+                            ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "[HIANYZIK]");
                         }
                         ToolHealth::Failed => {
-                            ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "● HIBA");
+                            ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "[HIBA]");
                         }
                         ToolHealth::Checking => {
-                            ui.colored_label(egui::Color32::from_rgb(90, 150, 230), "● ELLENŐRZÉS");
+                            ui.colored_label(egui::Color32::from_rgb(90, 150, 230), "[ELLENORZES]");
                         }
                         ToolHealth::NotChecked => {
-                            ui.weak("● NINCS ELLENŐRIZVE");
+                            ui.weak("[NINCS ELLENORIZVE]");
                         }
                     }
 
