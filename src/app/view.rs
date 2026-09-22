@@ -327,8 +327,13 @@ impl eframe::App for FluxVaultApp {
         self.poll_imaging_events();
         self.poll_tool_check_events();
         self.poll_extraction_events();
+        self.poll_reconstruction_events();
 
-        if self.imaging_running || self.tool_check_running || self.extraction_running {
+        if self.imaging_running
+            || self.tool_check_running
+            || self.extraction_running
+            || self.reconstruction_running
+        {
             ui.ctx().request_repaint_after(Duration::from_millis(40));
         }
 

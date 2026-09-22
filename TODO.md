@@ -132,6 +132,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [ ] Show current image, bad-sector count/list, source log, extraction result, prior attempts, and manual notes in one screen.
 - [x] **Re-read with USB drive** action creates another immutable acquisition attempt.
 - [x] Compare attempts sector-by-sector.
+- [x] For 1-2 bad sectors, attempt evidence-based mirrored-FAT reconstruction into a separate derived image with per-sector provenance; never guess arbitrary bytes.
 - [ ] Build an optional **best composite sector image** from multiple attempts, but only with a provenance map recording the source attempt for every replaced sector.
 - [ ] Never destroy original attempt images when creating a composite.
 - [ ] Allow import of a DMDE-recovered folder and DMDE log, replacing today’s “manually rescan then rerun scripts” dance.

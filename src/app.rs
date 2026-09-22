@@ -18,6 +18,7 @@ use crate::{
     project::{self, ProjectState},
     report,
     safety::MediaSafetyPolicy,
+    sector_recovery::{self, ReconstructionEvent, ReconstructionResult},
     ui as ui_theme,
 };
 
@@ -82,6 +83,11 @@ pub struct FluxVaultApp {
     extraction_stage: String,
     extraction_result: Option<ExtractionResult>,
     extraction_error: Option<String>,
+    reconstruction_receiver: Option<Receiver<ReconstructionEvent>>,
+    reconstruction_running: bool,
+    reconstruction_stage: String,
+    reconstruction_result: Option<ReconstructionResult>,
+    reconstruction_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -127,6 +133,11 @@ impl FluxVaultApp {
             extraction_stage: "Nincs aktív extraction.".to_owned(),
             extraction_result: None,
             extraction_error: None,
+            reconstruction_receiver: None,
+            reconstruction_running: false,
+            reconstruction_stage: "Nincs aktív szektorrekonstrukció.".to_owned(),
+            reconstruction_result: None,
+            reconstruction_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -374,6 +385,114 @@ impl FluxVaultApp {
 
         if !finished {
             self.extraction_receiver = Some(receiver);
+        }
+    }
+
+    fn start_sector_reconstruction(&mut self) {
+        if self.reconstruction_running {
+            return;
+        }
+
+        let Some(project) = &self.project else {
+            self.status = "Szektorrekonstrukció előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let Some(attempt) = self.attempt_history.last() else {
+            self.status = "Nincs elemezhető acquisition.".to_owned();
+            return;
+        };
+
+        if attempt.bad_sectors.is_empty() || attempt.bad_sectors.len() > 2 {
+            self.status =
+                "A gyors rekonstrukció 1 vagy 2 hibás szektor esetén használható.".to_owned();
+            return;
+        }
+
+        let image_path = project.images_dir().join(&attempt.image_file);
+        let request = sector_recovery::ReconstructionRequest {
+            image_path: image_path.clone(),
+            recovery_root: project.recovery_dir(),
+            disk_number: self.current_disk_number,
+            attempt_number: attempt.attempt_number,
+            bad_sectors: attempt.bad_sectors.clone(),
+        };
+
+        self.reconstruction_receiver = Some(sector_recovery::spawn_reconstruction(request));
+        self.reconstruction_running = true;
+        self.reconstruction_stage = "Rekonstrukciós lehetőségek elemzése...".to_owned();
+        self.reconstruction_result = None;
+        self.reconstruction_error = None;
+        self.status = format!("Szektorrekonstrukció elemzése: {}", image_path.display());
+        self.log(format!(
+            "Bizonyíték-alapú szektorrekonstrukció elindult: {}",
+            image_path.display()
+        ));
+    }
+
+    fn poll_reconstruction_events(&mut self) {
+        let Some(receiver) = self.reconstruction_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(ReconstructionEvent::Stage(stage)) => {
+                    self.reconstruction_stage = stage;
+                }
+                Ok(ReconstructionEvent::Finished(result)) => {
+                    finished = true;
+                    self.reconstruction_running = false;
+
+                    match result {
+                        Ok(result) => {
+                            self.reconstruction_stage = if result.reconstructed.is_empty() {
+                                "Nincs biztonságosan rekonstruálható szektor.".to_owned()
+                            } else if result.unresolved_bad_sectors.is_empty() {
+                                "FAT redundancia-alapú szektorrekonstrukció elkészült.".to_owned()
+                            } else {
+                                "Részleges FAT rekonstrukció elkészült; maradt megoldatlan szektor."
+                                    .to_owned()
+                            };
+                            self.status = self.reconstruction_stage.clone();
+                            self.log(format!(
+                                "Szektorrekonstrukció: {} rekonstruált, {} megoldatlan szektor.",
+                                result.reconstructed.len(),
+                                result.unresolved_bad_sectors.len()
+                            ));
+                            self.reconstruction_result = Some(result);
+                            self.reconstruction_error = None;
+                        }
+                        Err(error) => {
+                            self.reconstruction_stage =
+                                "Szektorrekonstrukció sikertelen.".to_owned();
+                            self.status = self.reconstruction_stage.clone();
+                            self.log(format!("Szektorrekonstrukciós hiba: {error}"));
+                            self.reconstruction_result = None;
+                            self.reconstruction_error = Some(error);
+                        }
+                    }
+
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.reconstruction_running = false;
+                    self.reconstruction_stage =
+                        "A szektorrekonstrukciós háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.reconstruction_stage.clone();
+                    self.reconstruction_error = Some(
+                        "A szektorrekonstrukciós háttérfolyamat eredmény nélkül leállt.".to_owned(),
+                    );
+                    self.log("A szektorrekonstrukciós háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.reconstruction_receiver = Some(receiver);
         }
     }
 
