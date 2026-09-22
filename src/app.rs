@@ -721,6 +721,25 @@ impl FluxVaultApp {
         }
     }
 
+    fn compact_navigation(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui_theme::subsection_label(ui, "NÉZET");
+
+                    ui.separator();
+
+                    ui.selectable_value(&mut self.page, Page::Project, Page::Project.title());
+                    ui.selectable_value(&mut self.page, Page::Acquire, Page::Acquire.title());
+                    ui.selectable_value(&mut self.page, Page::Recovery, Page::Recovery.title());
+                    ui.selectable_value(&mut self.page, Page::Files, Page::Files.title());
+                    ui.selectable_value(&mut self.page, Page::Reports, Page::Reports.title());
+                    ui.selectable_value(&mut self.page, Page::Settings, Page::Settings.title());
+                });
+            });
+    }
+
     fn workspace_header(&self, ui: &mut egui::Ui) {
         let read_only = MediaSafetyPolicy::SOURCE_MEDIA_ACCESS == SourceMediaAccess::ReadOnly
             && !MediaSafetyPolicy::ALLOW_PHYSICAL_MEDIA_WRITES;
@@ -1698,7 +1717,30 @@ impl FluxVaultApp {
         }
     }
 
-    fn operator_log(&self, ui: &mut egui::Ui) {
+    fn page_scroller(&mut self, ui: &mut egui::Ui, compact: bool) {
+        let content_width = ui.available_width();
+
+        egui::ScrollArea::vertical()
+            .id_salt("main_content_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let horizontal_margin = if compact { 4 } else { 12 };
+
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(horizontal_margin, 8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(
+                            (content_width - f32::from(horizontal_margin * 2)).max(180.0),
+                        );
+
+                        self.current_page(ui);
+
+                        ui.add_space(12.0);
+                    });
+            });
+    }
+
+    fn operator_log(&self, ui: &mut egui::Ui, max_height: f32) {
         ui.horizontal(|ui| {
             ui.strong("Operátori napló");
 
@@ -1712,7 +1754,7 @@ impl FluxVaultApp {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("operator_log_scroll")
-                .max_height(130.0)
+                .max_height(max_height)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
@@ -1733,111 +1775,122 @@ impl eframe::App for FluxVaultApp {
             ui.ctx().request_repaint_after(Duration::from_millis(40));
         }
 
-        ui.vertical(|ui| {
-            ui.add_space(6.0);
+        let compact = ui_theme::is_compact(ui.available_width());
+        let bottom_reserved_height = if compact {
+            ui_theme::COMPACT_BOTTOM_RESERVED_HEIGHT
+        } else {
+            ui_theme::BOTTOM_RESERVED_HEIGHT
+        };
 
-            self.workspace_header(ui);
+        egui::Frame::new()
+            .inner_margin(ui_theme::outer_margin(compact))
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    egui::Frame::group(ui.style())
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| {
+                            self.workspace_header(ui);
+                        });
 
-            ui.add_space(6.0);
-            ui.separator();
-            ui.add_space(6.0);
+                    ui.add_space(10.0);
 
-            let content_height =
-                (ui.available_height() - ui_theme::BOTTOM_RESERVED_HEIGHT).max(200.0);
-
-            let total_width = ui.available_width();
-            let navigation_width = ui_theme::NAVIGATION_WIDTH;
-
-            ui.allocate_ui_with_layout(
-                egui::vec2(total_width, content_height),
-                egui::Layout::left_to_right(egui::Align::TOP),
-                |ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(navigation_width, content_height),
-                        egui::Layout::top_down(egui::Align::LEFT),
-                        |ui| {
-                            self.navigation(ui);
-                        },
-                    );
-
-                    ui.separator();
-
-                    let content_width = ui.available_width().max(200.0);
+                    let content_height =
+                        (ui.available_height() - bottom_reserved_height).max(210.0);
+                    let total_width = ui.available_width();
 
                     ui.allocate_ui_with_layout(
-                        egui::vec2(content_width, content_height),
+                        egui::vec2(total_width, content_height),
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("main_content_scroll")
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.set_min_width((content_width - 24.0).max(180.0));
+                            if compact {
+                                self.compact_navigation(ui);
+                                ui.add_space(8.0);
 
-                                    ui.add_space(8.0);
+                                let page_height = ui.available_height();
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), page_height),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| self.page_scroller(ui, true),
+                                );
+                            } else {
+                                ui.horizontal(|ui| {
+                                    let navigation_width = ui_theme::NAVIGATION_WIDTH;
 
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(8.0);
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(navigation_width, content_height),
+                                        egui::Layout::top_down(egui::Align::LEFT),
+                                        |ui| {
+                                            egui::Frame::group(ui.style())
+                                                .inner_margin(egui::Margin::same(12))
+                                                .show(ui, |ui| {
+                                                    ui.set_min_width(navigation_width - 24.0);
+                                                    self.navigation(ui);
+                                                });
+                                        },
+                                    );
 
-                                        ui.vertical(|ui| {
-                                            ui.set_min_width((content_width - 40.0).max(180.0));
+                                    ui.add_space(4.0);
 
-                                            self.current_page(ui);
-
-                                            ui.add_space(16.0);
-                                        });
-                                    });
+                                    let page_width = ui.available_width();
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(page_width, content_height),
+                                        egui::Layout::top_down(egui::Align::LEFT),
+                                        |ui| self.page_scroller(ui, false),
+                                    );
                                 });
+                            }
                         },
                     );
-                },
-            );
 
-            ui.separator();
-            ui.add_space(4.0);
+                    ui.add_space(8.0);
 
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Allapot:");
-                ui.strong(&self.status);
+                    egui::Frame::group(ui.style())
+                        .inner_margin(egui::Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Állapot:");
+                                ui.strong(&self.status);
 
-                ui.separator();
+                                ui.separator();
 
-                ui.strong(format!("Aktualis lemez: {:03}", self.current_disk_number));
+                                ui.strong(format!(
+                                    "Aktuális lemez: {:03}",
+                                    self.current_disk_number
+                                ));
 
-                if !self.imaging_running {
-                    ui.separator();
+                                if !self.imaging_running {
+                                    ui.separator();
 
-                    if ui
-                        .add_enabled(
-                            self.current_disk_number > 1,
-                            egui::Button::new(format!(
-                                "< ELOZO: {:03}",
-                                self.current_disk_number.saturating_sub(1).max(1)
-                            )),
-                        )
-                        .clicked()
-                    {
-                        self.return_to_previous_disk();
-                    }
+                                    if ui
+                                        .add_enabled(
+                                            self.current_disk_number > 1,
+                                            egui::Button::new(format!(
+                                                "< ELŐZŐ: {:03}",
+                                                self.current_disk_number.saturating_sub(1).max(1)
+                                            )),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.return_to_previous_disk();
+                                    }
 
-                    if ui
-                        .add_sized(
-                            [190.0, 30.0],
-                            egui::Button::new(format!(
-                                "KOVETKEZO LEMEZ: {:03} >",
-                                self.current_disk_number.saturating_add(1)
-                            )),
-                        )
-                        .clicked()
-                    {
-                        self.advance_to_next_disk();
-                    }
-                }
+                                    if ui
+                                        .button(format!(
+                                            "KÖVETKEZŐ LEMEZ: {:03} >",
+                                            self.current_disk_number.saturating_add(1)
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.advance_to_next_disk();
+                                    }
+                                }
+                            });
+
+                            ui.add_space(4.0);
+
+                            self.operator_log(ui, if compact { 76.0 } else { 108.0 });
+                        });
+                });
             });
-
-            self.operator_log(ui);
-
-            ui.add_space(4.0);
-        });
     }
 }

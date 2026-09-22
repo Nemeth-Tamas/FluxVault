@@ -1,7 +1,21 @@
 use eframe::egui;
 
-pub const NAVIGATION_WIDTH: f32 = 220.0;
+pub const NAVIGATION_WIDTH: f32 = 208.0;
+pub const COMPACT_BREAKPOINT: f32 = 1_080.0;
 pub const BOTTOM_RESERVED_HEIGHT: f32 = 190.0;
+pub const COMPACT_BOTTOM_RESERVED_HEIGHT: f32 = 156.0;
+
+pub fn is_compact(available_width: f32) -> bool {
+    available_width < COMPACT_BREAKPOINT
+}
+
+pub fn outer_margin(compact: bool) -> egui::Margin {
+    if compact {
+        egui::Margin::symmetric(10, 8)
+    } else {
+        egui::Margin::symmetric(18, 14)
+    }
+}
 
 pub fn configure_context(ctx: &egui::Context) {
     for theme in [egui::Theme::Dark, egui::Theme::Light] {
@@ -32,16 +46,18 @@ pub fn section<R>(
     title: &str,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    ui.group(|ui| {
-        ui.set_min_width(ui.available_width());
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
 
-        ui.label(egui::RichText::new(title).strong().size(16.0));
+            ui.label(egui::RichText::new(title).strong().size(16.0));
 
-        ui.add_space(8.0);
+            ui.add_space(8.0);
 
-        add_contents(ui)
-    })
-    .inner
+            add_contents(ui)
+        })
+        .inner
 }
 
 pub fn subsection_label(ui: &mut egui::Ui, text: &str) {
