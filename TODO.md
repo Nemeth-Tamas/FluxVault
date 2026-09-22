@@ -119,12 +119,14 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Detect an operator-created recovery folder without the auto-extraction marker as **manual recovery present**.
 - [x] Preserve the current concept of an immutable first recovery backup (`Recovery/NNN/pass1` or equivalent).
 - [x] Build/update a project-wide recovered-file manifest.
-- [ ] Route these cases to Recovery instead of pretending success:
-  - [ ] non-clean image / unreadable sectors;
-  - [ ] missing/unfinished/unrecognized acquisition log;
-  - [ ] FAT listing failure;
-  - [ ] extraction failure;
-  - [ ] apparently readable image with zero recovered files when operator review is warranted.
+- [x] Run project-wide batch extraction/recovery routing and emit script-compatible summary/review lists.
+- [x] Route these cases to Recovery instead of pretending success:
+  - [x] non-clean image / unreadable sectors;
+  - [x] missing/unrecognized acquisition log;
+  - [x] unfinished acquisition log is preserved separately as **IN PROGRESS**;
+  - [x] FAT listing failure;
+  - [x] extraction failure;
+  - [x] apparently readable image with zero recovered files when operator review is warranted.
 
 ## 8. Recovery workbench — pre-Greaseweazle
 

@@ -8,6 +8,7 @@ use std::{
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
+    batch_extraction::{self, BatchExtractionEvent, BatchExtractionRequest, BatchExtractionResult},
     composite::{self, CompositeEvent, CompositeResult, CompositeSource},
     external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
     extraction::{self, ExtractionEvent, ExtractionPresence, ExtractionResult},
@@ -88,6 +89,13 @@ pub struct FluxVaultApp {
     extraction_error: Option<String>,
     extraction_presence: Option<ExtractionPresence>,
     extraction_presence_error: Option<String>,
+    batch_extraction_receiver: Option<Receiver<BatchExtractionEvent>>,
+    batch_extraction_running: bool,
+    batch_extraction_stage: String,
+    batch_extraction_completed: usize,
+    batch_extraction_total: usize,
+    batch_extraction_result: Option<BatchExtractionResult>,
+    batch_extraction_error: Option<String>,
     reconstruction_receiver: Option<Receiver<ReconstructionEvent>>,
     reconstruction_running: bool,
     reconstruction_stage: String,
@@ -155,6 +163,13 @@ impl FluxVaultApp {
             extraction_error: None,
             extraction_presence: None,
             extraction_presence_error: None,
+            batch_extraction_receiver: None,
+            batch_extraction_running: false,
+            batch_extraction_stage: "Nincs aktív projekt-batch feldolgozás.".to_owned(),
+            batch_extraction_completed: 0,
+            batch_extraction_total: 0,
+            batch_extraction_result: None,
+            batch_extraction_error: None,
             reconstruction_receiver: None,
             reconstruction_running: false,
             reconstruction_stage: "Nincs aktív szektorrekonstrukció.".to_owned(),
@@ -438,6 +453,107 @@ impl FluxVaultApp {
 
         if !finished {
             self.extraction_receiver = Some(receiver);
+        }
+    }
+
+    fn start_batch_extraction(&mut self) {
+        if self.batch_extraction_running || self.extraction_running || self.manifest_running {
+            return;
+        }
+
+        let Some(project) = &self.project else {
+            self.status = "Projekt-batch feldolgozás előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let Some(seven_zip_executable) = self.ready_tool_path(ToolKind::SevenZip) else {
+            self.status = "A 7-Zip nem érhető el. Ellenőrizze a Beállítások oldalon.".to_owned();
+            return;
+        };
+
+        let request = BatchExtractionRequest {
+            seven_zip_executable,
+            images_directory: project.images_dir(),
+            logs_directory: project.logs_dir(),
+            extracted_root: project.extracted_dir(),
+            recovery_root: project.recovery_dir(),
+            reports_directory: project.reports_dir(),
+            command_audit_path: self.tool_audit_path(),
+        };
+
+        self.batch_extraction_receiver = Some(batch_extraction::spawn_batch_extraction(request));
+        self.batch_extraction_running = true;
+        self.batch_extraction_stage = "Projekt-batch feldolgozás előkészítése...".to_owned();
+        self.batch_extraction_completed = 0;
+        self.batch_extraction_total = 0;
+        self.batch_extraction_result = None;
+        self.batch_extraction_error = None;
+        self.status = "Projekt-batch extraction és recovery routing folyamatban...".to_owned();
+        self.log("Teljes projekt extraction/recovery feldolgozása elindult.");
+    }
+
+    fn poll_batch_extraction_events(&mut self) {
+        let Some(receiver) = self.batch_extraction_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(BatchExtractionEvent::Stage(stage)) => {
+                    self.batch_extraction_stage = stage;
+                }
+                Ok(BatchExtractionEvent::Progress { completed, total }) => {
+                    self.batch_extraction_completed = completed;
+                    self.batch_extraction_total = total;
+                }
+                Ok(BatchExtractionEvent::Finished(result)) => {
+                    finished = true;
+                    self.batch_extraction_running = false;
+
+                    match result {
+                        Ok(result) => {
+                            self.batch_extraction_stage =
+                                "Projekt-batch extraction és recovery routing elkészült."
+                                    .to_owned();
+                            self.status = self.batch_extraction_stage.clone();
+                            self.log(format!(
+                                "Projekt-batch kész: {} lemez, {} recovery, {} manuális.",
+                                result.total_disks, result.recovery_disks, result.manual_disks
+                            ));
+                            self.manifest_result = Some(result.manifest.clone());
+                            self.batch_extraction_result = Some(result);
+                            self.batch_extraction_error = None;
+                            self.refresh_project_statistics();
+                            self.refresh_extraction_presence();
+                        }
+                        Err(error) => {
+                            self.batch_extraction_stage =
+                                "Projekt-batch feldolgozás sikertelen.".to_owned();
+                            self.status = self.batch_extraction_stage.clone();
+                            self.log(format!("Projekt-batch hiba: {error}"));
+                            self.batch_extraction_result = None;
+                            self.batch_extraction_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.batch_extraction_running = false;
+                    self.batch_extraction_stage =
+                        "A projekt-batch háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.batch_extraction_stage.clone();
+                    self.batch_extraction_error =
+                        Some("A projekt-batch háttérfolyamat eredmény nélkül leállt.".to_owned());
+                    self.log("A projekt-batch háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.batch_extraction_receiver = Some(receiver);
         }
     }
 

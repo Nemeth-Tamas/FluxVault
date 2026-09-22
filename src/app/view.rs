@@ -327,6 +327,7 @@ impl eframe::App for FluxVaultApp {
         self.poll_imaging_events();
         self.poll_tool_check_events();
         self.poll_extraction_events();
+        self.poll_batch_extraction_events();
         self.poll_reconstruction_events();
         self.poll_composite_events();
         self.poll_recovery_backup_events();
@@ -335,6 +336,7 @@ impl eframe::App for FluxVaultApp {
         if self.imaging_running
             || self.tool_check_running
             || self.extraction_running
+            || self.batch_extraction_running
             || self.reconstruction_running
         {
             ui.ctx().request_repaint_after(Duration::from_millis(40));

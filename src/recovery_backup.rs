@@ -65,7 +65,7 @@ pub fn spawn_backup(request: RecoveryBackupRequest) -> Receiver<RecoveryBackupEv
     receiver
 }
 
-fn ensure_first_backup(
+pub(crate) fn ensure_first_backup(
     request: &RecoveryBackupRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<RecoveryBackupResult, String> {

@@ -231,7 +231,7 @@ fn count_manual_files(root: &Path, skip_managed_children: bool) -> Result<(usize
     Ok((file_count, total_bytes))
 }
 
-fn run_extraction(
+pub(crate) fn run_extraction(
     request: &ExtractionRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ExtractionResult, String> {

@@ -1333,6 +1333,83 @@ impl FluxVaultApp {
 
         ui.add_space(12.0);
 
+        ui_theme::section(ui, "Teljes projekt feldolgozása", |ui| {
+            ui.label(
+                "Minden befejezett lemezképet besorol: a tiszta képeket kibontja, a problémásakat immutable pass1 recovery backupba és DMDE-listába teszi, a manuális recovery eredményeket pedig érintetlenül megőrzi.",
+            );
+
+            let batch_ready = self.project.is_some()
+                && seven_zip_ready
+                && !self.batch_extraction_running
+                && !self.extraction_running
+                && !self.manifest_running;
+            if ui
+                .add_enabled(
+                    batch_ready,
+                    egui::Button::new(if self.batch_extraction_running {
+                        "Projekt feldolgozása folyamatban..."
+                    } else {
+                        "Teljes projekt ellenőrzése és kibontása"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_batch_extraction();
+            }
+
+            if !seven_zip_ready {
+                ui.weak("A 7-Zip nem érhető el; ellenőrizze a Beállítások oldalt.");
+            }
+
+            ui.label(&self.batch_extraction_stage);
+            if self.batch_extraction_running && self.batch_extraction_total > 0 {
+                let fraction =
+                    self.batch_extraction_completed as f32 / self.batch_extraction_total as f32;
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .show_percentage()
+                        .text(format!(
+                            "{} / {} lemez",
+                            self.batch_extraction_completed, self.batch_extraction_total
+                        )),
+                );
+            }
+
+            if let Some(error) = &self.batch_extraction_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] A projekt-batch feldolgozás sikertelen.",
+                );
+                ui.monospace(error);
+            }
+
+            if let Some(result) = &self.batch_extraction_result {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    "[PROJEKT FELDOLGOZAS KESZ]",
+                );
+                ui.label(format!(
+                    "{} lemez | {} kinyert ({} újrahasznált) | {} manuális | {} recovery | {} folyamatban | {} üres",
+                    result.total_disks,
+                    result.extracted_disks,
+                    result.reused_disks,
+                    result.manual_disks,
+                    result.recovery_disks,
+                    result.in_progress_disks,
+                    result.zero_file_disks
+                ));
+                ui.monospace(format!("Összesítő: {}", result.summary_path.display()));
+                ui.monospace(format!("DMDE sor: {}", result.broken_path.display()));
+                ui.monospace(format!("Manuális kész: {}", result.manual_path.display()));
+                ui.monospace(format!(
+                    "Folyamatban: {}",
+                    result.in_progress_path.display()
+                ));
+            }
+        });
+
+        ui.add_space(12.0);
+
         ui_theme::section(ui, "Projekt recovered fájl manifest", |ui| {
             ui.label(
                 "A MasterFileList.csv egyesíti a manuális recovery és a legutóbbi kezelt extraction fájljait, lemezszámmal és forráskép-hashsel.",

@@ -1,4 +1,5 @@
 mod app;
+mod batch_extraction;
 mod composite;
 mod dmde_logs;
 mod external_tools;

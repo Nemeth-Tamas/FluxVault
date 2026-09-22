@@ -56,7 +56,7 @@ pub fn spawn_manifest(request: ManifestRequest) -> Receiver<ManifestEvent> {
     receiver
 }
 
-fn build_manifest(
+pub(crate) fn build_manifest(
     request: &ManifestRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ManifestResult, String> {
