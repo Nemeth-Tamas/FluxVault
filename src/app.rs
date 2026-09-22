@@ -307,7 +307,7 @@ impl FluxVaultApp {
             return;
         };
 
-        if !attempt.bad_sectors.is_empty() {
+        if attempt.attention_required {
             self.status =
                 "A legutóbbi lemezkép nem tiszta; előbb az Adatmentés nézetben ellenőrizze."
                     .to_owned();
@@ -322,6 +322,8 @@ impl FluxVaultApp {
         let request = extraction::ExtractionRequest {
             seven_zip_executable,
             image_path: image_path.clone(),
+            disk_number: self.current_disk_number,
+            attempt_number: attempt.attempt_number,
             extracted_root: project.extracted_dir(),
             logs_directory: project.logs_dir(),
             command_audit_path: self.tool_audit_path(),

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    dmde_logs::{self, ParsedDmdeLog},
     floppy::{DiskGeometry, FloppyDrive},
     legacy_logs::{self, ParsedArchiverLog},
     safety::MediaSafetyPolicy,
@@ -97,6 +98,9 @@ pub struct AttemptSummary {
     pub metadata_path: PathBuf,
     pub log_file: String,
     pub parsed_log: Option<ParsedArchiverLog>,
+    pub parsed_dmde_log: Option<ParsedDmdeLog>,
+    pub legacy_image: bool,
+    pub attention_required: bool,
     pub sha256: String,
     pub total_sectors: usize,
     pub retry_recovered_sectors: usize,
@@ -124,6 +128,7 @@ pub struct DiskSummary {
     pub latest_timestamp_unix_ms: u128,
     pub best_attempt_number: u32,
     pub best_bad_sectors: usize,
+    pub attention_required: bool,
     pub total_sectors: usize,
 }
 
@@ -906,6 +911,9 @@ pub fn load_attempts_for_disk(
             .map(|path| path.display().to_string())
             .unwrap_or(metadata.log_file);
 
+        let attention_required =
+            !metadata.status.eq_ignore_ascii_case("OK") || !metadata.bad_sectors.is_empty();
+
         attempts.push(AttemptSummary {
             attempt_number: metadata.attempt_number,
             status: metadata.status,
@@ -914,6 +922,9 @@ pub fn load_attempts_for_disk(
             metadata_path: path,
             log_file,
             parsed_log,
+            parsed_dmde_log: None,
+            legacy_image: false,
+            attention_required,
             sha256: metadata.sha256,
             total_sectors: metadata.total_sectors,
             retry_recovered_sectors: metadata.retry_recovered_sectors,
@@ -925,9 +936,139 @@ pub fn load_attempts_for_disk(
         });
     }
 
+    if let Some(legacy_attempt) = load_legacy_attempt(directory, disk_number)? {
+        attempts.push(legacy_attempt);
+    }
+
     attempts.sort_by_key(|attempt| attempt.attempt_number);
 
     Ok(attempts)
+}
+
+fn load_legacy_attempt(
+    directory: &Path,
+    disk_number: u32,
+) -> Result<Option<AttemptSummary>, String> {
+    let disk_stem = format!("{disk_number:03}");
+    let mut candidates = fs::read_dir(directory)
+        .map_err(|error| format!("Nem sikerült megvizsgálni a legacy képeket: {error}"))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_stem().and_then(|stem| stem.to_str()) == Some(disk_stem.as_str())
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        matches!(
+                            extension.to_ascii_lowercase().as_str(),
+                            "bin" | "img" | "ima"
+                        )
+                    })
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| {
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "bin" => 0,
+            "img" => 1,
+            "ima" => 2,
+            _ => 3,
+        }
+    });
+
+    let Some(image_path) = candidates.into_iter().next() else {
+        return Ok(None);
+    };
+    let resolved_log_path = resolve_archiver_log_path(directory, "", disk_number);
+    let parsed_log = resolved_log_path
+        .as_deref()
+        .and_then(|path| legacy_logs::parse_archiver_log_file(path).ok());
+    let parsed_dmde_log = if parsed_log.is_none() {
+        resolved_log_path
+            .as_deref()
+            .and_then(|path| dmde_logs::parse_dmde_log_file(path).ok())
+    } else {
+        None
+    };
+    let image_metadata = fs::metadata(&image_path).map_err(|error| {
+        format!(
+            "Nem olvasható a legacy lemezkép metadata {}: {error}",
+            image_path.display()
+        )
+    })?;
+    let timestamp_unix_ms = image_metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let image_sha256 = parsed_log
+        .as_ref()
+        .and_then(|log| log.sha256.clone())
+        .unwrap_or(sha256_file(&image_path)?);
+    let sector_size = parsed_log
+        .as_ref()
+        .and_then(|log| log.geometry.bytes_per_sector)
+        .or_else(|| parsed_dmde_log.as_ref().and_then(|log| log.sector_size))
+        .unwrap_or(512) as u64;
+    let total_sectors = parsed_log
+        .as_ref()
+        .and_then(|log| log.geometry.total_sectors)
+        .or_else(|| {
+            parsed_dmde_log
+                .as_ref()
+                .map(|log| log.highest_sector_exclusive)
+        })
+        .unwrap_or_else(|| image_metadata.len() / sector_size) as usize;
+    let bad_sectors = parsed_log
+        .as_ref()
+        .map(|log| log.bad_sectors.clone())
+        .or_else(|| parsed_dmde_log.as_ref().map(|log| log.bad_sectors.clone()))
+        .unwrap_or_default();
+    let retry_recovered_sectors = parsed_log
+        .as_ref()
+        .map(|log| log.retry_recovered)
+        .unwrap_or(0);
+    let status = parsed_log
+        .as_ref()
+        .map(|log| log.status.label().to_owned())
+        .or_else(|| {
+            parsed_dmde_log
+                .as_ref()
+                .map(|log| log.status.label().to_owned())
+        })
+        .unwrap_or_else(|| "MISSING LOG".to_owned());
+    let attention_required = !status.eq_ignore_ascii_case("OK") || !bad_sectors.is_empty();
+    let image_file = image_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_owned();
+
+    Ok(Some(AttemptSummary {
+        attempt_number: 0,
+        status,
+        timestamp_unix_ms,
+        image_file,
+        metadata_path: PathBuf::new(),
+        log_file: resolved_log_path
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        parsed_log,
+        parsed_dmde_log,
+        legacy_image: true,
+        attention_required,
+        sha256: image_sha256,
+        total_sectors,
+        retry_recovered_sectors,
+        bad_sectors,
+    }))
 }
 
 fn resolve_archiver_log_path(
@@ -1017,8 +1158,6 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
         return Ok(statistics);
     }
 
-    let mut attempts_by_disk = std::collections::BTreeMap::<u32, Vec<AcquisitionMetadata>>::new();
-
     let entries = fs::read_dir(directory).map_err(|error| {
         format!(
             "Nem sikerült megvizsgálni a(z) {} mappát: {error}",
@@ -1026,71 +1165,54 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
         )
     })?;
 
+    let mut disk_numbers = BTreeSet::new();
+
     for entry in entries {
         let entry = entry.map_err(|error| format!("Hibás acquisition mappa bejegyzés: {error}"))?;
-
         let path = entry.path();
-
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
 
-        if file_name.ends_with(".partial.json") {
+        if file_name.to_ascii_lowercase().contains(".partial.") {
             continue;
         }
 
-        let Some(stem) = file_name.strip_suffix(".json") else {
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
 
-        let Some((disk_text, attempt_text)) = stem.split_once("_attempt_") else {
-            continue;
-        };
-
-        let Ok(file_disk_number) = disk_text.parse::<u32>() else {
-            continue;
-        };
-
-        let Ok(file_attempt_number) = attempt_text.parse::<u32>() else {
-            continue;
-        };
-
-        let json = fs::read_to_string(&path).map_err(|error| {
-            format!(
-                "Nem sikerült beolvasni a metadata fájlt {}: {error}",
-                path.display()
-            )
-        })?;
-
-        let metadata: AcquisitionMetadata = match serde_json::from_str(&json) {
-            Ok(metadata) => metadata,
-            Err(_) => {
-                continue;
+        if let Some((disk_text, _)) = stem.split_once("_attempt_") {
+            if let Ok(disk_number) = disk_text.parse::<u32>() {
+                disk_numbers.insert(disk_number);
             }
-        };
-
-        if metadata.disk_number != file_disk_number
-            || metadata.attempt_number != file_attempt_number
+        } else if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "bin" | "img" | "ima"
+                )
+            })
         {
-            continue;
+            if let Ok(disk_number) = stem.parse::<u32>() {
+                disk_numbers.insert(disk_number);
+            }
         }
-
-        attempts_by_disk
-            .entry(metadata.disk_number)
-            .or_default()
-            .push(metadata);
     }
 
-    for (disk_number, mut attempts) in attempts_by_disk {
-        attempts.sort_by_key(|attempt| attempt.attempt_number);
+    for disk_number in disk_numbers {
+        let attempts = load_attempts_for_disk(directory, disk_number)?;
 
         let Some(latest) = attempts.last() else {
             continue;
         };
 
         let Some(best) = attempts.iter().min_by(|left, right| {
-            left.bad_sector_count
-                .cmp(&right.bad_sector_count)
+            left.attention_required
+                .cmp(&right.attention_required)
+                .then_with(|| left.bad_sectors.len().cmp(&right.bad_sectors.len()))
                 .then_with(|| right.attempt_number.cmp(&left.attempt_number))
         }) else {
             continue;
@@ -1099,10 +1221,10 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
         let attempt_count = attempts.len();
 
         statistics.total_attempts += attempt_count;
-        statistics.latest_bad_sectors += latest.bad_sector_count;
-        statistics.best_known_bad_sectors += best.bad_sector_count;
+        statistics.latest_bad_sectors += latest.bad_sectors.len();
+        statistics.best_known_bad_sectors += best.bad_sectors.len();
 
-        if best.bad_sector_count == 0 {
+        if !best.attention_required {
             statistics.ok_disks += 1;
         } else {
             statistics.partial_disks += 1;
@@ -1113,10 +1235,11 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
             attempt_count,
             latest_attempt_number: latest.attempt_number,
             latest_status: latest.status.clone(),
-            latest_bad_sectors: latest.bad_sector_count,
+            latest_bad_sectors: latest.bad_sectors.len(),
             latest_timestamp_unix_ms: latest.timestamp_unix_ms,
             best_attempt_number: best.attempt_number,
-            best_bad_sectors: best.bad_sector_count,
+            best_bad_sectors: best.bad_sectors.len(),
+            attention_required: best.attention_required,
             total_sectors: best.total_sectors,
         });
     }
@@ -1146,5 +1269,36 @@ mod tests {
     fn additional_retry_passes_continue_alternating() {
         assert_eq!(retry_direction(3), "backward");
         assert_eq!(retry_direction(4), "forward");
+    }
+
+    #[test]
+    #[ignore = "requires FLUXVAULT_LEGACY_FIXTURE_ROOT"]
+    fn imports_real_legacy_dmde_and_archiver_images() {
+        let fixture_root = PathBuf::from(
+            std::env::var("FLUXVAULT_LEGACY_FIXTURE_ROOT")
+                .expect("FLUXVAULT_LEGACY_FIXTURE_ROOT is required"),
+        );
+        let images = fixture_root.join("Images");
+
+        let disk_001 = load_attempts_for_disk(&images, 1).unwrap();
+        assert_eq!(disk_001.len(), 1);
+        assert!(disk_001[0].legacy_image);
+        assert!(disk_001[0].parsed_dmde_log.is_some());
+        assert_eq!(disk_001[0].status, "OK");
+
+        let disk_007 = load_attempts_for_disk(&images, 7).unwrap();
+        assert_eq!(disk_007.len(), 1);
+        assert!(disk_007[0].parsed_log.is_some());
+        assert_eq!(disk_007[0].status, "OK");
+
+        let disk_009 = load_attempts_for_disk(&images, 9).unwrap();
+        assert_eq!(disk_009.len(), 1);
+        assert!(disk_009[0].parsed_dmde_log.is_some());
+        assert_eq!(disk_009[0].bad_sectors.len(), 954);
+
+        let statistics = load_project_statistics(&images).unwrap();
+        assert_eq!(statistics.disk_count, 3);
+        assert_eq!(statistics.ok_disks, 2);
+        assert_eq!(statistics.partial_disks, 1);
     }
 }

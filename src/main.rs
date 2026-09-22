@@ -1,5 +1,6 @@
 mod app;
 mod composite;
+mod dmde_logs;
 mod external_tools;
 mod extraction;
 mod floppy;

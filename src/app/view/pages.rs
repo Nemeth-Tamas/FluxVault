@@ -352,7 +352,7 @@ impl FluxVaultApp {
                 statistics
                     .disks
                     .iter()
-                    .filter(|disk| disk.best_bad_sectors > 0)
+                    .filter(|disk| disk.attention_required)
                     .cloned()
                     .collect::<Vec<_>>()
             })
@@ -772,7 +772,11 @@ impl FluxVaultApp {
                         for attempt in &self.attempt_history {
                             ui.group(|ui| {
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.strong(format!("Próbálkozás {:03}", attempt.attempt_number));
+                                    ui.strong(if attempt.legacy_image {
+                                        "Legacy kép".to_owned()
+                                    } else {
+                                        format!("Próbálkozás {:03}", attempt.attempt_number)
+                                    });
 
                                     ui.separator();
 
@@ -780,10 +784,15 @@ impl FluxVaultApp {
 
                                     ui.separator();
 
-                                    if attempt.bad_sectors.is_empty() {
+                                    if !attempt.attention_required {
                                         ui.colored_label(
                                             egui::Color32::from_rgb(70, 200, 120),
                                             "0 hibás szektor",
+                                        );
+                                    } else if attempt.bad_sectors.is_empty() {
+                                        ui.colored_label(
+                                            egui::Color32::from_rgb(220, 180, 80),
+                                            "ellenőrzést igényel",
                                         );
                                     } else {
                                         ui.colored_label(
@@ -807,7 +816,14 @@ impl FluxVaultApp {
 
                                 ui.label(format!("Kép: {}", attempt.image_file));
 
-                                ui.label(format!("Metadata: {}", attempt.metadata_path.display()));
+                                if attempt.legacy_image {
+                                    ui.weak("Legacy import: külön FluxVault metadata még nincs.");
+                                } else {
+                                    ui.label(format!(
+                                        "Metadata: {}",
+                                        attempt.metadata_path.display()
+                                    ));
+                                }
 
                                 if !attempt.log_file.is_empty() {
                                     ui.label(format!("Napló: {}", attempt.log_file));
@@ -834,8 +850,13 @@ impl FluxVaultApp {
                                             }
                                         });
 
-                                        ui.collapsing("Napló részletei", |ui| {
-                                            ui.horizontal_wrapped(|ui| {
+                                        egui::CollapsingHeader::new("Napló részletei")
+                                            .id_salt(format!(
+                                                "attempt_log_details_{}",
+                                                attempt.attempt_number
+                                            ))
+                                            .show(ui, |ui| {
+                                                ui.horizontal_wrapped(|ui| {
                                                 ui.label(format!(
                                                     "Rekord: lemez {}, próbálkozás {}",
                                                     parsed_log
@@ -852,9 +873,9 @@ impl FluxVaultApp {
                                                     "Forrás: {}",
                                                     parsed_log.source.as_deref().unwrap_or("nincs")
                                                 ));
-                                            });
+                                                });
 
-                                            ui.label(format!(
+                                                ui.label(format!(
                                                 "Geometria: {} cilinder, {} fej, {} szektor/sáv, {} bájt/szektor",
                                                 parsed_log
                                                     .geometry
@@ -876,9 +897,9 @@ impl FluxVaultApp {
                                                     .bytes_per_sector
                                                     .map(|value| value.to_string())
                                                     .unwrap_or_else(|| "?".to_owned())
-                                            ));
+                                                ));
 
-                                            ui.label(format!(
+                                                ui.label(format!(
                                                 "Retry hibák: {} | Kiírt bájtok: {} | BEGIN: {}",
                                                 parsed_log.retry_failures,
                                                 parsed_log
@@ -886,12 +907,55 @@ impl FluxVaultApp {
                                                     .map(|value| value.to_string())
                                                     .unwrap_or_else(|| "?".to_owned()),
                                                 if parsed_log.begin_seen { "igen" } else { "nem" }
-                                            ));
+                                                ));
 
-                                            if let Some(sha256) = &parsed_log.sha256 {
-                                                ui.monospace(format!("Napló SHA-256: {sha256}"));
-                                            }
+                                                if let Some(sha256) = &parsed_log.sha256 {
+                                                    ui.monospace(format!(
+                                                        "Napló SHA-256: {sha256}"
+                                                    ));
+                                                }
+                                            });
+                                    } else if let Some(dmde_log) = &attempt.parsed_dmde_log {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(format!(
+                                                "DMDE állapot: {}",
+                                                dmde_log.status.label()
+                                            ));
+                                            ui.separator();
+                                            ui.label(format!(
+                                                "{} passz ({} előre, {} hátra)",
+                                                dmde_log.pass_count,
+                                                dmde_log.forward_passes,
+                                                dmde_log.reverse_passes
+                                            ));
+                                            ui.separator();
+                                            ui.label(format!(
+                                                "{} hibás szektor",
+                                                dmde_log.bad_sectors.len()
+                                            ));
                                         });
+
+                                        egui::CollapsingHeader::new("DMDE napló részletei")
+                                            .id_salt(format!(
+                                                "attempt_dmde_details_{}",
+                                                attempt.attempt_number
+                                            ))
+                                            .show(ui, |ui| {
+                                                ui.label(format!(
+                                                    "Szektorméret: {} bájt | feltérképezett: {} szektor",
+                                                    dmde_log
+                                                        .sector_size
+                                                        .map(|value| value.to_string())
+                                                        .unwrap_or_else(|| "?".to_owned()),
+                                                    dmde_log.highest_sector_exclusive
+                                                ));
+                                                ui.label(format!(
+                                                    "Legutolsó állapot szerint olvasható: {} | START: {} | STOP: {}",
+                                                    dmde_log.copied_sectors,
+                                                    dmde_log.start_count,
+                                                    dmde_log.stop_count
+                                                ));
+                                            });
                                     } else {
                                         ui.weak("A napló nem olvasható vagy nem felismerhető.");
                                     }
@@ -1028,7 +1092,7 @@ impl FluxVaultApp {
         let extraction_ready = self.project.is_some()
             && latest_attempt
                 .as_ref()
-                .is_some_and(|attempt| attempt.bad_sectors.is_empty())
+                .is_some_and(|attempt| !attempt.attention_required)
             && seven_zip_ready
             && !self.extraction_running;
 
@@ -1039,12 +1103,16 @@ impl FluxVaultApp {
             };
 
             ui.horizontal_wrapped(|ui| {
-                ui.strong(format!("Próbálkozás {:03}", attempt.attempt_number));
+                ui.strong(if attempt.legacy_image {
+                    "Legacy kép".to_owned()
+                } else {
+                    format!("Próbálkozás {:03}", attempt.attempt_number)
+                });
                 ui.separator();
                 ui.label(&attempt.status);
                 ui.separator();
 
-                if attempt.bad_sectors.is_empty() {
+                if !attempt.attention_required {
                     ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "TISZTA LEMEZKÉP");
                 } else {
                     ui.colored_label(

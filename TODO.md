@@ -98,11 +98,11 @@ This is the first “we can actually use FluxVault on customer media” target. 
 ## 6. Existing archive/log compatibility
 
 - [x] Parse current `FloppyArchiver` logs (`BEGIN`, `GEOMETRY`, retries, `BAD_SECTOR`, `SHA256`, `END`).
-- [ ] Parse current DMDE Copy Sectors logs using the same **multi-pass/latest-sector-state-wins** rule as the PowerShell tooling.
-- [ ] Recognize forward and reverse DMDE passes.
+- [x] Parse current DMDE Copy Sectors logs using the same **multi-pass/latest-sector-state-wins** rule as the PowerShell tooling.
+- [x] Recognize forward and reverse DMDE passes.
 - [x] Preserve statuses for unfinished logs as **IN PROGRESS**, not “broken”.
 - [x] Exact `NNN.log` must outrank auxiliary `NNN_scan.log`, retry-note logs, etc.
-- [ ] Import existing `.bin`, `.img`, `.ima` images and ignore `.partial.*` files as completed acquisitions.
+- [x] Import existing `.bin`, `.img`, `.ima` images and ignore `.partial.*` files as completed acquisitions.
 - [ ] Import existing hashes and current archive index where possible.
 - [ ] Display legacy/manual recovery state without requiring the old Excel workbook.
 
@@ -252,7 +252,7 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 
 - [ ] Unit tests for floppy-number parsing and zero-padding.
 - [x] Unit tests for legacy archiver-log parsing.
-- [ ] Unit tests for DMDE multi-pass map replay (later successful `C` replaces earlier `E`).
+- [x] Unit tests for DMDE multi-pass map replay (later successful `C` replaces earlier `E`).
 - [ ] Unit tests for path cleanup / delivery naming / collision handling.
 - [ ] Unit tests for Greaseweazle command construction, especially raw-flux safety flags.
 - [ ] Unit tests for project persistence and migrations.

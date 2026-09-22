@@ -20,6 +20,8 @@ const INVENTORY_FILE_NAME: &str = ".fluxvault-inventory.json";
 pub struct ExtractionRequest {
     pub seven_zip_executable: PathBuf,
     pub image_path: PathBuf,
+    pub disk_number: u32,
+    pub attempt_number: u32,
     pub extracted_root: PathBuf,
     pub logs_directory: PathBuf,
     pub command_audit_path: PathBuf,
@@ -104,10 +106,20 @@ fn run_extraction(
         ));
     }
 
-    let (disk_number, attempt_number) = parse_attempt_name(&request.image_path)?;
+    let disk_number = request.disk_number;
+    let attempt_number = request.attempt_number;
+
+    if disk_number == 0 {
+        return Err("Az extraction lemezszáma nem lehet nulla.".to_owned());
+    }
+
     let source_sha256 = sha256_file(&request.image_path)?;
     let disk_directory = request.extracted_root.join(format!("{disk_number:03}"));
-    let output_directory = disk_directory.join(format!("attempt_{attempt_number:03}"));
+    let output_directory = if attempt_number == 0 {
+        disk_directory.join("legacy")
+    } else {
+        disk_directory.join(format!("attempt_{attempt_number:03}"))
+    };
     let inventory_path = output_directory.join(INVENTORY_FILE_NAME);
     let listing_path = request.logs_directory.join(format!(
         "{disk_number:03}_attempt_{attempt_number:03}_7zip-listing.txt"
@@ -324,6 +336,7 @@ fn reuse_existing_extraction(
     })
 }
 
+#[cfg(test)]
 fn parse_attempt_name(image_path: &Path) -> Result<(u32, u32), String> {
     let stem = image_path
         .file_stem()
@@ -558,6 +571,8 @@ mod tests {
         let request = ExtractionRequest {
             seven_zip_executable,
             image_path,
+            disk_number: 1,
+            attempt_number: 1,
             extracted_root: case_root.join("Extracted"),
             logs_directory: case_root.join("Logs"),
             command_audit_path: case_root.join("Logs").join("external-tools.jsonl"),

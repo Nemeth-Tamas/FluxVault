@@ -91,7 +91,9 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
         }
 
         let record_name = line
-            .split(['|', ':'])
+            .split(|character: char| {
+                character == '|' || character == ':' || character.is_whitespace()
+            })
             .next()
             .unwrap_or_default()
             .trim()
@@ -102,7 +104,9 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
             "BEGIN" => {
                 recognized_records += 1;
                 begin_seen = true;
-                disk_number = parse_u32(values.get("disk")).or(disk_number);
+                disk_number = parse_u32(values.get("disk"))
+                    .or_else(|| parse_u32(values.get("floppy")))
+                    .or(disk_number);
                 attempt_number = parse_u32(values.get("attempt")).or(attempt_number);
                 source = values.get("source").cloned().or(source);
             }
@@ -119,18 +123,21 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
                 geometry.total_bytes =
                     parse_u64(values.get("total_bytes")).or(geometry.total_bytes);
             }
-            "SECTOR_READ_FAILED" | "SECTOR_RETRY_FAILED" | "RETRY" => {
+            "SECTOR_READ_FAILED" | "SECTOR_RETRY_FAILED" | "READ_RETRY" | "RETRY" => {
                 recognized_records += 1;
                 retry_failures += 1;
             }
-            "SECTOR_RECOVERED_AFTER_RETRY" | "RETRY_RECOVERED" => {
+            "SECTOR_RECOVERED_AFTER_RETRY" | "RETRY_RECOVERED" | "RECOVERED" => {
                 recognized_records += 1;
                 retry_recovered_events += 1;
             }
             "BAD_SECTOR" => {
                 recognized_records += 1;
 
-                if let Some(lba) = parse_u64(values.get("lba")).or_else(|| first_integer(line)) {
+                if let Some(lba) = parse_u64(values.get("lba"))
+                    .or_else(|| parse_u64(values.get("sector")))
+                    .or_else(|| first_integer(line))
+                {
                     bad_sectors.insert(lba);
                 }
             }
@@ -145,8 +152,9 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
                     .get("status")
                     .map(|value| parse_status(value))
                     .unwrap_or(ArchiverLogStatus::Unknown);
-                retry_recovered_from_end =
-                    parse_usize(values.get("retry_recovered")).or(retry_recovered_from_end);
+                retry_recovered_from_end = parse_usize(values.get("retry_recovered"))
+                    .or_else(|| parse_usize(values.get("recovered_after_retry")))
+                    .or(retry_recovered_from_end);
                 bytes_written = parse_u64(values.get("bytes")).or(bytes_written);
                 sha256 = values
                     .get("sha256")
@@ -240,11 +248,25 @@ fn strip_timestamp(line: &str) -> &str {
         }
     }
 
+    let mut parts = trimmed.split_whitespace();
+    let date = parts.next().unwrap_or_default();
+    let time = parts.next().unwrap_or_default();
+
+    if date.len() == 10
+        && date.as_bytes().get(4) == Some(&b'-')
+        && date.as_bytes().get(7) == Some(&b'-')
+        && time.contains(':')
+    {
+        if let Some(time_start) = trimmed.find(time) {
+            return trimmed[time_start + time.len()..].trim_start();
+        }
+    }
+
     trimmed
 }
 
 fn parse_key_values(line: &str) -> BTreeMap<String, String> {
-    line.split('|')
+    line.split(|character: char| character == '|' || character.is_whitespace())
         .skip(1)
         .filter_map(|part| {
             let (key, value) = part.trim().split_once('=')?;
@@ -336,6 +358,26 @@ mod tests {
         assert_eq!(parsed.status, ArchiverLogStatus::InProgress);
         assert!(!parsed.end_seen);
         assert_eq!(parsed.bad_sectors, vec![99]);
+    }
+
+    #[test]
+    fn parses_original_space_separated_floppy_archiver_log() {
+        let log = format!(
+            "2026-09-19 11:44:22.843  BEGIN floppy=007\n\
+             2026-09-19 11:44:22.851  GEOMETRY cylinders=80 heads=2 sectors_per_track=18 bytes_per_sector=512 total_sectors=2880 total_bytes=1474560\n\
+             2026-09-19 11:45:04.150  READ_RETRY sector=316 attempt=1 win32=1785 bytes_read=0\n\
+             2026-09-19 11:45:05.150  BAD_SECTOR sector=316 win32=1785 bytes_read=0 ZERO_FILLED=1\n\
+             2026-09-19 11:45:27.262  SHA256 {HASH}\n\
+             2026-09-19 11:45:27.268  END status=PARTIAL bad_sectors=1 recovered_after_retry=0 track_fallbacks=1 duration_seconds=64.403"
+        );
+        let parsed = parse_archiver_log(&log).unwrap();
+
+        assert_eq!(parsed.status, ArchiverLogStatus::Partial);
+        assert_eq!(parsed.disk_number, Some(7));
+        assert_eq!(parsed.bad_sectors, vec![316]);
+        assert_eq!(parsed.retry_failures, 1);
+        assert_eq!(parsed.geometry.total_sectors, Some(2880));
+        assert_eq!(parsed.sha256.as_deref(), Some(HASH));
     }
 
     #[test]
