@@ -82,6 +82,12 @@ pub struct ToolStatus {
     pub audit_error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AuditedCommandResult {
+    pub audit: CommandAudit,
+    pub audit_error: Option<String>,
+}
+
 impl ToolStatus {
     fn new(kind: ToolKind, health: ToolHealth, detail: impl Into<String>) -> Self {
         Self {
@@ -204,6 +210,46 @@ pub fn spawn_checks(settings: ToolSettings, audit_path: PathBuf) -> Receiver<Too
     receiver
 }
 
+pub fn run_audited_command(
+    tool_name: &str,
+    executable: &Path,
+    arguments: &[String],
+    audit_path: &Path,
+) -> AuditedCommandResult {
+    let started_unix_ms = current_unix_ms();
+    let started = Instant::now();
+    let output = Command::new(executable).args(arguments).output();
+    let duration_ms = started.elapsed().as_millis();
+
+    let audit = match output {
+        Ok(output) => CommandAudit {
+            tool: tool_name.to_owned(),
+            executable: executable.to_path_buf(),
+            arguments: arguments.to_vec(),
+            started_unix_ms,
+            duration_ms,
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        },
+        Err(error) => CommandAudit {
+            tool: tool_name.to_owned(),
+            executable: executable.to_path_buf(),
+            arguments: arguments.to_vec(),
+            started_unix_ms,
+            duration_ms,
+            success: false,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: error.to_string(),
+        },
+    };
+    let audit_error = append_audit(audit_path, &audit).err();
+
+    AuditedCommandResult { audit, audit_error }
+}
+
 fn check_tool(kind: ToolKind, configured: Option<&Path>, audit_path: &Path) -> ToolStatus {
     let candidates = candidate_paths(kind, configured);
     let Some(executable) = candidates.into_iter().find(|path| path.is_file()) else {
@@ -221,78 +267,35 @@ fn check_tool(kind: ToolKind, configured: Option<&Path>, audit_path: &Path) -> T
         .iter()
         .map(|argument| (*argument).to_owned())
         .collect::<Vec<_>>();
-    let started_unix_ms = current_unix_ms();
-    let started = Instant::now();
-    let output = Command::new(&executable).args(&arguments).output();
-    let duration_ms = started.elapsed().as_millis();
+    let result = run_audited_command(kind.display_name(), &executable, &arguments, audit_path);
+    let version = first_non_empty_line(&result.audit.stdout)
+        .or_else(|| first_non_empty_line(&result.audit.stderr))
+        .map(str::to_owned);
 
-    match output {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            let success = output.status.success();
-            let audit = CommandAudit {
-                tool: kind.display_name().to_owned(),
-                executable: executable.clone(),
-                arguments,
-                started_unix_ms,
-                duration_ms,
-                success,
-                exit_code: output.status.code(),
-                stdout: stdout.clone(),
-                stderr: stderr.clone(),
-            };
-            let audit_error = append_audit(audit_path, &audit).err();
-            let version = first_non_empty_line(&stdout)
-                .or_else(|| first_non_empty_line(&stderr))
-                .map(str::to_owned);
-
-            ToolStatus {
-                kind,
-                health: if success {
-                    ToolHealth::Ready
-                } else {
-                    ToolHealth::Failed
-                },
-                executable: Some(executable),
-                version,
-                detail: if success {
-                    format!("Egészségügyi ellenőrzés sikeres ({duration_ms} ms).")
-                } else {
-                    format!(
-                        "A verzióellenőrzés hibakóddal tért vissza: {:?}.",
-                        output.status.code()
-                    )
-                },
-                audit: Some(audit),
-                audit_error,
-            }
-        }
-        Err(error) => {
-            let error_message = error.to_string();
-            let audit = CommandAudit {
-                tool: kind.display_name().to_owned(),
-                executable: executable.clone(),
-                arguments,
-                started_unix_ms,
-                duration_ms,
-                success: false,
-                exit_code: None,
-                stdout: String::new(),
-                stderr: error_message.clone(),
-            };
-            let audit_error = append_audit(audit_path, &audit).err();
-
-            ToolStatus {
-                kind,
-                health: ToolHealth::Failed,
-                executable: Some(executable),
-                version: None,
-                detail: format!("Nem sikerült elindítani: {error_message}"),
-                audit: Some(audit),
-                audit_error,
-            }
-        }
+    ToolStatus {
+        kind,
+        health: if result.audit.success {
+            ToolHealth::Ready
+        } else {
+            ToolHealth::Failed
+        },
+        executable: Some(executable),
+        version,
+        detail: if result.audit.success {
+            format!(
+                "Egészségügyi ellenőrzés sikeres ({} ms).",
+                result.audit.duration_ms
+            )
+        } else if result.audit.exit_code.is_some() {
+            format!(
+                "A verzióellenőrzés hibakóddal tért vissza: {:?}.",
+                result.audit.exit_code
+            )
+        } else {
+            format!("Nem sikerült elindítani: {}", result.audit.stderr)
+        },
+        audit: Some(result.audit),
+        audit_error: result.audit_error,
     }
 }
 

@@ -651,18 +651,130 @@ impl FluxVaultApp {
     }
 
     fn files_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Fájlok");
-
-        ui.add_space(8.0);
-
-        ui.label(
-            "Kinyert fájlok, SHA-256 értékek, eredeti útvonalak és \
-             helyreállítási módszerek áttekintése.",
+        ui_theme::page_header(
+            ui,
+            "Fájlok és extraction",
+            "Tiszta lemezképek ellenőrzött kibontása, fájlleltára és SHA-256 nyilvántartása.",
         );
 
-        ui.add_space(16.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(format!("Lemez {:03}", self.current_disk_number));
+            ui.separator();
 
-        ui.weak("A fájlindex még nincs implementálva.");
+            if ui.button("Acquisition újratöltése").clicked() {
+                self.refresh_attempt_history();
+            }
+        });
+
+        ui.add_space(14.0);
+
+        let latest_attempt = self.attempt_history.last().cloned();
+        let seven_zip_ready = self.ready_tool_path(ToolKind::SevenZip).is_some();
+        let extraction_ready = self.project.is_some()
+            && latest_attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.bad_sectors.is_empty())
+            && seven_zip_ready
+            && !self.extraction_running;
+
+        ui_theme::section(ui, "Forrás lemezkép", |ui| {
+            let Some(attempt) = &latest_attempt else {
+                ui.weak("Ehhez a lemezhez még nincs FluxVault acquisition.");
+                return;
+            };
+
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(format!("Próbálkozás {:03}", attempt.attempt_number));
+                ui.separator();
+                ui.label(&attempt.status);
+                ui.separator();
+
+                if attempt.bad_sectors.is_empty() {
+                    ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "TISZTA LEMEZKÉP");
+                } else {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 80),
+                        format!("{} HIBÁS SZEKTOR", attempt.bad_sectors.len()),
+                    );
+                }
+            });
+
+            ui.monospace(&attempt.image_file);
+            ui.monospace(format!("SHA-256: {}", attempt.sha256));
+
+            if !attempt.bad_sectors.is_empty() {
+                ui.weak(
+                    "A nem tiszta lemezkép automatikus extraction helyett az Adatmentés sorba kerül.",
+                );
+            }
+        });
+
+        ui.add_space(12.0);
+
+        ui_theme::section(ui, "Automatikus extraction", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        extraction_ready,
+                        egui::Button::new(if self.extraction_running {
+                            "Extraction folyamatban..."
+                        } else {
+                            "Tiszta lemezkép kibontása"
+                        }),
+                    )
+                    .clicked()
+                {
+                    self.start_extraction();
+                }
+
+                if !seven_zip_ready {
+                    ui.weak("A 7-Zip nem érhető el; ellenőrizze a Beállítások oldalt.");
+                } else if self.project.is_none() {
+                    ui.weak("Extraction előtt nyisson meg egy projektet.");
+                }
+            });
+
+            ui.add_space(6.0);
+            ui.label(&self.extraction_stage);
+            ui.weak(
+                "A kibontás először ideiglenes mappába történik. Csak a teljes listing, extraction és hash-leltár sikere után kerül végleges helyre.",
+            );
+
+            if let Some(error) = &self.extraction_error {
+                ui.add_space(8.0);
+                ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "EXTRACTION HIBA");
+                ui.monospace(error);
+            }
+
+            if let Some(result) = &self.extraction_result {
+                ui.add_space(8.0);
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    if result.reused {
+                        "VÁLTOZATLAN EXTRACTION ÚJRA FELHASZNÁLVA"
+                    } else {
+                        "EXTRACTION KÉSZ"
+                    },
+                );
+                ui.label(format!("Kinyert fájlok: {}", result.file_count));
+                ui.label(format!("Összes fájlméret: {} bájt", result.total_bytes));
+                ui.monospace(format!("Forrás: {}", result.image_path.display()));
+                ui.monospace(format!("Cél: {}", result.output_directory.display()));
+                ui.monospace(format!("Listing: {}", result.listing_path.display()));
+                ui.monospace(format!("Leltár: {}", result.inventory_path.display()));
+                ui.monospace(format!("Forrás SHA-256: {}", result.source_sha256));
+            }
+        });
+
+        ui.add_space(12.0);
+
+        ui_theme::section(ui, "Biztonság és megőrzés", |ui| {
+            ui.label("A forrás fizikai floppyhoz ez a művelet nem fér hozzá.");
+            ui.label(
+                "A lemezkép olvasása és a projekt Extracted / Logs mappáinak írása engedélyezett.",
+            );
+            ui.label("Meglévő, eltérő hashű extraction mappa soha nem kerül felülírásra.");
+        });
     }
 
     fn reports_page(&mut self, ui: &mut egui::Ui) {

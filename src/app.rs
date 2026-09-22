@@ -9,6 +9,7 @@ use chrono::{DateTime, Local, Utc};
 
 use crate::{
     external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
+    extraction::{self, ExtractionEvent, ExtractionResult},
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
     imaging::{
         self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, ProjectStatistics,
@@ -70,6 +71,11 @@ pub struct FluxVaultApp {
     tool_statuses: Vec<ToolStatus>,
     tool_check_receiver: Option<Receiver<ToolCheckEvent>>,
     tool_check_running: bool,
+    extraction_receiver: Option<Receiver<ExtractionEvent>>,
+    extraction_running: bool,
+    extraction_stage: String,
+    extraction_result: Option<ExtractionResult>,
+    extraction_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -110,6 +116,11 @@ impl FluxVaultApp {
             tool_statuses: external_tools::initial_statuses(),
             tool_check_receiver: None,
             tool_check_running: false,
+            extraction_receiver: None,
+            extraction_running: false,
+            extraction_stage: "Nincs aktív extraction.".to_owned(),
+            extraction_result: None,
+            extraction_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -238,6 +249,121 @@ impl FluxVaultApp {
                 self.start_tool_check();
             }
             Err(error) => self.log(format!("Eszközbeállítás mentési hiba: {error}")),
+        }
+    }
+
+    fn ready_tool_path(&self, kind: ToolKind) -> Option<PathBuf> {
+        self.tool_statuses
+            .iter()
+            .find(|status| {
+                status.kind == kind && status.health == external_tools::ToolHealth::Ready
+            })
+            .and_then(|status| status.executable.clone())
+    }
+
+    fn start_extraction(&mut self) {
+        if self.extraction_running {
+            return;
+        }
+
+        let Some(project) = &self.project else {
+            self.status = "Extraction előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let Some(attempt) = self.attempt_history.last() else {
+            self.status = "Ehhez a lemezhez nincs kinyerhető acquisition.".to_owned();
+            return;
+        };
+
+        if !attempt.bad_sectors.is_empty() {
+            self.status =
+                "A legutóbbi lemezkép nem tiszta; előbb az Adatmentés nézetben ellenőrizze."
+                    .to_owned();
+            return;
+        }
+
+        let Some(seven_zip_executable) = self.ready_tool_path(ToolKind::SevenZip) else {
+            self.status = "A 7-Zip nem érhető el. Ellenőrizze a Beállítások oldalon.".to_owned();
+            return;
+        };
+        let image_path = project.images_dir().join(&attempt.image_file);
+        let request = extraction::ExtractionRequest {
+            seven_zip_executable,
+            image_path: image_path.clone(),
+            extracted_root: project.extracted_dir(),
+            logs_directory: project.logs_dir(),
+            command_audit_path: self.tool_audit_path(),
+        };
+
+        self.extraction_receiver = Some(extraction::spawn_extraction(request));
+        self.extraction_running = true;
+        self.extraction_stage = "Extraction előkészítése...".to_owned();
+        self.extraction_result = None;
+        self.extraction_error = None;
+        self.status = format!("Extraction folyamatban: {}", image_path.display());
+        self.log(format!("Extraction elindult: {}", image_path.display()));
+    }
+
+    fn poll_extraction_events(&mut self) {
+        let Some(receiver) = self.extraction_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(ExtractionEvent::Stage(stage)) => {
+                    self.extraction_stage = stage;
+                }
+                Ok(ExtractionEvent::Finished(result)) => {
+                    finished = true;
+                    self.extraction_running = false;
+
+                    match result {
+                        Ok(result) => {
+                            self.extraction_stage = if result.reused {
+                                "A változatlan forráshoz tartozó extraction újra felhasználva."
+                                    .to_owned()
+                            } else {
+                                "Extraction sikeresen befejezve.".to_owned()
+                            };
+                            self.status = self.extraction_stage.clone();
+                            self.log(format!(
+                                "Extraction kész: {} | {} fájl | {} bájt",
+                                result.output_directory.display(),
+                                result.file_count,
+                                result.total_bytes
+                            ));
+                            self.extraction_result = Some(result);
+                            self.extraction_error = None;
+                        }
+                        Err(error) => {
+                            self.extraction_stage = "Extraction sikertelen.".to_owned();
+                            self.status = self.extraction_stage.clone();
+                            self.log(format!("Extraction hiba: {error}"));
+                            self.extraction_result = None;
+                            self.extraction_error = Some(error);
+                        }
+                    }
+
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.extraction_running = false;
+                    self.extraction_stage = "Extraction háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.extraction_stage.clone();
+                    self.extraction_error =
+                        Some("Az extraction háttérfolyamat eredmény nélkül leállt.".to_owned());
+                    self.log("Az extraction háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.extraction_receiver = Some(receiver);
         }
     }
 

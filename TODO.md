@@ -110,12 +110,12 @@ This is the first “we can actually use FluxVault on customer media” target. 
 
 Initially reproduce the proven script workflow; we can replace pieces with native Rust later where it actually helps.
 
-- [ ] Clean image -> test FAT readability with 7-Zip before extraction.
-- [ ] Capture detailed 7-Zip listing as audit material.
-- [ ] Extract into a temporary working directory first.
-- [ ] Only replace/promote an automatic extraction after the new extraction fully succeeds.
-- [ ] Write per-floppy file inventory with relative path, bytes, modified time, attributes, and SHA-256 where appropriate.
-- [ ] Record the source image SHA-256 marker so unchanged images do not need needless re-extraction.
+- [x] Clean image -> test FAT readability with 7-Zip before extraction.
+- [x] Capture detailed 7-Zip listing as audit material.
+- [x] Extract into a temporary working directory first.
+- [x] Only replace/promote an automatic extraction after the new extraction fully succeeds.
+- [x] Write per-floppy file inventory with relative path, bytes, modified time, attributes, and SHA-256 where appropriate.
+- [x] Record the source image SHA-256 marker so unchanged images do not need needless re-extraction.
 - [ ] Detect an operator-created recovery folder without the auto-extraction marker as **manual recovery present**.
 - [ ] Preserve the current concept of an immutable first recovery backup (`Recovery/NNN/pass1` or equivalent).
 - [ ] Build/update a project-wide recovered-file manifest.
@@ -257,7 +257,7 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [ ] Unit tests for project persistence and migrations.
 - [ ] Unit tests for SHA/integrity helpers.
 - [ ] Fixture-based tests using scrubbed/sample logs and tiny synthetic images; never require a customer floppy for automated tests.
-- [ ] Integration test for 7-Zip adapter.
+- [x] Integration test for 7-Zip adapter.
 - [ ] Integration test for LibreOffice adapter when installed.
 - [ ] Greaseweazle hardware tests marked/isolated so normal `cargo test` works without hardware.
 

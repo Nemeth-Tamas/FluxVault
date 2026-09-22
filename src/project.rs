@@ -171,6 +171,10 @@ impl ProjectState {
         self.root.join("Logs")
     }
 
+    pub fn extracted_dir(&self) -> PathBuf {
+        self.root.join("Extracted")
+    }
+
     pub fn reports_dir(&self) -> PathBuf {
         self.root.join("Reports")
     }

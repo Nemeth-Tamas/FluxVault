@@ -1,5 +1,6 @@
 mod app;
 mod external_tools;
+mod extraction;
 mod floppy;
 mod imaging;
 mod project;
