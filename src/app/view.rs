@@ -308,8 +308,9 @@ impl FluxVaultApp {
 impl eframe::App for FluxVaultApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_imaging_events();
+        self.poll_tool_check_events();
 
-        if self.imaging_running {
+        if self.imaging_running || self.tool_check_running {
             ui.ctx().request_repaint_after(Duration::from_millis(40));
         }
 

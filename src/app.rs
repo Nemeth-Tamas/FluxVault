@@ -1,10 +1,14 @@
 mod view;
 
-use std::{path::PathBuf, sync::mpsc::Receiver};
+use std::{
+    path::PathBuf,
+    sync::mpsc::{Receiver, TryRecvError},
+};
 
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
+    external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
     imaging::{
         self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, ProjectStatistics,
@@ -62,6 +66,10 @@ pub struct FluxVaultApp {
     attempt_history_error: Option<String>,
     project_statistics: Option<ProjectStatistics>,
     project_statistics_error: Option<String>,
+    tool_settings: ToolSettings,
+    tool_statuses: Vec<ToolStatus>,
+    tool_check_receiver: Option<Receiver<ToolCheckEvent>>,
+    tool_check_running: bool,
     status: String,
     operator_log: Vec<String>,
 }
@@ -69,6 +77,11 @@ pub struct FluxVaultApp {
 impl FluxVaultApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         ui_theme::configure_context(&cc.egui_ctx);
+
+        let (tool_settings, tool_settings_error) = match external_tools::load_settings() {
+            Ok(settings) => (settings, None),
+            Err(error) => (ToolSettings::default(), Some(error)),
+        };
 
         let mut app = Self {
             page: Page::Project,
@@ -93,6 +106,10 @@ impl FluxVaultApp {
             attempt_history_error: None,
             project_statistics: None,
             project_statistics_error: None,
+            tool_settings,
+            tool_statuses: external_tools::initial_statuses(),
+            tool_check_receiver: None,
+            tool_check_running: false,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -100,15 +117,128 @@ impl FluxVaultApp {
         app.log("FluxVault elindult.");
         app.log("Forrás adathordozó biztonsági mód: CSAK OLVASHATÓ.");
 
+        if let Some(error) = tool_settings_error {
+            app.log(format!("Eszközbeállítás betöltési hiba: {error}"));
+        }
+
         app.restore_last_project();
         app.refresh_attempt_history();
         app.refresh_project_statistics();
+        app.start_tool_check();
 
         app
     }
 
     fn log(&mut self, message: impl Into<String>) {
         self.operator_log.push(message.into());
+    }
+
+    fn tool_audit_path(&self) -> PathBuf {
+        self.project
+            .as_ref()
+            .map(|project| project.logs_dir().join("external-tools.jsonl"))
+            .unwrap_or_else(external_tools::default_audit_path)
+    }
+
+    fn start_tool_check(&mut self) {
+        if self.tool_check_running {
+            return;
+        }
+
+        self.tool_statuses = external_tools::checking_statuses();
+        self.tool_check_receiver = Some(external_tools::spawn_checks(
+            self.tool_settings.clone(),
+            self.tool_audit_path(),
+        ));
+        self.tool_check_running = true;
+        self.status = "Külső eszközök ellenőrzése...".to_owned();
+        self.log("Külső eszközök ellenőrzése elindult.");
+    }
+
+    fn poll_tool_check_events(&mut self) {
+        let Some(receiver) = self.tool_check_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(ToolCheckEvent::Status(tool_status)) => {
+                    let name = tool_status.kind.display_name();
+                    self.log(format!("Eszközellenőrzés: {name} | {}", tool_status.detail));
+
+                    if let Some(error) = &tool_status.audit_error {
+                        self.log(format!("Eszköznapló írási hiba ({name}): {error}"));
+                    }
+
+                    if let Some(existing) = self
+                        .tool_statuses
+                        .iter_mut()
+                        .find(|existing| existing.kind == tool_status.kind)
+                    {
+                        *existing = tool_status;
+                    }
+                }
+                Ok(ToolCheckEvent::Finished) => {
+                    finished = true;
+                    self.tool_check_running = false;
+                    self.status = "Külső eszközök ellenőrzése kész.".to_owned();
+                    self.log("Külső eszközök ellenőrzése befejeződött.");
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.tool_check_running = false;
+                    self.status = "Külső eszközök ellenőrzése megszakadt.".to_owned();
+                    self.log("A külsőeszköz-ellenőrző háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.tool_check_receiver = Some(receiver);
+        }
+    }
+
+    fn select_tool_path(&mut self, kind: ToolKind) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(format!("{} futtatható fájl", kind.display_name()))
+            .add_filter("Windows futtatható fájl", &["exe", "com"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        self.tool_settings.set_path(kind, Some(path.clone()));
+
+        match external_tools::save_settings(&self.tool_settings) {
+            Ok(()) => {
+                self.log(format!(
+                    "{} egyéni útvonala mentve: {}",
+                    kind.display_name(),
+                    path.display()
+                ));
+                self.start_tool_check();
+            }
+            Err(error) => self.log(format!("Eszközbeállítás mentési hiba: {error}")),
+        }
+    }
+
+    fn clear_tool_path(&mut self, kind: ToolKind) {
+        self.tool_settings.set_path(kind, None);
+
+        match external_tools::save_settings(&self.tool_settings) {
+            Ok(()) => {
+                self.log(format!(
+                    "{} visszaállítva automatikus felismerésre.",
+                    kind.display_name()
+                ));
+                self.start_tool_check();
+            }
+            Err(error) => self.log(format!("Eszközbeállítás mentési hiba: {error}")),
+        }
     }
 
     fn acquisition_directory(&self) -> PathBuf {

@@ -27,7 +27,7 @@
 - [ ] Never expose or invoke `gw write`, erase, clean, or another destructive Greaseweazle operation.
 - [x] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
 - [x] Recommend the physical write-protect tab for customer disks when available.
-- [ ] Keep a command/audit log for every external tool invocation.
+- [x] Keep a command/audit log for every external tool invocation.
 - [x] Never silently overwrite a previous acquisition/recovery attempt.
 
 ## 2. Project/session data model
@@ -55,14 +55,14 @@
 
 ## 4. External-tool discovery
 
-- [ ] Tool manager detects/configures:
-  - [ ] 7-Zip (`7z.exe` / `7zz.exe` / `7za.exe`).
-  - [ ] LibreOffice (`soffice.com` preferred, `soffice.exe` fallback).
-  - [ ] Greaseweazle host tools (`gw.exe`) when installed later.
-- [ ] Store operator-selected paths in settings.
-- [ ] Show detected version and health check for each tool.
-- [ ] Provide a “Test tools” action.
-- [ ] Capture stdout/stderr and exit code for every external process.
+- [x] Tool manager detects/configures:
+  - [x] 7-Zip (`7z.exe` / `7zz.exe` / `7za.exe`).
+  - [x] LibreOffice (`soffice.com` preferred, `soffice.exe` fallback).
+  - [x] Greaseweazle host tools (`gw.exe`) when installed later.
+- [x] Store operator-selected paths in settings.
+- [x] Show detected version and health check for each tool.
+- [x] Provide a “Test tools” action.
+- [x] Capture stdout/stderr and exit code for every external process.
 - [ ] Kill a full conversion process tree on timeout, matching current converter behavior.
 
 ## 5. USB floppy acquisition MVP — **first working milestone**

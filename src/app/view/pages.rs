@@ -1,7 +1,10 @@
 use eframe::egui;
 
 use super::super::{FluxVaultApp, Page};
-use crate::ui as ui_theme;
+use crate::{
+    external_tools::{ToolHealth, ToolKind},
+    ui as ui_theme,
+};
 
 impl FluxVaultApp {
     fn project_page(&mut self, ui: &mut egui::Ui) {
@@ -852,34 +855,143 @@ impl FluxVaultApp {
     }
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Beállítások");
+        ui_theme::page_header(
+            ui,
+            "Beállítások és eszközök",
+            "Külső programok felismerése, verzióellenőrzése és biztonsági állapot.",
+        );
 
-        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    !self.tool_check_running,
+                    egui::Button::new(if self.tool_check_running {
+                        "Ellenőrzés folyamatban..."
+                    } else {
+                        "Eszközök tesztelése"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_tool_check();
+            }
 
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Külső eszközök").strong().size(16.0));
-
-            ui.add_space(6.0);
-
-            ui.label("7-Zip: még nincs ellenőrizve");
-            ui.label("LibreOffice: még nincs ellenőrizve");
-            ui.label("Greaseweazle: még nincs ellenőrizve");
+            ui.weak(
+                "A tesztek csak verzióinformációt kérnek le; fizikai adathordozót nem érintenek.",
+            );
         });
 
-        ui.add_space(16.0);
+        ui.add_space(14.0);
 
-        ui.group(|ui| {
-            ui.label(
-                egui::RichText::new("Biztonsági szabályok")
-                    .strong()
-                    .size(16.0),
-            );
+        for kind in ToolKind::ALL {
+            let status = self
+                .tool_statuses
+                .iter()
+                .find(|status| status.kind == kind)
+                .cloned();
+            let configured_path = self
+                .tool_settings
+                .path(kind)
+                .map(|path| path.display().to_string());
 
-            ui.add_space(6.0);
+            ui_theme::section(ui, kind.display_name(), |ui| {
+                let Some(status) = status else {
+                    ui.weak("Nincs állapotinformáció.");
+                    return;
+                };
 
+                ui.horizontal_wrapped(|ui| {
+                    match status.health {
+                        ToolHealth::Ready => {
+                            ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "● KÉSZ");
+                        }
+                        ToolHealth::Missing => {
+                            ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "● HIÁNYZIK");
+                        }
+                        ToolHealth::Failed => {
+                            ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "● HIBA");
+                        }
+                        ToolHealth::Checking => {
+                            ui.colored_label(egui::Color32::from_rgb(90, 150, 230), "● ELLENŐRZÉS");
+                        }
+                        ToolHealth::NotChecked => {
+                            ui.weak("● NINCS ELLENŐRIZVE");
+                        }
+                    }
+
+                    if let Some(version) = &status.version {
+                        ui.separator();
+                        ui.strong(version);
+                    }
+                });
+
+                ui.label(&status.detail);
+
+                if let Some(path) = &status.executable {
+                    ui.monospace(path.display().to_string());
+                } else if let Some(path) = &configured_path {
+                    ui.monospace(path);
+                }
+
+                ui.add_space(6.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.tool_check_running,
+                            egui::Button::new("Fájl kiválasztása..."),
+                        )
+                        .clicked()
+                    {
+                        self.select_tool_path(kind);
+                    }
+
+                    if ui
+                        .add_enabled(
+                            configured_path.is_some() && !self.tool_check_running,
+                            egui::Button::new("Automatikus felismerés"),
+                        )
+                        .clicked()
+                    {
+                        self.clear_tool_path(kind);
+                    }
+                });
+
+                if let Some(audit) = &status.audit {
+                    egui::CollapsingHeader::new("Legutóbbi parancs részletei")
+                        .id_salt(format!("tool_audit_{kind:?}"))
+                        .show(ui, |ui| {
+                            ui.monospace(format!(
+                                "{} {}",
+                                audit.executable.display(),
+                                audit.arguments.join(" ")
+                            ));
+                            ui.label(format!(
+                                "Kilépési kód: {:?} | Időtartam: {} ms",
+                                audit.exit_code, audit.duration_ms
+                            ));
+
+                            if !audit.stdout.is_empty() {
+                                ui.weak("stdout");
+                                ui.monospace(&audit.stdout);
+                            }
+
+                            if !audit.stderr.is_empty() {
+                                ui.weak("stderr");
+                                ui.monospace(&audit.stderr);
+                            }
+                        });
+                }
+            });
+
+            ui.add_space(10.0);
+        }
+
+        ui_theme::section(ui, "Biztonsági szabályok", |ui| {
             ui.label("Fizikai floppy írás: TILTOTT");
             ui.label("Greaseweazle írás: TILTOTT");
             ui.label("Forrás média hozzáférés: CSAK OLVASHATÓ");
+            ui.weak("A Greaseweazle ellenőrzés kizárólag a gw.exe --version parancsot használja.");
         });
     }
 
