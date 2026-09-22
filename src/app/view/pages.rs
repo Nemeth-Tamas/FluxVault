@@ -345,6 +345,73 @@ impl FluxVaultApp {
 
         ui.add_space(16.0);
 
+        let mut recovery_queue = self
+            .project_statistics
+            .as_ref()
+            .map(|statistics| {
+                statistics
+                    .disks
+                    .iter()
+                    .filter(|disk| disk.best_bad_sectors > 0)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        recovery_queue.sort_by(|left, right| {
+            right
+                .best_bad_sectors
+                .cmp(&left.best_bad_sectors)
+                .then_with(|| right.latest_bad_sectors.cmp(&left.latest_bad_sectors))
+                .then_with(|| left.disk_number.cmp(&right.disk_number))
+        });
+        let mut requested_disk = None;
+
+        ui_theme::section(ui, "Recovery várólista", |ui| {
+            if recovery_queue.is_empty() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    "[URES] Nincs hibás szektor miatt várakozó lemez.",
+                );
+                return;
+            }
+
+            ui.label(format!(
+                "{} lemez igényel figyelmet; a legsúlyosabb esetek vannak elöl.",
+                recovery_queue.len()
+            ));
+
+            egui::ScrollArea::vertical()
+                .id_salt("recovery_queue_scroll")
+                .max_height(190.0)
+                .show(ui, |ui| {
+                    for disk in &recovery_queue {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.strong(format!("Lemez {:03}", disk.disk_number));
+                            ui.separator();
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 180, 80),
+                                format!("legjobb állapot: {} hibás", disk.best_bad_sectors),
+                            );
+                            ui.separator();
+                            ui.label(format!(
+                                "legutóbbi: {} hibás | {} próbálkozás",
+                                disk.latest_bad_sectors, disk.attempt_count
+                            ));
+
+                            if ui.button("Megnyitás").clicked() {
+                                requested_disk = Some(disk.disk_number);
+                            }
+                        });
+                    }
+                });
+        });
+
+        if let Some(disk_number) = requested_disk {
+            self.select_disk_number(disk_number);
+        }
+
+        ui.add_space(16.0);
+
         let latest_attempt = self.attempt_history.last().cloned();
         let quick_reconstruction_ready = self.project.is_some()
             && latest_attempt

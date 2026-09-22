@@ -128,7 +128,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 
 ## 8. Recovery workbench — pre-Greaseweazle
 
-- [ ] Recovery queue ordered by severity/attention state.
+- [x] Recovery queue ordered by severity/attention state.
 - [ ] Show current image, bad-sector count/list, source log, extraction result, prior attempts, and manual notes in one screen.
 - [x] **Re-read with USB drive** action creates another immutable acquisition attempt.
 - [x] Compare attempts sector-by-sector.
