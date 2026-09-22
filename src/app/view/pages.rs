@@ -3,6 +3,7 @@ use eframe::egui;
 use super::super::{FluxVaultApp, Page};
 use crate::{
     external_tools::{ToolHealth, ToolKind},
+    extraction::ExtractionPresence,
     ui as ui_theme,
 };
 
@@ -656,6 +657,69 @@ impl FluxVaultApp {
 
         ui.add_space(16.0);
 
+        let recovery_backup_ready = self.project.is_some()
+            && self
+                .attempt_history
+                .last()
+                .is_some_and(|attempt| attempt.attention_required)
+            && !self.recovery_backup_running;
+
+        ui_theme::section(ui, "Immutable első recovery backup", |ui| {
+            ui.label(
+                "A legelső hibás vagy bizonytalan acquisition képét és naplóját egyszer menti a Recovery/NNN/pass1 mappába. Egy későbbi próbálkozás ezt soha nem írhatja felül.",
+            );
+
+            if ui
+                .add_enabled(
+                    recovery_backup_ready,
+                    egui::Button::new(if self.recovery_backup_running {
+                        "Pass1 backup folyamatban..."
+                    } else {
+                        "Pass1 backup biztosítása"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_recovery_backup();
+            }
+
+            ui.label(&self.recovery_backup_stage);
+
+            if let Some(error) = &self.recovery_backup_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] A pass1 recovery backup sikertelen.",
+                );
+                ui.monospace(error);
+            }
+
+            if let Some(result) = &self.recovery_backup_result {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    if result.created {
+                        "[PASS1 BACKUP ELKESZULT]"
+                    } else {
+                        "[MEGLEVO PASS1 VALTOZATLAN]"
+                    },
+                );
+                ui.monospace(format!("Mappa: {}", result.directory.display()));
+
+                if let Some(path) = &result.image_backup {
+                    ui.monospace(format!("Kép: {}", path.display()));
+                }
+
+                if let Some(path) = &result.log_backup {
+                    ui.monospace(format!("Napló: {}", path.display()));
+                }
+
+                if let Some(path) = &result.manifest_path {
+                    ui.monospace(format!("Manifest: {}", path.display()));
+                }
+            }
+        });
+
+        ui.add_space(16.0);
+
         let composite_ready = self.project.is_some()
             && self.attempt_history.len() >= 2
             && self
@@ -1089,11 +1153,19 @@ impl FluxVaultApp {
 
         let latest_attempt = self.attempt_history.last().cloned();
         let seven_zip_ready = self.ready_tool_path(ToolKind::SevenZip).is_some();
+        let extraction_target_available = !matches!(
+            self.extraction_presence.as_ref(),
+            Some(
+                ExtractionPresence::ManualRecovery { .. }
+                    | ExtractionPresence::InvalidAutomatic { .. }
+            )
+        );
         let extraction_ready = self.project.is_some()
             && latest_attempt
                 .as_ref()
                 .is_some_and(|attempt| !attempt.attention_required)
             && seven_zip_ready
+            && extraction_target_available
             && !self.extraction_running;
 
         ui_theme::section(ui, "Forrás lemezkép", |ui| {
@@ -1134,6 +1206,72 @@ impl FluxVaultApp {
 
         ui.add_space(12.0);
 
+        ui_theme::section(ui, "Recovery / extraction állapot", |ui| {
+            if ui.button("Állapot frissítése").clicked() {
+                self.refresh_extraction_presence();
+            }
+
+            if let Some(error) = &self.extraction_presence_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] Az extraction állapot nem olvasható.",
+                );
+                ui.monospace(error);
+            } else {
+                match &self.extraction_presence {
+                    Some(ExtractionPresence::Missing { expected_directory }) => {
+                        ui.weak("Még nincs kinyert vagy manuálisan helyreállított fájl.");
+                        ui.monospace(format!("Várt cél: {}", expected_directory.display()));
+                    }
+                    Some(ExtractionPresence::Automatic {
+                        output_directory,
+                        file_count,
+                        total_bytes,
+                        source_sha256,
+                    }) => {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(70, 200, 120),
+                            "[AUTOMATIKUS EXTRACTION]",
+                        );
+                        ui.label(format!("{file_count} fájl | {total_bytes} bájt"));
+                        ui.monospace(format!("Mappa: {}", output_directory.display()));
+                        ui.monospace(format!("Forrás SHA-256: {source_sha256}"));
+                    }
+                    Some(ExtractionPresence::ManualRecovery {
+                        output_directory,
+                        file_count,
+                        total_bytes,
+                    }) => {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 180, 80),
+                            "[MANUAL RECOVERY PRESENT]",
+                        );
+                        ui.label(format!("{file_count} operátori fájl | {total_bytes} bájt"));
+                        ui.monospace(format!("Mappa: {}", output_directory.display()));
+                        ui.weak(
+                            "A FluxVault ezt manuális DMDE/recovery eredményként megőrzi; automatikus extraction nem írhatja felül.",
+                        );
+                    }
+                    Some(ExtractionPresence::InvalidAutomatic {
+                        output_directory,
+                        detail,
+                    }) => {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 70, 70),
+                            "[HIBÁS EXTRACTION MARKER]",
+                        );
+                        ui.monospace(format!("Mappa: {}", output_directory.display()));
+                        ui.monospace(detail);
+                    }
+                    None => {
+                        ui.weak("Nincs vizsgálható acquisition.");
+                    }
+                }
+            }
+        });
+
+        ui.add_space(12.0);
+
         ui_theme::section(ui, "Automatikus extraction", |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui
@@ -1154,6 +1292,10 @@ impl FluxVaultApp {
                     ui.weak("A 7-Zip nem érhető el; ellenőrizze a Beállítások oldalt.");
                 } else if self.project.is_none() {
                     ui.weak("Extraction előtt nyisson meg egy projektet.");
+                } else if !extraction_target_available {
+                    ui.weak(
+                        "A meglévő manuális recovery vagy hibás marker miatt az automatikus extraction le van tiltva.",
+                    );
                 }
             });
 

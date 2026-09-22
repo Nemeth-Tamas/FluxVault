@@ -10,13 +10,14 @@ use chrono::{DateTime, Local, Utc};
 use crate::{
     composite::{self, CompositeEvent, CompositeResult, CompositeSource},
     external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
-    extraction::{self, ExtractionEvent, ExtractionResult},
+    extraction::{self, ExtractionEvent, ExtractionPresence, ExtractionResult},
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
     imaging::{
         self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, ProjectStatistics,
         SectorReadState,
     },
     project::{self, ProjectState},
+    recovery_backup::{self, RecoveryBackupEvent, RecoveryBackupResult},
     report,
     safety::MediaSafetyPolicy,
     sector_recovery::{self, ReconstructionEvent, ReconstructionResult},
@@ -84,6 +85,8 @@ pub struct FluxVaultApp {
     extraction_stage: String,
     extraction_result: Option<ExtractionResult>,
     extraction_error: Option<String>,
+    extraction_presence: Option<ExtractionPresence>,
+    extraction_presence_error: Option<String>,
     reconstruction_receiver: Option<Receiver<ReconstructionEvent>>,
     reconstruction_running: bool,
     reconstruction_stage: String,
@@ -94,6 +97,11 @@ pub struct FluxVaultApp {
     composite_stage: String,
     composite_result: Option<CompositeResult>,
     composite_error: Option<String>,
+    recovery_backup_receiver: Option<Receiver<RecoveryBackupEvent>>,
+    recovery_backup_running: bool,
+    recovery_backup_stage: String,
+    recovery_backup_result: Option<RecoveryBackupResult>,
+    recovery_backup_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -139,6 +147,8 @@ impl FluxVaultApp {
             extraction_stage: "Nincs aktív extraction.".to_owned(),
             extraction_result: None,
             extraction_error: None,
+            extraction_presence: None,
+            extraction_presence_error: None,
             reconstruction_receiver: None,
             reconstruction_running: false,
             reconstruction_stage: "Nincs aktív szektorrekonstrukció.".to_owned(),
@@ -149,6 +159,11 @@ impl FluxVaultApp {
             composite_stage: "Nincs aktív kompozitkép-készítés.".to_owned(),
             composite_result: None,
             composite_error: None,
+            recovery_backup_receiver: None,
+            recovery_backup_running: false,
+            recovery_backup_stage: "Nincs aktív pass1 backup.".to_owned(),
+            recovery_backup_result: None,
+            recovery_backup_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -298,6 +313,19 @@ impl FluxVaultApp {
             return;
         }
 
+        if matches!(
+            self.extraction_presence.as_ref(),
+            Some(
+                ExtractionPresence::ManualRecovery { .. }
+                    | ExtractionPresence::InvalidAutomatic { .. }
+            )
+        ) {
+            self.status =
+                "A meglévő recovery mappa védett; automatikus extraction nem írhatja felül."
+                    .to_owned();
+            return;
+        }
+
         let Some(project) = &self.project else {
             self.status = "Extraction előtt nyisson meg egy projektet.".to_owned();
             return;
@@ -370,6 +398,7 @@ impl FluxVaultApp {
                             ));
                             self.extraction_result = Some(result);
                             self.extraction_error = None;
+                            self.refresh_extraction_presence();
                         }
                         Err(error) => {
                             self.extraction_stage = "Extraction sikertelen.".to_owned();
@@ -627,6 +656,113 @@ impl FluxVaultApp {
         }
     }
 
+    fn start_recovery_backup(&mut self) {
+        if self.recovery_backup_running {
+            return;
+        }
+
+        let Some(project) = &self.project else {
+            self.status = "Recovery backup előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let Some(attempt) = self.attempt_history.last() else {
+            self.status = "Nincs backupolható acquisition.".to_owned();
+            return;
+        };
+
+        if !attempt.attention_required {
+            self.status =
+                "A hibamentes acquisition nem igényel pass1 recovery backupot.".to_owned();
+            return;
+        }
+
+        let request = recovery_backup::RecoveryBackupRequest {
+            recovery_root: project.recovery_dir(),
+            disk_number: self.current_disk_number,
+            attempt_number: attempt.attempt_number,
+            image_path: project.images_dir().join(&attempt.image_file),
+            log_path: (!attempt.log_file.is_empty()).then(|| PathBuf::from(&attempt.log_file)),
+            reason: format!(
+                "{}; {} hibás szektor",
+                attempt.status,
+                attempt.bad_sectors.len()
+            ),
+        };
+
+        self.recovery_backup_receiver = Some(recovery_backup::spawn_backup(request));
+        self.recovery_backup_running = true;
+        self.recovery_backup_stage = "Első recovery backup készítése...".to_owned();
+        self.recovery_backup_result = None;
+        self.recovery_backup_error = None;
+        self.status = self.recovery_backup_stage.clone();
+        self.log(format!(
+            "Immutable pass1 recovery backup ellenőrzése: lemez {:03}.",
+            self.current_disk_number
+        ));
+    }
+
+    fn poll_recovery_backup_events(&mut self) {
+        let Some(receiver) = self.recovery_backup_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(RecoveryBackupEvent::Stage(stage)) => {
+                    self.recovery_backup_stage = stage;
+                }
+                Ok(RecoveryBackupEvent::Finished(result)) => {
+                    finished = true;
+                    self.recovery_backup_running = false;
+
+                    match result {
+                        Ok(result) => {
+                            self.recovery_backup_stage = if result.created {
+                                "Immutable pass1 recovery backup elkészült.".to_owned()
+                            } else {
+                                "A meglévő pass1 backup változatlanul megmaradt.".to_owned()
+                            };
+                            self.status = self.recovery_backup_stage.clone();
+                            self.log(format!(
+                                "Pass1 recovery backup: {}",
+                                result.directory.display()
+                            ));
+                            self.recovery_backup_result = Some(result);
+                            self.recovery_backup_error = None;
+                        }
+                        Err(error) => {
+                            self.recovery_backup_stage =
+                                "Pass1 recovery backup sikertelen.".to_owned();
+                            self.status = self.recovery_backup_stage.clone();
+                            self.log(format!("Recovery backup hiba: {error}"));
+                            self.recovery_backup_result = None;
+                            self.recovery_backup_error = Some(error);
+                        }
+                    }
+
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.recovery_backup_running = false;
+                    self.recovery_backup_stage =
+                        "A recovery backup háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.recovery_backup_stage.clone();
+                    self.recovery_backup_error =
+                        Some("A recovery backup háttérfolyamat eredmény nélkül leállt.".to_owned());
+                    self.log("A recovery backup háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.recovery_backup_receiver = Some(receiver);
+        }
+    }
+
     fn acquisition_directory(&self) -> PathBuf {
         self.project
             .as_ref()
@@ -794,6 +930,37 @@ impl FluxVaultApp {
                 self.attempt_history_error = Some(error.clone());
 
                 self.log(format!("Próbálkozási előzmények betöltési hibája: {error}"));
+            }
+        }
+
+        self.refresh_extraction_presence();
+    }
+
+    fn refresh_extraction_presence(&mut self) {
+        let Some(project) = &self.project else {
+            self.extraction_presence = None;
+            self.extraction_presence_error = None;
+            return;
+        };
+        let Some(attempt) = self.attempt_history.last() else {
+            self.extraction_presence = None;
+            self.extraction_presence_error = None;
+            return;
+        };
+
+        match extraction::inspect_extraction_presence(
+            &project.extracted_dir(),
+            self.current_disk_number,
+            attempt.attempt_number,
+        ) {
+            Ok(presence) => {
+                self.extraction_presence = Some(presence);
+                self.extraction_presence_error = None;
+            }
+            Err(error) => {
+                self.extraction_presence = None;
+                self.extraction_presence_error = Some(error.clone());
+                self.log(format!("Extraction állapotfelmérési hiba: {error}"));
             }
         }
     }

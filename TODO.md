@@ -116,8 +116,8 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Only replace/promote an automatic extraction after the new extraction fully succeeds.
 - [x] Write per-floppy file inventory with relative path, bytes, modified time, attributes, and SHA-256 where appropriate.
 - [x] Record the source image SHA-256 marker so unchanged images do not need needless re-extraction.
-- [ ] Detect an operator-created recovery folder without the auto-extraction marker as **manual recovery present**.
-- [ ] Preserve the current concept of an immutable first recovery backup (`Recovery/NNN/pass1` or equivalent).
+- [x] Detect an operator-created recovery folder without the auto-extraction marker as **manual recovery present**.
+- [x] Preserve the current concept of an immutable first recovery backup (`Recovery/NNN/pass1` or equivalent).
 - [ ] Build/update a project-wide recovered-file manifest.
 - [ ] Route these cases to Recovery instead of pretending success:
   - [ ] non-clean image / unreadable sectors;
@@ -262,7 +262,27 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [ ] Integration test for LibreOffice adapter when installed.
 - [ ] Greaseweazle hardware tests marked/isolated so normal `cargo test` works without hardware.
 
-## 17. Milestones
+## 17. CLI / automation interface
+
+The GUI and CLI must call the same Rust workflow/services so safety, provenance, validation, and output formats cannot drift.
+
+- [ ] Install a `fluxvault` executable that can be added to `PATH` and run from PowerShell, CMD, or another automation process.
+- [ ] Discover a project by walking upward from the current directory, like Git, with an explicit `--project <path>` override.
+- [ ] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
+- [ ] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
+- [ ] Read-only drive commands: `drive list` and `drive probe --drive A:`.
+- [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` and an interactive sequential `scan` workflow with insert/remove confirmations.
+- [ ] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
+- [ ] Recovery commands for queue/status, attempt comparison, composite creation, and DMDE result import.
+- [ ] Conversion, audit/report, and validated customer-package commands matching the GUI workflow.
+- [ ] Human-readable output by default plus stable `--json` output for scripts; progress goes to stderr so JSON/stdout remains machine-readable.
+- [ ] Stable documented exit codes for success, partial recovery, operator action required, invalid project/input, missing tool, and fatal failure.
+- [ ] Non-interactive operations require explicit flags; physical-media operations must retain read-only safety and required operator confirmations.
+- [ ] Every CLI external-tool invocation uses argument arrays and the same command/audit log as the GUI; never expose Greaseweazle write/erase commands.
+- [ ] Shell completion generation for PowerShell initially, with Bash/Zsh completion when the application becomes cross-platform.
+- [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
+
+## 18. Milestones
 
 - [x] **M0 — Skeleton:** eframe window, DPI fix, module layout, settings, project open/create, worker/event plumbing.
 - [x] **M1 — WORKING USB ARCHIVER:** safely image a real floppy, retry/fallback, bad-sector map, SHA-256, persistent project record.
@@ -273,7 +293,7 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [ ] **M6 — COMPLETE SUITE:** Office conversion, integrity, audit workbook/report exports, customer ZIP packaging.
 - [ ] **M7 — HARDENING:** recovery regression tests, crash/cancel behavior, settings polish, release build.
 
-## 18. First implementation session after repository is created
+## 19. First implementation session after repository is created
 
 - [x] Read the new GitHub repository exactly as pushed.
 - [x] Read BareEye / QuadBench / EagleCast reference files needed for eframe setup and DPI behavior.

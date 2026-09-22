@@ -45,6 +45,28 @@ pub struct ExtractionResult {
     pub reused: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum ExtractionPresence {
+    Missing {
+        expected_directory: PathBuf,
+    },
+    Automatic {
+        output_directory: PathBuf,
+        file_count: usize,
+        total_bytes: u64,
+        source_sha256: String,
+    },
+    ManualRecovery {
+        output_directory: PathBuf,
+        file_count: usize,
+        total_bytes: u64,
+    },
+    InvalidAutomatic {
+        output_directory: PathBuf,
+        detail: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExtractionMarker {
     schema_version: u32,
@@ -86,6 +108,127 @@ pub fn spawn_extraction(request: ExtractionRequest) -> Receiver<ExtractionEvent>
     });
 
     receiver
+}
+
+pub fn inspect_extraction_presence(
+    extracted_root: &Path,
+    disk_number: u32,
+    attempt_number: u32,
+) -> Result<ExtractionPresence, String> {
+    let disk_directory = extracted_root.join(format!("{disk_number:03}"));
+    let expected_directory = if attempt_number == 0 {
+        disk_directory.join("legacy")
+    } else {
+        disk_directory.join(format!("attempt_{attempt_number:03}"))
+    };
+
+    if expected_directory.is_dir() {
+        return inspect_candidate_directory(&expected_directory);
+    }
+
+    if disk_directory.is_dir() {
+        let (file_count, total_bytes) = count_manual_files(&disk_directory, true)?;
+
+        if file_count > 0 {
+            return Ok(ExtractionPresence::ManualRecovery {
+                output_directory: disk_directory,
+                file_count,
+                total_bytes,
+            });
+        }
+    }
+
+    Ok(ExtractionPresence::Missing { expected_directory })
+}
+
+fn inspect_candidate_directory(path: &Path) -> Result<ExtractionPresence, String> {
+    let marker_path = path.join(MARKER_FILE_NAME);
+
+    if marker_path.is_file() {
+        let marker_json = fs::read_to_string(&marker_path).map_err(|error| {
+            format!(
+                "Nem olvasható extraction marker {}: {error}",
+                marker_path.display()
+            )
+        })?;
+
+        return match serde_json::from_str::<ExtractionMarker>(&marker_json) {
+            Ok(marker) => Ok(ExtractionPresence::Automatic {
+                output_directory: path.to_path_buf(),
+                file_count: marker.file_count,
+                total_bytes: marker.total_bytes,
+                source_sha256: marker.source_sha256,
+            }),
+            Err(error) => Ok(ExtractionPresence::InvalidAutomatic {
+                output_directory: path.to_path_buf(),
+                detail: format!("Hibás extraction marker: {error}"),
+            }),
+        };
+    }
+
+    let (file_count, total_bytes) = count_manual_files(path, false)?;
+
+    if file_count > 0 {
+        Ok(ExtractionPresence::ManualRecovery {
+            output_directory: path.to_path_buf(),
+            file_count,
+            total_bytes,
+        })
+    } else {
+        Ok(ExtractionPresence::Missing {
+            expected_directory: path.to_path_buf(),
+        })
+    }
+}
+
+fn count_manual_files(root: &Path, skip_managed_children: bool) -> Result<(usize, u64), String> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut file_count = 0usize;
+    let mut total_bytes = 0u64;
+
+    while let Some(directory) = pending.pop() {
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            format!(
+                "Nem sikerült megvizsgálni a recovery mappát {}: {error}",
+                directory.display()
+            )
+        })?;
+
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("Hibás recovery bejegyzés: {error}"))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("Nem olvasható fájltípus {}: {error}", path.display()))?;
+
+            if file_type.is_dir() {
+                if skip_managed_children && path.join(MARKER_FILE_NAME).is_file() {
+                    continue;
+                }
+
+                pending.push(path);
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if name.starts_with("__") || name == MARKER_FILE_NAME || name == INVENTORY_FILE_NAME {
+                continue;
+            }
+
+            let metadata = entry.metadata().map_err(|error| {
+                format!("Nem olvasható recovery fájl {}: {error}", path.display())
+            })?;
+            file_count += 1;
+            total_bytes = total_bytes.saturating_add(metadata.len());
+        }
+    }
+
+    Ok((file_count, total_bytes))
 }
 
 fn run_extraction(
@@ -523,6 +666,14 @@ fn system_time_unix_ms(value: SystemTime) -> Option<u64> {
 mod tests {
     use super::*;
 
+    fn test_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "fluxvault-extraction-presence-{name}-{}-{}",
+            std::process::id(),
+            current_unix_ms()
+        ))
+    }
+
     #[test]
     fn parses_fluxvault_attempt_image_name() {
         let path = Path::new(r"C:\Archive\Images\007_attempt_012.img");
@@ -551,6 +702,65 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with(".tmp-"))
         );
+    }
+
+    #[test]
+    fn detects_operator_created_recovery_without_marker() {
+        let root = test_root("manual");
+        let disk_directory = root.join("001");
+        fs::create_dir_all(disk_directory.join("$Root")).unwrap();
+        fs::write(disk_directory.join("$Root").join("recovered.doc"), b"data").unwrap();
+
+        let presence = inspect_extraction_presence(&root, 1, 0).unwrap();
+
+        match presence {
+            ExtractionPresence::ManualRecovery {
+                output_directory,
+                file_count,
+                total_bytes,
+            } => {
+                assert_eq!(output_directory, disk_directory);
+                assert_eq!(file_count, 1);
+                assert_eq!(total_bytes, 4);
+            }
+            other => panic!("expected manual recovery, got {other:?}"),
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn detects_managed_extraction_from_marker() {
+        let root = test_root("automatic");
+        let output_directory = root.join("001").join("attempt_001");
+        fs::create_dir_all(&output_directory).unwrap();
+        let marker = ExtractionMarker {
+            schema_version: EXTRACTION_SCHEMA_VERSION,
+            source_image: "001_attempt_001.img".to_owned(),
+            source_sha256: "a".repeat(64),
+            extracted_unix_ms: 1,
+            file_count: 2,
+            total_bytes: 42,
+        };
+        write_json(
+            &output_directory.join(MARKER_FILE_NAME),
+            &marker,
+            "test marker",
+        )
+        .unwrap();
+
+        let presence = inspect_extraction_presence(&root, 1, 1).unwrap();
+
+        assert!(matches!(
+            presence,
+            ExtractionPresence::Automatic {
+                file_count: 2,
+                total_bytes: 42,
+                ..
+            }
+        ));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

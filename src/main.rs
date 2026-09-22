@@ -7,6 +7,7 @@ mod floppy;
 mod imaging;
 mod legacy_logs;
 mod project;
+mod recovery_backup;
 mod report;
 mod safety;
 mod sector_recovery;
