@@ -328,6 +328,7 @@ impl eframe::App for FluxVaultApp {
         self.poll_tool_check_events();
         self.poll_extraction_events();
         self.poll_reconstruction_events();
+        self.poll_composite_events();
 
         if self.imaging_running
             || self.tool_check_running

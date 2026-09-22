@@ -1,4 +1,5 @@
 mod app;
+mod composite;
 mod external_tools;
 mod extraction;
 mod floppy;

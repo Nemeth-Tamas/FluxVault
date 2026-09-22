@@ -656,6 +656,100 @@ impl FluxVaultApp {
 
         ui.add_space(16.0);
 
+        let composite_ready = self.project.is_some()
+            && self.attempt_history.len() >= 2
+            && self
+                .attempt_history
+                .iter()
+                .all(|attempt| !attempt.bad_sectors.is_empty())
+            && !self.composite_running;
+
+        ui_theme::section(ui, "Legjobb kompozit több próbálkozásból", |ui| {
+            ui.label(
+                "A legjobb próbálkozás hibás szektorait csak olyan másik próbálkozásból pótolja, ahol ugyanaz a szektor olvasható volt. Az eredetik változatlanok maradnak.",
+            );
+
+            if self.attempt_history.len() < 2 {
+                ui.weak("Legalább két, azonos geometriájú próbálkozás szükséges.");
+            } else if self
+                .attempt_history
+                .iter()
+                .any(|attempt| attempt.bad_sectors.is_empty())
+            {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    "Már van hibamentes próbálkozás; kompozit nem szükséges.",
+                );
+            }
+
+            ui.add_space(6.0);
+
+            if ui
+                .add_enabled(
+                    composite_ready,
+                    egui::Button::new(if self.composite_running {
+                        "Kompozit elemzése folyamatban..."
+                    } else {
+                        "Legjobb kompozit elkészítése"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_composite();
+            }
+
+            ui.label(&self.composite_stage);
+
+            if let Some(error) = &self.composite_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] A kompozitkép-készítés sikertelen.",
+                );
+                ui.monospace(error);
+            }
+
+            if let Some(result) = &self.composite_result {
+                ui.label(format!(
+                    "Bázis: {:03} | pótolt: {} | megoldatlan: {}",
+                    result.base_attempt,
+                    result.replacements.len(),
+                    result.unresolved_bad_sectors.len()
+                ));
+
+                for replacement in &result.replacements {
+                    ui.monospace(format!(
+                        "LBA {} <- próbálkozás {:03}",
+                        replacement.target_lba, replacement.source_attempt
+                    ));
+                }
+
+                if !result.unresolved_bad_sectors.is_empty() {
+                    ui.weak(format!(
+                        "Egyik próbálkozásból sem olvasható: {:?}",
+                        result.unresolved_bad_sectors
+                    ));
+                }
+
+                if let Some(path) = &result.derived_image {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(70, 200, 120),
+                        "[SZARMAZTATOTT KEP ELKESZULT]",
+                    );
+                    ui.monospace(format!("Kompozit kép: {}", path.display()));
+                }
+
+                if let Some(path) = &result.provenance_path {
+                    ui.monospace(format!("Provenance: {}", path.display()));
+                }
+
+                if let Some(hash) = &result.derived_sha256 {
+                    ui.monospace(format!("Kompozit SHA-256: {hash}"));
+                }
+            }
+        });
+
+        ui.add_space(16.0);
+
         ui.group(|ui| {
             ui.label(
                 egui::RichText::new("Olvasási próbálkozások")

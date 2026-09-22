@@ -8,6 +8,7 @@ use std::{
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
+    composite::{self, CompositeEvent, CompositeResult, CompositeSource},
     external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
     extraction::{self, ExtractionEvent, ExtractionResult},
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
@@ -88,6 +89,11 @@ pub struct FluxVaultApp {
     reconstruction_stage: String,
     reconstruction_result: Option<ReconstructionResult>,
     reconstruction_error: Option<String>,
+    composite_receiver: Option<Receiver<CompositeEvent>>,
+    composite_running: bool,
+    composite_stage: String,
+    composite_result: Option<CompositeResult>,
+    composite_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -138,6 +144,11 @@ impl FluxVaultApp {
             reconstruction_stage: "Nincs aktív szektorrekonstrukció.".to_owned(),
             reconstruction_result: None,
             reconstruction_error: None,
+            composite_receiver: None,
+            composite_running: false,
+            composite_stage: "Nincs aktív kompozitkép-készítés.".to_owned(),
+            composite_result: None,
+            composite_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -493,6 +504,124 @@ impl FluxVaultApp {
 
         if !finished {
             self.reconstruction_receiver = Some(receiver);
+        }
+    }
+
+    fn start_composite(&mut self) {
+        if self.composite_running {
+            return;
+        }
+
+        let Some(project) = &self.project else {
+            self.status = "Kompozit kép előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+
+        if self.attempt_history.len() < 2 {
+            self.status = "Kompozit képhez legalább két próbálkozás szükséges.".to_owned();
+            return;
+        }
+
+        if self
+            .attempt_history
+            .iter()
+            .any(|attempt| attempt.bad_sectors.is_empty())
+        {
+            self.status =
+                "Már létezik hibamentes próbálkozás; kompozit kép nem szükséges.".to_owned();
+            return;
+        }
+
+        let sources = self
+            .attempt_history
+            .iter()
+            .map(|attempt| CompositeSource {
+                attempt_number: attempt.attempt_number,
+                image_path: project.images_dir().join(&attempt.image_file),
+                total_sectors: attempt.total_sectors,
+                bad_sectors: attempt.bad_sectors.clone(),
+            })
+            .collect();
+        let request = composite::CompositeRequest {
+            recovery_root: project.recovery_dir(),
+            disk_number: self.current_disk_number,
+            sources,
+        };
+
+        self.composite_receiver = Some(composite::spawn_composite(request));
+        self.composite_running = true;
+        self.composite_stage = "Kompozit lehetőségek elemzése...".to_owned();
+        self.composite_result = None;
+        self.composite_error = None;
+        self.status = self.composite_stage.clone();
+        self.log(format!(
+            "Bizonyíték-alapú kompozitkép-elemzés elindult a(z) {:03} lemezhez.",
+            self.current_disk_number
+        ));
+    }
+
+    fn poll_composite_events(&mut self) {
+        let Some(receiver) = self.composite_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+
+        loop {
+            match receiver.try_recv() {
+                Ok(CompositeEvent::Stage(stage)) => {
+                    self.composite_stage = stage;
+                }
+                Ok(CompositeEvent::Finished(result)) => {
+                    finished = true;
+                    self.composite_running = false;
+
+                    match result {
+                        Ok(result) => {
+                            self.composite_stage = if result.replacements.is_empty() {
+                                "A próbálkozások között nincs bizonyíthatóan pótolható szektor."
+                                    .to_owned()
+                            } else if result.unresolved_bad_sectors.is_empty() {
+                                "A bizonyíték-alapú kompozit kép elkészült.".to_owned()
+                            } else {
+                                "Részleges kompozit elkészült; maradt megoldatlan szektor."
+                                    .to_owned()
+                            };
+                            self.status = self.composite_stage.clone();
+                            self.log(format!(
+                                "Kompozit eredmény: {} pótolt, {} megoldatlan szektor.",
+                                result.replacements.len(),
+                                result.unresolved_bad_sectors.len()
+                            ));
+                            self.composite_result = Some(result);
+                            self.composite_error = None;
+                        }
+                        Err(error) => {
+                            self.composite_stage = "Kompozitkép-készítés sikertelen.".to_owned();
+                            self.status = self.composite_stage.clone();
+                            self.log(format!("Kompozitkép-hiba: {error}"));
+                            self.composite_result = None;
+                            self.composite_error = Some(error);
+                        }
+                    }
+
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.composite_running = false;
+                    self.composite_stage = "A kompozitkép-háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.composite_stage.clone();
+                    self.composite_error =
+                        Some("A kompozitkép-háttérfolyamat eredmény nélkül leállt.".to_owned());
+                    self.log("A kompozitkép-háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+
+        if !finished {
+            self.composite_receiver = Some(receiver);
         }
     }
 
