@@ -184,14 +184,14 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 
 Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app workflow.
 
-- [ ] Mirror recovered originals into customer-facing `Converted` paths without changing the forensic source tree.
-- [ ] Remove DMDE artifact path segments from delivery paths (`$Noname`, `$Root`, raw-signature folders) while preserving forensic path mapping.
-- [ ] Resolve name collisions deterministically (`[recovered copy N]`).
-- [ ] Preserve recovery-method labels: normal filesystem, DMDE filesystem recovery, signature recovery.
-- [ ] Support current source extensions/plans:
-  - [ ] Word-family -> DOCX + PDF: `.doc`, `.rtf`, `.wps`, `.wri`, `.wpd`, `.sdw`.
-  - [ ] Spreadsheet-family -> XLSX + PDF: `.xls`, `.xlw`, `.xlt`, `.wk1`, `.wk3`, `.wk4`, `.wks`, `.123`, `.wb1`, `.wb2`, `.wq1`, `.wq2`, `.sdc`.
-  - [ ] Presentation-family -> PPTX + PDF: `.ppt`, `.pps`, `.pot`, `.sdd`.
+- [x] Mirror recovered originals into customer-facing `Converted` paths without changing the forensic source tree.
+- [x] Remove DMDE artifact path segments from delivery paths (`$Noname`, `$Root`, raw-signature folders) while preserving forensic path mapping.
+- [x] Resolve name collisions deterministically (`[recovered copy N]`).
+- [x] Preserve recovery-method labels: normal filesystem, DMDE filesystem recovery, signature recovery.
+- [x] Support current source extensions/plans:
+  - [x] Word-family -> DOCX + PDF: `.doc`, `.rtf`, `.wps`, `.wri`, `.wpd`, `.sdw`.
+  - [x] Spreadsheet-family -> XLSX + PDF: `.xls`, `.xlw`, `.xlt`, `.wk1`, `.wk3`, `.wk4`, `.wks`, `.123`, `.wb1`, `.wb2`, `.wq1`, `.wq2`, `.sdc`.
+  - [x] Presentation-family -> PPTX + PDF: `.ppt`, `.pps`, `.pot`, `.sdd`.
 - [ ] Configurable worker/thread count.
 - [ ] Per-output timeout (default 45 s to match current workflow).
 - [ ] Process-tree kill on timeout.

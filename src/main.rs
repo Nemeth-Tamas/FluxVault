@@ -1,6 +1,7 @@
 mod app;
 mod batch_extraction;
 mod composite;
+mod conversion;
 mod dmde_logs;
 mod external_tools;
 mod extraction;

@@ -1727,13 +1727,61 @@ impl FluxVaultApp {
             "Régi Office dokumentumok ellenőrzött DOCX, XLSX, PPTX és PDF átalakítása.",
         );
 
-        ui_theme::section(ui, "Még nem elérhető", |ui| {
+        ui_theme::section(ui, "Delivery eredetik és conversion plan", |ui| {
+            ui.label(
+                "A recovered eredetiket a Converted fába tükrözi anélkül, hogy a forensic Extracted fát módosítaná. Eltávolítja a DMDE artifact mappaneveket, elkülöníti a signature recovery fájlokat, és determinisztikusan feloldja a névütközéseket.",
+            );
+            if ui
+                .add_enabled(
+                    self.project.is_some() && !self.conversion_planning_running,
+                    egui::Button::new(if self.conversion_planning_running {
+                        "Delivery plan készítése folyamatban..."
+                    } else {
+                        "Eredetik tükrözése és conversion plan készítése"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_conversion_planning();
+            }
+            ui.label(&self.conversion_planning_stage);
+
+            if let Some(error) = &self.conversion_planning_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] A delivery/conversion tervezés sikertelen.",
+                );
+                ui.monospace(error);
+            }
+            if let Some(result) = &self.conversion_planning_result {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    "[CONVERSION PLAN KESZ]",
+                );
+                ui.label(format!(
+                    "{} lemez | {} tükrözött | {} újrahasznált | {} Office jelölt",
+                    result.disk_count,
+                    result.mirrored_files,
+                    result.reused_files,
+                    result.conversion_candidates
+                ));
+                ui.monospace(format!("Útvonaltérkép: {}", result.path_map.display()));
+                ui.monospace(format!(
+                    "Conversion plan: {}",
+                    result.conversion_plan.display()
+                ));
+            }
+        });
+
+        ui.add_space(12.0);
+
+        ui_theme::section(ui, "LibreOffice átalakítás", |ui| {
             ui.colored_label(
                 egui::Color32::from_rgb(220, 180, 80),
-                "A konverziós futtatás még nincs implementálva, ezért nincs aktív indítógomb.",
+                "A tényleges DOCX/XLSX/PPTX/PDF futtatás a következő lépés; a források és célok most már determinisztikus planből jönnek.",
             );
             ui.label(
-                "A LibreOffice felismerése és egészségügyi ellenőrzése már a Beállítások oldalon működik.",
+                "A LibreOffice felismerése és egészségügyi ellenőrzése a Beállítások oldalon működik.",
             );
         });
     }

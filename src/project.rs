@@ -175,6 +175,10 @@ impl ProjectState {
         self.root.join("Extracted")
     }
 
+    pub fn converted_dir(&self) -> PathBuf {
+        self.root.join("Converted")
+    }
+
     pub fn recovery_dir(&self) -> PathBuf {
         self.root.join("Recovery")
     }

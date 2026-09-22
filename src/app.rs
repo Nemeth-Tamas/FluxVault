@@ -10,6 +10,9 @@ use chrono::{DateTime, Local, Utc};
 use crate::{
     batch_extraction::{self, BatchExtractionEvent, BatchExtractionRequest, BatchExtractionResult},
     composite::{self, CompositeEvent, CompositeResult, CompositeSource},
+    conversion::{
+        self, ConversionPlanningEvent, ConversionPlanningRequest, ConversionPlanningResult,
+    },
     external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
     extraction::{self, ExtractionEvent, ExtractionPresence, ExtractionResult},
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
@@ -124,6 +127,11 @@ pub struct FluxVaultApp {
     manifest_stage: String,
     manifest_result: Option<ManifestResult>,
     manifest_error: Option<String>,
+    conversion_planning_receiver: Option<Receiver<ConversionPlanningEvent>>,
+    conversion_planning_running: bool,
+    conversion_planning_stage: String,
+    conversion_planning_result: Option<ConversionPlanningResult>,
+    conversion_planning_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -203,6 +211,11 @@ impl FluxVaultApp {
             manifest_stage: "Nincs aktív manifest-készítés.".to_owned(),
             manifest_result: None,
             manifest_error: None,
+            conversion_planning_receiver: None,
+            conversion_planning_running: false,
+            conversion_planning_stage: "Nincs aktív delivery/conversion tervezés.".to_owned(),
+            conversion_planning_result: None,
+            conversion_planning_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -1090,6 +1103,85 @@ impl FluxVaultApp {
 
         if !finished {
             self.manifest_receiver = Some(receiver);
+        }
+    }
+
+    fn start_conversion_planning(&mut self) {
+        if self.conversion_planning_running {
+            return;
+        }
+        let Some(project) = &self.project else {
+            self.status =
+                "Delivery/conversion tervezés előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let request = ConversionPlanningRequest {
+            extracted_root: project.extracted_dir(),
+            converted_root: project.converted_dir(),
+            reports_directory: project.reports_dir(),
+        };
+        self.conversion_planning_receiver = Some(conversion::spawn_conversion_planning(request));
+        self.conversion_planning_running = true;
+        self.conversion_planning_stage =
+            "Recovered eredetik delivery útvonalainak tervezése...".to_owned();
+        self.conversion_planning_result = None;
+        self.conversion_planning_error = None;
+        self.status = self.conversion_planning_stage.clone();
+        self.log("Delivery path map és legacy Office conversion plan készítése elindult.");
+    }
+
+    fn poll_conversion_planning_events(&mut self) {
+        let Some(receiver) = self.conversion_planning_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+        loop {
+            match receiver.try_recv() {
+                Ok(ConversionPlanningEvent::Stage(stage)) => {
+                    self.conversion_planning_stage = stage;
+                }
+                Ok(ConversionPlanningEvent::Finished(result)) => {
+                    finished = true;
+                    self.conversion_planning_running = false;
+                    match result {
+                        Ok(result) => {
+                            self.conversion_planning_stage =
+                                "Delivery útvonalak és conversion plan elkészült.".to_owned();
+                            self.status = self.conversion_planning_stage.clone();
+                            self.log(format!(
+                                "Conversion plan: {} legacy Office jelölt, {} új eredeti tükör.",
+                                result.conversion_candidates, result.mirrored_files
+                            ));
+                            self.conversion_planning_result = Some(result);
+                            self.conversion_planning_error = None;
+                        }
+                        Err(error) => {
+                            self.conversion_planning_stage =
+                                "Delivery/conversion tervezés sikertelen.".to_owned();
+                            self.status = self.conversion_planning_stage.clone();
+                            self.log(format!("Conversion plan hiba: {error}"));
+                            self.conversion_planning_result = None;
+                            self.conversion_planning_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.conversion_planning_running = false;
+                    self.conversion_planning_stage =
+                        "A delivery/conversion tervező háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.conversion_planning_stage.clone();
+                    self.conversion_planning_error =
+                        Some("A delivery/conversion tervező eredmény nélkül leállt.".to_owned());
+                    self.log("A delivery/conversion tervező háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+        if !finished {
+            self.conversion_planning_receiver = Some(receiver);
         }
     }
 
