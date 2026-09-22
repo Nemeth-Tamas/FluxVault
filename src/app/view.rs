@@ -377,11 +377,24 @@ impl eframe::App for FluxVaultApp {
                                         egui::vec2(navigation_width, content_height),
                                         egui::Layout::top_down(egui::Align::LEFT),
                                         |ui| {
+                                            let navigation_height =
+                                                (content_height - 24.0).max(120.0);
+
                                             egui::Frame::group(ui.style())
                                                 .inner_margin(egui::Margin::same(12))
                                                 .show(ui, |ui| {
                                                     ui.set_min_width(navigation_width - 24.0);
-                                                    self.navigation(ui);
+
+                                                    egui::ScrollArea::vertical()
+                                                        .id_salt("navigation_scroll")
+                                                        .auto_shrink([false, false])
+                                                        .max_height(navigation_height)
+                                                        .show(ui, |ui| {
+                                                            ui.set_min_width(
+                                                                navigation_width - 24.0,
+                                                            );
+                                                            self.navigation(ui);
+                                                        });
                                                 });
                                         },
                                     );
