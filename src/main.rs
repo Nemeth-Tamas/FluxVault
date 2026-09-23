@@ -18,6 +18,7 @@ mod package;
 mod pipeline;
 mod project;
 mod recovery_backup;
+mod recovery_plan;
 mod report;
 mod safety;
 mod sector_recovery;

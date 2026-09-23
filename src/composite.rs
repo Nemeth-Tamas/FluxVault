@@ -17,6 +17,7 @@ const PROVENANCE_SCHEMA_VERSION: u32 = 1;
 pub struct CompositeSource {
     pub attempt_number: u32,
     pub image_path: PathBuf,
+    pub expected_sha256: Option<String>,
     pub total_sectors: usize,
     pub bad_sectors: Vec<u64>,
 }
@@ -101,18 +102,47 @@ fn run_composite(
     request: &CompositeRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<CompositeResult, String> {
+    if request.disk_number == 0 {
+        return Err("A kompozit lemezszáma nem lehet nulla.".to_owned());
+    }
     if request.sources.len() < 2 {
         return Err("Kompozit képhez legalább két acquisition próbálkozás szükséges.".to_owned());
     }
 
     send_stage("Forráspróbálkozások read-only ellenőrzése és hash-elése...");
     let mut loaded = Vec::with_capacity(request.sources.len());
+    let mut attempt_numbers = BTreeSet::new();
 
     for source in &request.sources {
+        if !attempt_numbers.insert(source.attempt_number) {
+            return Err(format!(
+                "A(z) {:03} próbálkozás többször szerepel a kompozit forrásai között.",
+                source.attempt_number
+            ));
+        }
         if source.total_sectors == 0 {
             return Err(format!(
                 "A(z) {:03} próbálkozás szektorszáma nulla.",
                 source.attempt_number
+            ));
+        }
+
+        let metadata = fs::symlink_metadata(&source.image_path).map_err(|error| {
+            format!(
+                "Nem vizsgálható a forráskép {}: {error}",
+                source.image_path.display()
+            )
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(format!(
+                "A kompozit forrása nem közvetlen, szabályos fájl: {}",
+                source.image_path.display()
+            ));
+        }
+        if metadata.len() > 64 * 1024 * 1024 {
+            return Err(format!(
+                "A kompozit forrása meghaladja a 64 MiB offline floppy méretkorlátot: {}",
+                source.image_path.display()
             ));
         }
 
@@ -123,12 +153,31 @@ fn run_composite(
             )
         })?;
         let sha256 = sha256_bytes(&bytes);
+        if source
+            .expected_sha256
+            .as_ref()
+            .is_some_and(|expected| !sha256.eq_ignore_ascii_case(expected))
+        {
+            return Err(format!(
+                "A(z) {:03} próbálkozás forrásképe eltér a rögzített SHA-256 értéktől: {}",
+                source.attempt_number,
+                source.image_path.display()
+            ));
+        }
+
+        let bad_sectors = source.bad_sectors.iter().copied().collect::<BTreeSet<_>>();
+        if bad_sectors.len() != source.bad_sectors.len() {
+            return Err(format!(
+                "A(z) {:03} próbálkozás hibás LBA listája ismétlődő értéket tartalmaz.",
+                source.attempt_number
+            ));
+        }
 
         loaded.push(LoadedSource {
             source: source.clone(),
             bytes,
             sha256,
-            bad_sectors: source.bad_sectors.iter().copied().collect(),
+            bad_sectors,
         });
     }
 
@@ -171,6 +220,29 @@ fn run_composite(
                 "A(z) {:03} próbálkozás hibás LBA listája a képen kívüli értéket tartalmaz.",
                 source.source.attempt_number
             ));
+        }
+    }
+
+    // A geometry match alone cannot prove that two captures belong to the same disk.
+    // Refuse to merge captures if any sector marked readable in both disagrees.
+    for lba in 0..total_sectors as u64 {
+        let mut first_good: Option<&LoadedSource> = None;
+        let start = lba as usize * bytes_per_sector;
+        let end = start + bytes_per_sector;
+        for source in &loaded {
+            if source.bad_sectors.contains(&lba) {
+                continue;
+            }
+            if let Some(first) = first_good {
+                if first.bytes[start..end] != source.bytes[start..end] {
+                    return Err(format!(
+                        "A(z) {lba} LBA mindkét próbálkozásban olvasható, de eltér: #{:03} és #{:03}. A képek nem kombinálhatók biztonságosan.",
+                        first.source.attempt_number, source.source.attempt_number
+                    ));
+                }
+            } else {
+                first_good = Some(source);
+            }
         }
     }
 
@@ -375,12 +447,14 @@ mod tests {
                 CompositeSource {
                     attempt_number: 1,
                     image_path: first,
+                    expected_sha256: None,
                     total_sectors: 4,
                     bad_sectors: vec![1],
                 },
                 CompositeSource {
                     attempt_number: 2,
                     image_path: second,
+                    expected_sha256: None,
                     total_sectors: 4,
                     bad_sectors: vec![2, 3],
                 },
@@ -417,12 +491,14 @@ mod tests {
                 CompositeSource {
                     attempt_number: 1,
                     image_path: first,
+                    expected_sha256: None,
                     total_sectors: 2,
                     bad_sectors: vec![1],
                 },
                 CompositeSource {
                     attempt_number: 2,
                     image_path: second,
+                    expected_sha256: None,
                     total_sectors: 2,
                     bad_sectors: vec![1],
                 },
@@ -435,6 +511,83 @@ mod tests {
         assert!(result.replacements.is_empty());
         assert_eq!(result.unresolved_bad_sectors, vec![1]);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_source_changed_since_acquisition() {
+        let root = test_root("hash-mismatch");
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.img");
+        let second = root.join("second.img");
+        fs::write(&first, vec![0u8; 2 * 512]).unwrap();
+        fs::write(&second, vec![0u8; 2 * 512]).unwrap();
+        let request = CompositeRequest {
+            recovery_root: root.join("Recovery"),
+            disk_number: 1,
+            sources: vec![
+                CompositeSource {
+                    attempt_number: 1,
+                    image_path: first,
+                    expected_sha256: Some("0".repeat(64)),
+                    total_sectors: 2,
+                    bad_sectors: vec![1],
+                },
+                CompositeSource {
+                    attempt_number: 2,
+                    image_path: second,
+                    expected_sha256: None,
+                    total_sectors: 2,
+                    bad_sectors: vec![],
+                },
+            ],
+        };
+        assert!(
+            run_composite(&request, &|_| {})
+                .unwrap_err()
+                .contains("SHA-256")
+        );
+        assert!(!request.recovery_root.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refuses_to_merge_disagreeing_readable_sectors() {
+        let root = test_root("different-disk");
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.img");
+        let second = root.join("second.img");
+        let first_bytes = vec![0u8; 3 * 512];
+        let mut second_bytes = first_bytes.clone();
+        second_bytes[0] = 0xA5; // Boot sector is marked good in both attempts.
+        fs::write(&first, first_bytes).unwrap();
+        fs::write(&second, second_bytes).unwrap();
+        let request = CompositeRequest {
+            recovery_root: root.join("Recovery"),
+            disk_number: 1,
+            sources: vec![
+                CompositeSource {
+                    attempt_number: 1,
+                    image_path: first,
+                    expected_sha256: None,
+                    total_sectors: 3,
+                    bad_sectors: vec![1],
+                },
+                CompositeSource {
+                    attempt_number: 2,
+                    image_path: second,
+                    expected_sha256: None,
+                    total_sectors: 3,
+                    bad_sectors: vec![2],
+                },
+            ],
+        };
+        assert!(
+            run_composite(&request, &|_| {})
+                .unwrap_err()
+                .contains("nem kombinálhatók")
+        );
+        assert!(!request.recovery_root.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

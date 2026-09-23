@@ -15,6 +15,7 @@ use crate::{
     package::{self, PackageRequest},
     pipeline::{self, PipelineRequest},
     project::ProjectState,
+    recovery_plan::{self, RecoveryAction},
 };
 
 const HELP: &str = "FluxVault — floppy archiving\n\
@@ -25,6 +26,8 @@ Usage:\n\
   fluxvault disk list [--project PATH]\n\
   fluxvault disk show N [--project PATH]\n\
                                     Inspect saved disk attempts\n\
+  fluxvault recovery plan [N] [--project PATH]\n\
+                                    Inspect evidence-ranked offline next steps\n\
   fluxvault audit [--project PATH]  Verify image/extraction evidence\n\
   fluxvault process [--project PATH]\n\
                                     Extract, convert, audit, and report\n\
@@ -220,6 +223,57 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                         .collect::<Vec<_>>()
                         .join("\n")
                 ))
+            }
+        }
+        Some("recovery")
+            if destination.is_none()
+                && (positional.len() == 2 || positional.len() == 3)
+                && positional[1] == "plan" =>
+        {
+            let requested_disk = positional
+                .get(2)
+                .map(|text| {
+                    text.parse::<u32>()
+                        .ok()
+                        .filter(|number| *number > 0)
+                        .ok_or("recovery plan requires a positive disk number")
+                })
+                .transpose()?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let plans = recovery_plan::plan_project(&project.images_dir())?;
+            let plans = plans
+                .into_iter()
+                .filter(|plan| requested_disk.is_none_or(|number| plan.disk_number == number))
+                .collect::<Vec<_>>();
+            if let Some(number) = requested_disk {
+                if plans.is_empty() {
+                    return Err(format!("No saved disk {number:03} in this project"));
+                }
+            }
+            needs_attention = plans
+                .iter()
+                .any(|plan| plan.action != RecoveryAction::Complete);
+            if json_output {
+                Ok(json!({"project": project.root(), "plans": plans}).to_string())
+            } else if plans.is_empty() {
+                Ok("No saved disks in this project.".to_owned())
+            } else {
+                Ok(plans
+                    .iter()
+                    .map(|plan| {
+                        format!(
+                            "{:03} | {:?} | {} bad sectors | composite candidates: {} | mirrored FAT candidates: {}\n  {}",
+                            plan.disk_number,
+                            plan.action,
+                            plan.best_bad_sectors,
+                            plan.composite_candidate_sectors,
+                            plan.mirrored_fat_candidate_sectors,
+                            plan.reason
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
             }
         }
         Some("audit") if positional.len() == 1 && destination.is_none() => {

@@ -166,8 +166,10 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [ ] Show current image, bad-sector count/list, source log, extraction result, prior attempts, automated decisions, and optional operator notes in one screen.
 - [x] **Re-read with USB drive** action creates another immutable acquisition attempt.
 - [x] Compare attempts sector-by-sector.
-- [x] For 1-2 bad sectors, attempt evidence-based mirrored-FAT reconstruction into a separate derived image with per-sector provenance; never guess arbitrary bytes.
+- [x] Reconstruct readable mirrored-FAT sectors into a separate derived image with per-sector provenance even when the disk has more than two bad sectors; other sectors remain unresolved and are never guessed.
 - [x] Build an optional **best composite sector image** from multiple attempts, but only with a provenance map recording the source attempt for every replaced sector.
+- [x] Reject composite sources whose recorded image hash changed or whose mutually readable sectors disagree; reject duplicate attempt IDs and unsafe source file types.
+- [x] Add a read-only per-disk recovery plan (`fluxvault recovery plan`) that re-hashes saved attempts and ranks composite, mirrored-FAT, and physical reread/flux candidates without writing to source media.
 - [x] Never destroy original attempt images when creating a composite.
 - [x] Legacy/fallback compatibility: allow import of a DMDE-recovered folder and DMDE log. This must not remain part of the intended normal workflow.
 - [ ] Immediately re-run extraction/audit state after a new recovery result is imported.

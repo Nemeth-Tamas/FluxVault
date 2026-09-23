@@ -477,101 +477,97 @@ impl FluxVaultApp {
         let quick_reconstruction_ready = self.project.is_some()
             && latest_attempt
                 .as_ref()
-                .is_some_and(|attempt| matches!(attempt.bad_sectors.len(), 1 | 2))
+                .is_some_and(|attempt| !attempt.bad_sectors.is_empty())
             && !self.reconstruction_running;
 
-        ui_theme::section(
-            ui,
-            "1-2 hibás szektor: bizonyíték-alapú rekonstrukció",
-            |ui| {
-                ui.label(
+        ui_theme::section(ui, "Tükrözött FAT szektorok helyreállítása", |ui| {
+            ui.label(
                 "A FluxVault csak redundáns, olvasható adatokból készít külön származtatott képet. Ismeretlen fájladatot nem talál ki.",
             );
 
-                if let Some(attempt) = &latest_attempt {
-                    ui.label(format!(
-                        "Legutóbbi próbálkozás: {:03} | hibás szektorok: {}",
-                        attempt.attempt_number,
-                        attempt.bad_sectors.len()
+            if let Some(attempt) = &latest_attempt {
+                ui.label(format!(
+                    "Legutóbbi próbálkozás: {:03} | hibás szektorok: {}",
+                    attempt.attempt_number,
+                    attempt.bad_sectors.len()
+                ));
+
+                if attempt.bad_sectors.is_empty() {
+                    ui.weak("A lemezkép hibamentes; rekonstrukció nem szükséges.");
+                } else if attempt.bad_sectors.len() > 2 {
+                    ui.weak("A FAT másik, olvasható másolatából helyreállítható szektorokat vizsgálja; a többi hibás szektor megoldatlan marad.");
+                }
+            } else {
+                ui.weak("Nincs elemezhető acquisition.");
+            }
+
+            ui.add_space(6.0);
+
+            if ui
+                .add_enabled(
+                    quick_reconstruction_ready,
+                    egui::Button::new(if self.reconstruction_running {
+                        "Rekonstrukció elemzése folyamatban..."
+                    } else {
+                        "FAT redundancia elemzése"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_sector_reconstruction();
+            }
+
+            ui.label(&self.reconstruction_stage);
+
+            if let Some(error) = &self.reconstruction_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] A rekonstrukciós elemzés sikertelen.",
+                );
+                ui.monospace(error);
+            }
+
+            if let Some(result) = &self.reconstruction_result {
+                ui.label(format!("Fájlrendszer: {}", result.filesystem));
+                ui.label(format!(
+                    "Rekonstruált szektorok: {} | megoldatlan: {}",
+                    result.reconstructed.len(),
+                    result.unresolved_bad_sectors.len()
+                ));
+                ui.monospace(format!("Forrás: {}", result.source_image.display()));
+                ui.monospace(format!("Forrás SHA-256: {}", result.source_sha256));
+
+                for record in &result.reconstructed {
+                    ui.monospace(format!(
+                        "LBA {} <- tükrözött FAT LBA {} ({})",
+                        record.target_lba, record.source_lba, record.method
                     ));
-
-                    if attempt.bad_sectors.len() > 2 {
-                        ui.weak("A gyors elemzés legfeljebb két hibás szektorra használható.");
-                    } else if attempt.bad_sectors.is_empty() {
-                        ui.weak("A lemezkép hibamentes; rekonstrukció nem szükséges.");
-                    }
-                } else {
-                    ui.weak("Nincs elemezhető acquisition.");
                 }
 
-                ui.add_space(6.0);
-
-                if ui
-                    .add_enabled(
-                        quick_reconstruction_ready,
-                        egui::Button::new(if self.reconstruction_running {
-                            "Rekonstrukció elemzése folyamatban..."
-                        } else {
-                            "FAT redundancia elemzése"
-                        }),
-                    )
-                    .clicked()
-                {
-                    self.start_sector_reconstruction();
+                if !result.unresolved_bad_sectors.is_empty() {
+                    ui.weak(format!(
+                        "Nem található ki biztonságosan: {:?}",
+                        result.unresolved_bad_sectors
+                    ));
                 }
 
-                ui.label(&self.reconstruction_stage);
-
-                if let Some(error) = &self.reconstruction_error {
+                if let Some(path) = &result.derived_image {
                     ui.colored_label(
-                        egui::Color32::from_rgb(220, 70, 70),
-                        "[HIBA] A rekonstrukciós elemzés sikertelen.",
+                        egui::Color32::from_rgb(70, 200, 120),
+                        "[SZARMAZTATOTT KEP ELKESZULT]",
                     );
-                    ui.monospace(error);
+                    ui.monospace(format!("Származtatott kép: {}", path.display()));
                 }
 
-                if let Some(result) = &self.reconstruction_result {
-                    ui.label(format!("Fájlrendszer: {}", result.filesystem));
-                    ui.label(format!(
-                        "Rekonstruált szektorok: {} | megoldatlan: {}",
-                        result.reconstructed.len(),
-                        result.unresolved_bad_sectors.len()
-                    ));
-                    ui.monospace(format!("Forrás: {}", result.source_image.display()));
-                    ui.monospace(format!("Forrás SHA-256: {}", result.source_sha256));
-
-                    for record in &result.reconstructed {
-                        ui.monospace(format!(
-                            "LBA {} <- tükrözött FAT LBA {} ({})",
-                            record.target_lba, record.source_lba, record.method
-                        ));
-                    }
-
-                    if !result.unresolved_bad_sectors.is_empty() {
-                        ui.weak(format!(
-                            "Nem található ki biztonságosan: {:?}",
-                            result.unresolved_bad_sectors
-                        ));
-                    }
-
-                    if let Some(path) = &result.derived_image {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(70, 200, 120),
-                            "[SZARMAZTATOTT KEP ELKESZULT]",
-                        );
-                        ui.monospace(format!("Származtatott kép: {}", path.display()));
-                    }
-
-                    if let Some(path) = &result.provenance_path {
-                        ui.monospace(format!("Provenance: {}", path.display()));
-                    }
-
-                    if let Some(hash) = &result.derived_sha256 {
-                        ui.monospace(format!("Származtatott SHA-256: {hash}"));
-                    }
+                if let Some(path) = &result.provenance_path {
+                    ui.monospace(format!("Provenance: {}", path.display()));
                 }
-            },
-        );
+
+                if let Some(hash) = &result.derived_sha256 {
+                    ui.monospace(format!("Származtatott SHA-256: {hash}"));
+                }
+            }
+        });
 
         ui.add_space(16.0);
 

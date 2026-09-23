@@ -796,15 +796,15 @@ impl FluxVaultApp {
             return;
         };
 
-        if attempt.bad_sectors.is_empty() || attempt.bad_sectors.len() > 2 {
-            self.status =
-                "A gyors rekonstrukció 1 vagy 2 hibás szektor esetén használható.".to_owned();
+        if attempt.bad_sectors.is_empty() {
+            self.status = "A FAT rekonstrukció hibás szektorlistát igényel.".to_owned();
             return;
         }
 
         let image_path = project.images_dir().join(&attempt.image_file);
         let request = sector_recovery::ReconstructionRequest {
             image_path: image_path.clone(),
+            expected_sha256: (!attempt.sha256.is_empty()).then(|| attempt.sha256.clone()),
             recovery_root: project.recovery_dir(),
             disk_number: self.current_disk_number,
             attempt_number: attempt.attempt_number,
@@ -924,6 +924,7 @@ impl FluxVaultApp {
             .map(|attempt| CompositeSource {
                 attempt_number: attempt.attempt_number,
                 image_path: project.images_dir().join(&attempt.image_file),
+                expected_sha256: (!attempt.sha256.is_empty()).then(|| attempt.sha256.clone()),
                 total_sectors: attempt.total_sectors,
                 bad_sectors: attempt.bad_sectors.clone(),
             })

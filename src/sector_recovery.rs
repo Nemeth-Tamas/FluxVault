@@ -16,6 +16,7 @@ const PROVENANCE_SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Clone)]
 pub struct ReconstructionRequest {
     pub image_path: PathBuf,
+    pub expected_sha256: Option<String>,
     pub recovery_root: PathBuf,
     pub disk_number: u32,
     pub attempt_number: u32,
@@ -89,13 +90,23 @@ fn run_reconstruction(
     request: &ReconstructionRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ReconstructionResult, String> {
-    if request.bad_sectors.is_empty() || request.bad_sectors.len() > 2 {
-        return Err(
-            "A gyors rekonstrukció pontosan 1 vagy 2 hibás szektorra használható.".to_owned(),
-        );
+    if request.bad_sectors.is_empty() {
+        return Err("A FAT rekonstrukció hibás szektorlistát igényel.".to_owned());
     }
 
     send_stage("Forrás lemezkép és FAT geometria elemzése...");
+    let metadata = fs::symlink_metadata(&request.image_path).map_err(|error| {
+        format!(
+            "Nem vizsgálható a forrás lemezkép {}: {error}",
+            request.image_path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() || metadata.len() > 64 * 1024 * 1024 {
+        return Err(
+            "A FAT rekonstrukció csak közvetlen, legfeljebb 64 MiB méretű lemezképen használható."
+                .to_owned(),
+        );
+    }
     let source_bytes = fs::read(&request.image_path).map_err(|error| {
         format!(
             "Nem sikerült read-only módban beolvasni a forrás lemezképet {}: {error}",
@@ -103,7 +114,26 @@ fn run_reconstruction(
         )
     })?;
     let source_sha256 = sha256_bytes(&source_bytes);
+    if request
+        .expected_sha256
+        .as_ref()
+        .is_some_and(|expected| !source_sha256.eq_ignore_ascii_case(expected))
+    {
+        return Err(format!(
+            "A forrás lemezkép SHA-256 értéke eltér a rögzített acquisition eredménytől: {}",
+            request.image_path.display()
+        ));
+    }
     let layout = FatLayout::parse(&source_bytes)?;
+    let unique_bad = request.bad_sectors.iter().copied().collect::<BTreeSet<_>>();
+    if unique_bad.len() != request.bad_sectors.len()
+        || unique_bad.iter().any(|lba| *lba >= layout.total_sectors)
+    {
+        return Err(
+            "A FAT rekonstrukció hibás LBA listája ismétlődő vagy képen kívüli értéket tartalmaz."
+                .to_owned(),
+        );
+    }
     let filesystem = format!("FAT{}", layout.fat_bits);
     let (records, unresolved_bad_sectors) =
         plan_reconstruction(&source_bytes, layout, &request.bad_sectors);
@@ -201,6 +231,15 @@ fn run_reconstruction(
         unresolved_bad_sectors,
         filesystem,
     })
+}
+
+pub(crate) fn inspect_mirrored_fat(
+    image: &[u8],
+    bad_sectors: &[u64],
+) -> Result<(usize, usize), String> {
+    let layout = FatLayout::parse(image)?;
+    let (reconstructed, unresolved) = plan_reconstruction(image, layout, bad_sectors);
+    Ok((reconstructed.len(), unresolved.len()))
 }
 
 impl FatLayout {
@@ -456,6 +495,45 @@ mod tests {
     }
 
     #[test]
+    fn repairs_mirrored_fat_even_when_other_sectors_are_bad() {
+        let image = synthetic_fat12_image();
+        let layout = FatLayout::parse(&image).unwrap();
+        let (records, unresolved) = plan_reconstruction(&image, layout, &[1, 30, 50, 70]);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].target_lba, 1);
+        assert_eq!(records[0].source_lba, 3);
+        assert_eq!(unresolved, vec![30, 50, 70]);
+    }
+
+    #[test]
+    fn refuses_changed_source_before_writing_derived_image() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxvault-fat-changed-source-{}-{}",
+            std::process::id(),
+            current_unix_ms()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let image_path = root.join("001.img");
+        fs::write(&image_path, synthetic_fat12_image()).unwrap();
+        let request = ReconstructionRequest {
+            image_path,
+            expected_sha256: Some("0".repeat(64)),
+            recovery_root: root.join("Recovery"),
+            disk_number: 1,
+            attempt_number: 1,
+            bad_sectors: vec![1],
+        };
+        assert!(
+            run_reconstruction(&request, &|_| {})
+                .unwrap_err()
+                .contains("SHA-256")
+        );
+        assert!(!request.recovery_root.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     #[ignore = "requires FLUXVAULT_TEST_IMAGE and FLUXVAULT_TEST_OUTPUT_ROOT"]
     fn reconstructs_redundant_fat_sector_in_real_test_image() {
         let image_path = PathBuf::from(
@@ -471,6 +549,7 @@ mod tests {
         ));
         let request = ReconstructionRequest {
             image_path,
+            expected_sha256: None,
             recovery_root: case_root.join("Recovery"),
             disk_number: 1,
             attempt_number: 1,
