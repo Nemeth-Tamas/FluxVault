@@ -335,6 +335,7 @@ impl eframe::App for FluxVaultApp {
         self.poll_manifest_events();
         self.poll_conversion_planning_events();
         self.poll_conversion_events();
+        self.start_next_queued_extraction();
 
         if self.imaging_running
             || self.tool_check_running

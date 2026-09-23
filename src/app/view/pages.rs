@@ -1230,6 +1230,15 @@ impl FluxVaultApp {
             "Tiszta lemezképek ellenőrzött kibontása, fájlleltára és SHA-256 nyilvántartása.",
         );
 
+        if self.extraction_running || !self.pending_extractions.is_empty() {
+            ui.label(format!(
+                "Automatikus extraction: {} folyamatban, {} várakozik",
+                usize::from(self.extraction_running),
+                self.pending_extractions.len()
+            ));
+            ui.add_space(8.0);
+        }
+
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("Lemez {:03}", self.current_disk_number));
             ui.separator();

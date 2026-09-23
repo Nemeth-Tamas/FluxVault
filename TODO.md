@@ -43,7 +43,7 @@
 - [x] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
 - [x] Recommend the physical write-protect tab for customer disks when available.
 - [x] Query Windows disk writability without attempting a write; refuse a full USB image if protection is not positively reported.
-- [ ] Validate the current USB floppy drive's write-protect reporting with a disposable floppy only. It reported `writable` while a customer disk's physical tab was described as open, and Windows-created filesystem metadata appeared between archived and fresh images. Do not test writes on customer media; treat this drive as unsafe for further customer insertions until the discrepancy is resolved or use a verified hardware write blocker/GW setup.
+- [ ] Validate the current USB floppy drive's write-protect reporting with a **known-good disposable** floppy only. It reported `writable` while a customer disk's physical tab was described as open, and Windows-created filesystem metadata appeared between archived and fresh images. The damaged disposable 001 also reported `writable`, but Windows could not mount its filesystem and an identical raw-sector write failed on flush with `ERROR_INVALID_FUNCTION`; no byte change was observed, so that test is inconclusive. Do not test writes on customer media; treat this drive as unsafe for further customer insertions until the discrepancy is resolved or use a verified hardware write blocker/GW setup.
 - [x] Keep a command/audit log for every external tool invocation.
 - [x] Never silently overwrite a previous acquisition/recovery attempt.
 
@@ -152,6 +152,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
   - [x] extraction failure;
   - [x] apparently readable image with zero recovered files when operator review is warranted.
 - [ ] Automatically run extraction immediately after an eligible acquisition or newly derived preferred image; no separate Files-page action in production mode.
+  - [x] In the current GUI session, queue image-only extraction after each clean USB acquisition without blocking the next physical read.
 - [ ] Automatically re-run extraction and file inventory whenever a better composite, decoded flux image, or reconstructed filesystem becomes preferred.
 - [ ] Replace “operator review required” as the normal next step with a bounded automatic recovery plan; operator review is the final exception state only.
 - [ ] Treat existing manual recovery folders/DMDE imports as legacy compatibility inputs, not as the intended future recovery workflow.

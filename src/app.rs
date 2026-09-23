@@ -1,7 +1,8 @@
 mod view;
 
 use std::{
-    path::PathBuf,
+    collections::VecDeque,
+    path::{Path, PathBuf},
     sync::mpsc::{Receiver, TryRecvError},
 };
 
@@ -46,6 +47,42 @@ enum Page {
     Settings,
 }
 
+#[cfg(test)]
+mod auto_extraction_tests {
+    use super::*;
+
+    fn clean_result() -> ImagingResult {
+        ImagingResult {
+            output_path: PathBuf::from("project/Images/007_attempt_001.img"),
+            metadata_path: PathBuf::from("project/Images/007_attempt_001.json"),
+            log_path: PathBuf::from("project/Logs/007_attempt_001.log"),
+            disk_number: 7,
+            attempt_number: 1,
+            sha256: String::new(),
+            total_sectors: 2880,
+            bad_sectors: Vec::new(),
+            retry_recovered: 0,
+            bytes_written: 1_474_560,
+        }
+    }
+
+    #[test]
+    fn queues_only_clean_images_belonging_to_the_project() {
+        let clean = clean_result();
+        let queued = PendingExtraction::from_clean_acquisition(Path::new("project"), &clean)
+            .expect("clean image should be queued");
+        assert_eq!(queued.disk_number, 7);
+        assert_eq!(queued.attempt_number, 1);
+
+        let mut partial = clean.clone();
+        partial.bad_sectors.push(16);
+        assert!(
+            PendingExtraction::from_clean_acquisition(Path::new("project"), &partial).is_none()
+        );
+        assert!(PendingExtraction::from_clean_acquisition(Path::new("another"), &clean).is_none());
+    }
+}
+
 impl Page {
     fn title(self) -> &'static str {
         match self {
@@ -59,6 +96,30 @@ impl Page {
             Self::Package => "Csomag",
             Self::Settings => "Beállítások",
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingExtraction {
+    project_root: PathBuf,
+    image_path: PathBuf,
+    disk_number: u32,
+    attempt_number: u32,
+}
+
+impl PendingExtraction {
+    fn from_clean_acquisition(project_root: &Path, result: &ImagingResult) -> Option<Self> {
+        if !result.bad_sectors.is_empty()
+            || result.output_path.parent() != Some(project_root.join("Images").as_path())
+        {
+            return None;
+        }
+        Some(Self {
+            project_root: project_root.to_path_buf(),
+            image_path: result.output_path.clone(),
+            disk_number: result.disk_number,
+            attempt_number: result.attempt_number,
+        })
     }
 }
 
@@ -90,6 +151,7 @@ pub struct FluxVaultApp {
     tool_check_receiver: Option<Receiver<ToolCheckEvent>>,
     tool_check_running: bool,
     extraction_receiver: Option<Receiver<ExtractionEvent>>,
+    pending_extractions: VecDeque<PendingExtraction>,
     extraction_running: bool,
     extraction_stage: String,
     extraction_result: Option<ExtractionResult>,
@@ -181,6 +243,7 @@ impl FluxVaultApp {
             tool_check_receiver: None,
             tool_check_running: false,
             extraction_receiver: None,
+            pending_extractions: VecDeque::new(),
             extraction_running: false,
             extraction_stage: "Nincs aktív extraction.".to_owned(),
             extraction_result: None,
@@ -431,6 +494,83 @@ impl FluxVaultApp {
         self.extraction_error = None;
         self.status = format!("Extraction folyamatban: {}", image_path.display());
         self.log(format!("Extraction elindult: {}", image_path.display()));
+    }
+
+    fn queue_extraction_after_imaging(&mut self, result: &ImagingResult) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        if let Some(pending) = PendingExtraction::from_clean_acquisition(project.root(), result) {
+            self.log(format!(
+                "Lemez {:03} automatikus extraction várólistára került (próbálkozás {:03}).",
+                pending.disk_number, pending.attempt_number
+            ));
+            self.pending_extractions.push_back(pending);
+        } else if !result.bad_sectors.is_empty() {
+            self.log(format!(
+                "Lemez {:03}: {} hibás szektor; automatikus extraction helyett recovery szükséges.",
+                result.disk_number,
+                result.bad_sectors.len()
+            ));
+        }
+    }
+
+    fn start_next_queued_extraction(&mut self) {
+        if self.extraction_running || self.batch_extraction_running || self.manifest_running {
+            return;
+        }
+        let Some(seven_zip_executable) = self.ready_tool_path(ToolKind::SevenZip) else {
+            return;
+        };
+        while let Some(pending) = self.pending_extractions.pop_front() {
+            let extracted_root = pending.project_root.join("Extracted");
+            match extraction::inspect_extraction_presence(
+                &extracted_root,
+                pending.disk_number,
+                pending.attempt_number,
+            ) {
+                Ok(
+                    ExtractionPresence::ManualRecovery { .. }
+                    | ExtractionPresence::InvalidAutomatic { .. },
+                ) => {
+                    self.log(format!(
+                        "Lemez {:03}: a meglévő manuális vagy hibás extraction érintetlen maradt.",
+                        pending.disk_number
+                    ));
+                    continue;
+                }
+                Err(error) => {
+                    self.log(format!(
+                        "Lemez {:03}: automatikus extraction ellenőrzési hiba: {error}",
+                        pending.disk_number
+                    ));
+                    continue;
+                }
+                _ => {}
+            }
+
+            let logs_directory = pending.project_root.join("Logs");
+            let request = extraction::ExtractionRequest {
+                seven_zip_executable: seven_zip_executable.clone(),
+                image_path: pending.image_path.clone(),
+                disk_number: pending.disk_number,
+                attempt_number: pending.attempt_number,
+                extracted_root,
+                command_audit_path: logs_directory.join("external-tools.jsonl"),
+                logs_directory,
+            };
+            self.extraction_receiver = Some(extraction::spawn_extraction(request));
+            self.extraction_running = true;
+            self.extraction_stage =
+                format!("Lemez {:03} automatikus extraction...", pending.disk_number);
+            self.extraction_result = None;
+            self.extraction_error = None;
+            self.log(format!(
+                "Automatikus extraction elindult: {}",
+                pending.image_path.display()
+            ));
+            return;
+        }
     }
 
     fn poll_extraction_events(&mut self) {
@@ -1716,6 +1856,7 @@ impl FluxVaultApp {
                         bad_count
                     ));
 
+                    self.queue_extraction_after_imaging(&result);
                     self.imaging_result = Some(result);
                     self.imaging_running = false;
                     finished = true;
