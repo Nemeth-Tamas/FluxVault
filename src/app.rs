@@ -28,6 +28,7 @@ use crate::{
         self, ManualRecoveryImportEvent, ManualRecoveryImportRequest, ManualRecoveryImportResult,
     },
     package::{self, PackageEvent, PackageRequest, PackageResult},
+    pipeline::{self, PipelineEvent, PipelineRequest, PipelineResult},
     project::{self, ProjectState},
     recovery_backup::{self, RecoveryBackupEvent, RecoveryBackupResult},
     report,
@@ -209,6 +210,11 @@ pub struct FluxVaultApp {
     audit_stage: String,
     audit_result: Option<AuditResult>,
     audit_error: Option<String>,
+    pipeline_receiver: Option<Receiver<PipelineEvent>>,
+    pipeline_running: bool,
+    pipeline_stage: String,
+    pipeline_result: Option<PipelineResult>,
+    pipeline_error: Option<String>,
     package_receiver: Option<Receiver<PackageEvent>>,
     package_running: bool,
     package_stage: String,
@@ -311,6 +317,11 @@ impl FluxVaultApp {
             audit_stage: "Nincs aktív bizonyíték-audit.".to_owned(),
             audit_result: None,
             audit_error: None,
+            pipeline_receiver: None,
+            pipeline_running: false,
+            pipeline_stage: "Nincs aktív teljes projektfeldolgozás.".to_owned(),
+            pipeline_result: None,
+            pipeline_error: None,
             package_receiver: None,
             package_running: false,
             package_stage: "Nincs aktív csomagkészítés.".to_owned(),
@@ -461,7 +472,7 @@ impl FluxVaultApp {
     }
 
     fn start_extraction(&mut self) {
-        if self.extraction_running {
+        if self.extraction_running || self.pipeline_running {
             return;
         }
 
@@ -538,7 +549,11 @@ impl FluxVaultApp {
     }
 
     fn start_next_queued_extraction(&mut self) {
-        if self.extraction_running || self.batch_extraction_running || self.manifest_running {
+        if self.extraction_running
+            || self.batch_extraction_running
+            || self.manifest_running
+            || self.pipeline_running
+        {
             return;
         }
         let Some(seven_zip_executable) = self.ready_tool_path(ToolKind::SevenZip) else {
@@ -660,7 +675,11 @@ impl FluxVaultApp {
     }
 
     fn start_batch_extraction(&mut self) {
-        if self.batch_extraction_running || self.extraction_running || self.manifest_running {
+        if self.batch_extraction_running
+            || self.extraction_running
+            || self.manifest_running
+            || self.pipeline_running
+        {
             return;
         }
 
@@ -761,6 +780,9 @@ impl FluxVaultApp {
     }
 
     fn start_sector_reconstruction(&mut self) {
+        if self.pipeline_running {
+            return;
+        }
         if self.reconstruction_running {
             return;
         }
@@ -869,6 +891,9 @@ impl FluxVaultApp {
     }
 
     fn start_composite(&mut self) {
+        if self.pipeline_running {
+            return;
+        }
         if self.composite_running {
             return;
         }
@@ -987,6 +1012,9 @@ impl FluxVaultApp {
     }
 
     fn start_recovery_backup(&mut self) {
+        if self.pipeline_running {
+            return;
+        }
         if self.recovery_backup_running {
             return;
         }
@@ -1094,6 +1122,9 @@ impl FluxVaultApp {
     }
 
     fn start_manual_recovery_import(&mut self) {
+        if self.pipeline_running {
+            return;
+        }
         if self.manual_recovery_import_running {
             return;
         }
@@ -1207,7 +1238,7 @@ impl FluxVaultApp {
     }
 
     fn start_recovered_manifest(&mut self) {
-        if self.manifest_running {
+        if self.manifest_running || self.pipeline_running {
             return;
         }
 
@@ -1284,7 +1315,7 @@ impl FluxVaultApp {
     }
 
     fn start_conversion_planning(&mut self) {
-        if self.conversion_planning_running || self.conversion_running {
+        if self.conversion_planning_running || self.conversion_running || self.pipeline_running {
             return;
         }
         let Some(project) = &self.project else {
@@ -1363,7 +1394,7 @@ impl FluxVaultApp {
     }
 
     fn start_conversion(&mut self) {
-        if self.conversion_running || self.conversion_planning_running {
+        if self.conversion_running || self.conversion_planning_running || self.pipeline_running {
             return;
         }
         let Some(project) = &self.project else {
@@ -1454,7 +1485,7 @@ impl FluxVaultApp {
     }
 
     fn start_audit(&mut self) {
-        if self.audit_running {
+        if self.audit_running || self.pipeline_running {
             return;
         }
         let Some(project) = &self.project else {
@@ -1519,8 +1550,103 @@ impl FluxVaultApp {
         }
     }
 
+    fn can_start_pipeline(&self) -> bool {
+        self.project.is_some()
+            && !self.pipeline_running
+            && !self.imaging_running
+            && !self.extraction_running
+            && self.pending_extractions.is_empty()
+            && !self.batch_extraction_running
+            && !self.reconstruction_running
+            && !self.composite_running
+            && !self.recovery_backup_running
+            && !self.manual_recovery_import_running
+            && !self.manifest_running
+            && !self.conversion_planning_running
+            && !self.conversion_running
+            && !self.audit_running
+            && !self.package_running
+            && self.ready_tool_path(ToolKind::SevenZip).is_some()
+            && self.ready_tool_path(ToolKind::LibreOffice).is_some()
+    }
+
+    fn start_pipeline(&mut self) {
+        if !self.can_start_pipeline() {
+            self.status = "A projektfeldolgozáshoz szabad munkafolyamat és működő 7-Zip/LibreOffice szükséges.".to_owned();
+            return;
+        }
+        let project = self.project.clone().expect("checked above");
+        let request = PipelineRequest {
+            project,
+            seven_zip_executable: self
+                .ready_tool_path(ToolKind::SevenZip)
+                .expect("checked above"),
+            libreoffice_executable: self
+                .ready_tool_path(ToolKind::LibreOffice)
+                .expect("checked above"),
+            command_audit_path: self.tool_audit_path(),
+        };
+        self.pipeline_receiver = Some(pipeline::spawn_pipeline(request));
+        self.pipeline_running = true;
+        self.pipeline_stage = "Teljes projektfeldolgozás előkészítése...".to_owned();
+        self.pipeline_result = None;
+        self.pipeline_error = None;
+        self.status = self.pipeline_stage.clone();
+        self.log("Automatikus képfeldolgozás, extraction, konverzió, audit és jelentés indult.");
+    }
+
+    fn poll_pipeline_events(&mut self) {
+        let Some(receiver) = self.pipeline_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+        loop {
+            match receiver.try_recv() {
+                Ok(PipelineEvent::Stage(stage)) => self.pipeline_stage = stage,
+                Ok(PipelineEvent::Finished(result)) => {
+                    finished = true;
+                    self.pipeline_running = false;
+                    match result {
+                        Ok(result) => {
+                            self.pipeline_stage =
+                                "Projektfeldolgozás kész; kivételek ellenőrzendők.".to_owned();
+                            self.status = self.pipeline_stage.clone();
+                            self.log(format!("Projektfeldolgozás: {} lemez, {} ellenőrzött, {} figyelmet igényel.",
+                                result.extraction.total_disks, result.audit.verified_disks, result.audit.attention_disks));
+                            self.pipeline_result = Some(result);
+                            self.pipeline_error = None;
+                        }
+                        Err(error) => {
+                            self.pipeline_stage = "Projektfeldolgozás megszakadt.".to_owned();
+                            self.status = self.pipeline_stage.clone();
+                            self.log(format!("Projektfeldolgozási hiba: {error}"));
+                            self.pipeline_result = None;
+                            self.pipeline_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.pipeline_running = false;
+                    self.pipeline_stage =
+                        "A projektfeldolgozó háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.pipeline_stage.clone();
+                    self.pipeline_error =
+                        Some("A projektfeldolgozó eredmény nélkül leállt.".to_owned());
+                    self.log("A projektfeldolgozó háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+        if !finished {
+            self.pipeline_receiver = Some(receiver);
+        }
+    }
+
     fn choose_and_start_package(&mut self) {
-        if self.package_running {
+        if self.package_running || self.pipeline_running {
             return;
         }
         let Some(project) = &self.project else {
@@ -1700,6 +1826,9 @@ impl FluxVaultApp {
     }
 
     fn export_excel_report(&mut self) {
+        if self.pipeline_running {
+            return;
+        }
         let Some(project) = &self.project else {
             self.status = "Excel jelentéshez aktív projekt szükséges.".to_owned();
             return;
@@ -1872,6 +2001,9 @@ impl FluxVaultApp {
     }
 
     fn start_full_imaging(&mut self) {
+        if self.pipeline_running {
+            return;
+        }
         if self.imaging_running {
             return;
         }

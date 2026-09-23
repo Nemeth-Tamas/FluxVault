@@ -41,6 +41,14 @@ struct SessionState {
 
 impl ProjectState {
     pub fn create(root: PathBuf) -> Result<Self, String> {
+        Self::create_with_session(root, true)
+    }
+
+    pub fn create_without_session(root: PathBuf) -> Result<Self, String> {
+        Self::create_with_session(root, false)
+    }
+
+    fn create_with_session(root: PathBuf, remember: bool) -> Result<Self, String> {
         fs::create_dir_all(&root).map_err(|error| {
             format!(
                 "Nem sikerült létrehozni a projektmappát {}: {error}",
@@ -88,7 +96,10 @@ impl ProjectState {
             },
         };
 
-        project.save()?;
+        project.save_metadata()?;
+        if remember {
+            remember_last_project(project.root())?;
+        }
 
         Ok(project)
     }
@@ -130,6 +141,11 @@ impl ProjectState {
     }
 
     pub fn save(&mut self) -> Result<(), String> {
+        self.save_metadata()?;
+        remember_last_project(&self.root)
+    }
+
+    fn save_metadata(&mut self) -> Result<(), String> {
         self.metadata.updated_unix_ms = current_unix_ms()?;
 
         let json = serde_json::to_string_pretty(&self.metadata)
@@ -143,8 +159,6 @@ impl ProjectState {
                 project_file.display()
             )
         })?;
-
-        remember_last_project(&self.root)?;
 
         Ok(())
     }

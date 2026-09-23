@@ -88,7 +88,7 @@ pub fn spawn_batch_extraction(request: BatchExtractionRequest) -> Receiver<Batch
     receiver
 }
 
-fn run_batch_extraction(
+pub(crate) fn run_batch_extraction(
     request: &BatchExtractionRequest,
     send_stage: &impl Fn(&str),
     send_progress: &impl Fn(usize, usize),
@@ -126,7 +126,7 @@ fn run_batch_extraction(
         ));
 
         let attempts = imaging::load_attempts_for_disk(&request.images_directory, disk_number)?;
-        let Some(attempt) = attempts.last() else {
+        let Some(attempt) = select_best_attempt(&attempts, disk.best_attempt_number) else {
             send_progress(index + 1, total_disks);
             continue;
         };
@@ -326,6 +326,12 @@ fn classify_attempt(attempt: &AttemptSummary, presence: &ExtractionPresence) -> 
     }
 
     BatchDisposition::Extract
+}
+
+fn select_best_attempt(attempts: &[AttemptSummary], best_number: u32) -> Option<&AttemptSummary> {
+    attempts
+        .iter()
+        .find(|attempt| attempt.attempt_number == best_number)
 }
 
 fn base_row(disk_number: u32, attempt: &AttemptSummary) -> SummaryRow {
@@ -540,6 +546,28 @@ mod tests {
         assert_eq!(
             classify_attempt(&value, &presence),
             BatchDisposition::Recovery
+        );
+    }
+
+    #[test]
+    fn project_statistics_prefer_an_older_clean_attempt() {
+        let mut clean = attempt();
+        clean.attempt_number = 1;
+        let mut newer = clean.clone();
+        newer.attempt_number = 2;
+        newer.attention_required = true;
+        newer.bad_sectors = vec![16, 24];
+        let attempts = [clean, newer];
+        let selected = select_best_attempt(&attempts, 1).unwrap();
+        assert_eq!(selected.attempt_number, 1);
+        assert_eq!(
+            classify_attempt(
+                selected,
+                &ExtractionPresence::Missing {
+                    expected_directory: PathBuf::new()
+                }
+            ),
+            BatchDisposition::Extract
         );
     }
 

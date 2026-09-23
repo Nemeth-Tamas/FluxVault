@@ -9,8 +9,11 @@ use std::{
 use serde_json::json;
 
 use crate::{
-    audit, imaging,
+    audit,
+    external_tools::{self, ToolKind},
+    imaging,
     package::{self, PackageRequest},
+    pipeline::{self, PipelineRequest},
     project::ProjectState,
 };
 
@@ -20,6 +23,8 @@ Usage:\n\
   fluxvault init [path]             Create a project\n\
   fluxvault status [--project PATH] Show project status\n\
   fluxvault audit [--project PATH]  Verify image/extraction evidence\n\
+  fluxvault process [--project PATH]\n\
+                                    Extract, convert, audit, and report\n\
   fluxvault package build --destination PATH [--project PATH]\n\
                                     Create and verify an archival ZIP\n\
   fluxvault --help                  Show this help\n\
@@ -90,7 +95,7 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             } else {
                 cwd.join(root)
             };
-            let project = ProjectState::create(root)?;
+            let project = ProjectState::create_without_session(root)?;
             if json_output {
                 Ok(
                     json!({"project": project.root(), "name": project.name(), "created": true})
@@ -154,11 +159,66 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
                     "customer_delivery_certified": false}).to_string())
             } else {
                 Ok(format!(
-                    "Evidence audit: {} of {} image/extraction sets verified; {} need attention.\nReport: {}",
+                    "Evidence audit: {} of {} disk evidence sets verified; {} need attention.\nReport: {}",
                     result.verified_disks,
                     result.disk_count,
                     result.attention_disks,
                     result.csv_path.display()
+                ))
+            }
+        }
+        Some("process") if positional.len() == 1 && destination.is_none() => {
+            let root = match project_override {
+                Some(path) if path.is_absolute() => path,
+                Some(path) => cwd.join(path),
+                None => {
+                    discover_project(cwd).ok_or("No FluxVault project found; use --project PATH")?
+                }
+            };
+            let project = ProjectState::open_without_session(root)?;
+            let settings = external_tools::load_settings()?;
+            let command_audit_path = project.logs_dir().join("external-tools.jsonl");
+            let seven_zip_executable = external_tools::find_ready_tool(
+                ToolKind::SevenZip,
+                settings.path(ToolKind::SevenZip),
+                &command_audit_path,
+            )?;
+            let libreoffice_executable = external_tools::find_ready_tool(
+                ToolKind::LibreOffice,
+                settings.path(ToolKind::LibreOffice),
+                &command_audit_path,
+            )?;
+            let result = pipeline::run_pipeline(
+                &PipelineRequest {
+                    project,
+                    seven_zip_executable,
+                    libreoffice_executable,
+                    command_audit_path,
+                },
+                &|stage| eprintln!("{stage}"),
+            )?;
+            if json_output {
+                Ok(json!({"disks": result.extraction.total_disks,
+                    "extracted": result.extraction.extracted_disks,
+                    "recovery_queue": result.extraction.recovery_disks,
+                    "converted_ok": result.conversion.ok,
+                    "converted_partial": result.conversion.partial,
+                    "converted_failed": result.conversion.failed,
+                    "evidence_verified": result.audit.verified_disks,
+                    "evidence_attention": result.audit.attention_disks,
+                    "workbook": result.workbook_path,
+                    "customer_delivery_certified": false})
+                .to_string())
+            } else {
+                Ok(format!(
+                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nConversions: {} OK, {} partial, {} failed.\nWorkbook: {}",
+                    result.extraction.total_disks,
+                    result.audit.verified_disks,
+                    result.audit.attention_disks,
+                    result.conversion.ok,
+                    result.conversion.partial,
+                    result.conversion.failed,
+                    result.workbook_path.display()
                 ))
             }
         }
@@ -228,5 +288,25 @@ mod tests {
     #[test]
     fn rejects_unknown_commands_without_opening_gui() {
         assert!(run(&["acquire".to_owned()], Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn init_creates_a_project_without_gui_session_state() {
+        let root = env::temp_dir().join(format!(
+            "fluxvault-cli-init-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let output = run(
+            &["init".to_owned(), root.display().to_string()],
+            Path::new("."),
+        )
+        .unwrap();
+        assert!(output.contains("Created project"));
+        assert!(root.join("project.json").is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

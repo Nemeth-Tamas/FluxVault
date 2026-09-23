@@ -2,9 +2,10 @@
 //! Conversion and customer-delivery completeness are deliberately not certified yet.
 
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     io::Read,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::mpsc::{self, Receiver},
     thread,
 };
@@ -13,6 +14,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
+    conversion_run,
     extraction::{self, ExtractionPresence},
     imaging,
     project::ProjectState,
@@ -55,8 +57,18 @@ struct DiskEvidence {
     extracted_files: usize,
     extracted_bytes: u64,
     extracted_hashes_verified: bool,
+    conversion_status: String,
+    conversion_jobs: usize,
+    converted_outputs_verified: usize,
     evidence_status: String,
     issue: String,
+}
+
+#[derive(Debug, Default)]
+struct ConversionEvidence {
+    jobs: usize,
+    verified_outputs: usize,
+    issues: Vec<String>,
 }
 
 pub fn spawn_audit(project: ProjectState) -> Receiver<AuditEvent> {
@@ -75,6 +87,8 @@ pub(crate) fn run_audit(
     stage: &impl Fn(&str),
 ) -> Result<AuditResult, String> {
     let statistics = imaging::load_project_statistics(&project.images_dir())?;
+    let conversion_evidence =
+        load_conversion_evidence(&project.reports_dir(), &project.converted_dir());
     let mut disks = Vec::with_capacity(statistics.disk_count);
     for (index, summary) in statistics.disks.iter().enumerate() {
         stage(&format!(
@@ -103,6 +117,9 @@ pub(crate) fn run_audit(
             extracted_files: 0,
             extracted_bytes: 0,
             extracted_hashes_verified: false,
+            conversion_status: "NOT_RUN".to_owned(),
+            conversion_jobs: 0,
+            converted_outputs_verified: 0,
             evidence_status: "CHECK".to_owned(),
             issue: String::new(),
         };
@@ -163,12 +180,39 @@ pub(crate) fn run_audit(
             }
             Err(error) => record.issue = error,
         }
+        let conversion_ok = match &conversion_evidence {
+            Ok(Some(by_disk)) => match by_disk.get(&record.disk) {
+                Some(evidence) => {
+                    record.conversion_jobs = evidence.jobs;
+                    record.converted_outputs_verified = evidence.verified_outputs;
+                    if evidence.issues.is_empty() {
+                        record.conversion_status = "VERIFIED".to_owned();
+                        true
+                    } else {
+                        record.conversion_status = "CHECK".to_owned();
+                        append_issue(&mut record.issue, &evidence.issues.join("; "));
+                        false
+                    }
+                }
+                None => {
+                    record.conversion_status = "NO_CANDIDATES".to_owned();
+                    true
+                }
+            },
+            Ok(None) => false,
+            Err(error) => {
+                record.conversion_status = "INVALID_REPORT".to_owned();
+                append_issue(&mut record.issue, error);
+                false
+            }
+        };
         if record.image_hash_verified
             && !attempt.attention_required
             && record.extracted_hashes_verified
             && record.extracted_files > 0
+            && conversion_ok
         {
-            record.evidence_status = "IMAGE_AND_FILES_VERIFIED".to_owned();
+            record.evidence_status = "IMAGE_FILES_CONVERSIONS_VERIFIED".to_owned();
             record.issue.clear();
         } else if attempt.attention_required {
             record.evidence_status = "PARTIAL_IMAGE_READ".to_owned();
@@ -179,17 +223,22 @@ pub(crate) fn run_audit(
             record.issue = "No recovered files are recorded.".to_owned();
         } else if !record.image_hash_verified && record.issue.is_empty() {
             record.issue = "No recorded image SHA-256 to compare against.".to_owned();
+        } else if !conversion_ok {
+            record.evidence_status = "CHECK_CONVERSION".to_owned();
+            if record.issue.is_empty() {
+                record.issue = "Conversion has not been audited or has invalid outputs.".to_owned();
+            }
         }
         disks.push(record);
     }
     let verified_disks = disks
         .iter()
-        .filter(|disk| disk.evidence_status == "IMAGE_AND_FILES_VERIFIED")
+        .filter(|disk| disk.evidence_status == "IMAGE_FILES_CONVERSIONS_VERIFIED")
         .count();
     let attention_disks = disks.len() - verified_disks;
     let report = AuditDocument {
         schema_version: 1,
-        scope: "image_and_managed_extraction_integrity_only",
+        scope: "image_managed_extraction_and_recorded_conversion_integrity",
         customer_delivery_certified: false,
         project: project.name().to_owned(),
         disks,
@@ -215,7 +264,7 @@ pub(crate) fn run_audit(
 
 fn csv_report(report: &AuditDocument) -> String {
     let mut csv = String::from(
-        "\u{feff}\"Disk\",\"Attempt\",\"Image\",\"ImageStatus\",\"BadSectors\",\"ImageHashVerified\",\"ExtractionStatus\",\"ExtractedFiles\",\"ExtractedBytes\",\"ExtractedHashesVerified\",\"EvidenceStatus\",\"Issue\"\r\n",
+        "\u{feff}\"Disk\",\"Attempt\",\"Image\",\"ImageStatus\",\"BadSectors\",\"ImageHashVerified\",\"ExtractionStatus\",\"ExtractedFiles\",\"ExtractedBytes\",\"ExtractedHashesVerified\",\"ConversionStatus\",\"ConversionJobs\",\"ConvertedOutputsVerified\",\"EvidenceStatus\",\"Issue\"\r\n",
     );
     for disk in &report.disks {
         let values = [
@@ -229,6 +278,9 @@ fn csv_report(report: &AuditDocument) -> String {
             disk.extracted_files.to_string(),
             disk.extracted_bytes.to_string(),
             disk.extracted_hashes_verified.to_string(),
+            disk.conversion_status.clone(),
+            disk.conversion_jobs.to_string(),
+            disk.converted_outputs_verified.to_string(),
             disk.evidence_status.clone(),
             disk.issue.clone(),
         ];
@@ -242,6 +294,187 @@ fn csv_report(report: &AuditDocument) -> String {
         csv.push_str("\r\n");
     }
     csv
+}
+
+fn append_issue(existing: &mut String, additional: &str) {
+    if !existing.is_empty() {
+        existing.push_str("; ");
+    }
+    existing.push_str(additional);
+}
+
+fn load_conversion_evidence(
+    reports_directory: &Path,
+    converted_root: &Path,
+) -> Result<Option<BTreeMap<String, ConversionEvidence>>, String> {
+    let summary_path = reports_directory.join("ConversionSummary.csv");
+    if !summary_path.is_file() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&summary_path).map_err(|error| {
+        format!(
+            "Cannot read conversion summary {}: {error}",
+            summary_path.display()
+        )
+    })?;
+    let rows = parse_csv(&text)?;
+    let Some(header) = rows.first() else {
+        return Err("Conversion summary is empty.".to_owned());
+    };
+    let column = |name: &str| {
+        header
+            .iter()
+            .position(|value| value == name)
+            .ok_or_else(|| format!("Conversion summary lacks {name} column"))
+    };
+    let disk_col = column("Floppy")?;
+    let source_hash_col = column("SourceSHA256")?;
+    let original_col = column("DeliveryOriginalPath")?;
+    let modern_col = column("ModernPath")?;
+    let modern_format_col = column("ModernFormat")?;
+    let modern_ok_col = column("ModernOK")?;
+    let pdf_col = column("PDFPath")?;
+    let pdf_ok_col = column("PDFOK")?;
+    let status_col = column("Status")?;
+    let mut by_disk = BTreeMap::<String, ConversionEvidence>::new();
+    for (number, row) in rows.iter().enumerate().skip(1) {
+        if row.len() != header.len() {
+            return Err(format!(
+                "Conversion summary row {} has {} fields; expected {}",
+                number + 1,
+                row.len(),
+                header.len()
+            ));
+        }
+        let disk = &row[disk_col];
+        if disk
+            .parse::<u32>()
+            .ok()
+            .filter(|number| *number > 0)
+            .is_none()
+        {
+            return Err(format!(
+                "Invalid floppy number in conversion summary row {}",
+                number + 1
+            ));
+        }
+        let evidence = by_disk.entry(disk.clone()).or_default();
+        evidence.jobs += 1;
+        if row[status_col] != "OK" || row[modern_ok_col] != "true" || row[pdf_ok_col] != "true" {
+            evidence
+                .issues
+                .push(format!("Conversion job {} is {}", number, row[status_col]));
+            continue;
+        }
+        let verified = (|| -> Result<(), String> {
+            let original = confined_output(converted_root, &row[original_col])?;
+            let expected_hash = &row[source_hash_col];
+            if expected_hash.len() != 64
+                || !hash_file(&original)?.eq_ignore_ascii_case(expected_hash)
+            {
+                return Err(format!(
+                    "Converted source copy differs: {}",
+                    row[original_col]
+                ));
+            }
+            let modern = confined_output(converted_root, &row[modern_col])?;
+            let modern_extension = row[modern_format_col].to_ascii_lowercase();
+            let pdf = confined_output(converted_root, &row[pdf_col])?;
+            if !conversion_run::validate_output(&modern, &modern_extension)?
+                || !conversion_run::validate_output(&pdf, "pdf")?
+            {
+                return Err(format!(
+                    "Generated Office/PDF integrity failed for disk {disk} job {number}"
+                ));
+            }
+            Ok(())
+        })();
+        match verified {
+            Ok(()) => evidence.verified_outputs += 3,
+            Err(error) => evidence.issues.push(error),
+        }
+    }
+    Ok(Some(by_disk))
+}
+
+fn confined_output(root: &Path, relative_text: &str) -> Result<PathBuf, String> {
+    let normalized = relative_text.replace('\\', "/");
+    let relative = Path::new(&normalized);
+    if normalized.is_empty()
+        || !relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("Unsafe conversion output path: {relative_text}"));
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve Converted folder: {error}"))?;
+    let path = root
+        .join(relative)
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve conversion output {relative_text}: {error}"))?;
+    if !path.starts_with(&root) || !path.is_file() {
+        return Err(format!(
+            "Conversion output escapes Converted folder: {relative_text}"
+        ));
+    }
+    Ok(path)
+}
+
+fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, String> {
+    let mut chars = text.trim_start_matches('\u{feff}').chars().peekable();
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut after_quote = false;
+    while let Some(character) = chars.next() {
+        if quoted {
+            if character == '"' {
+                if chars.peek() == Some(&'"') {
+                    field.push('"');
+                    chars.next();
+                } else {
+                    quoted = false;
+                    after_quote = true;
+                }
+            } else {
+                field.push(character);
+            }
+            continue;
+        }
+        match character {
+            '"' if field.is_empty() && !after_quote => quoted = true,
+            ',' => {
+                row.push(std::mem::take(&mut field));
+                after_quote = false;
+            }
+            '\r' if chars.peek() == Some(&'\n') => {
+                chars.next();
+                row.push(std::mem::take(&mut field));
+                rows.push(std::mem::take(&mut row));
+                after_quote = false;
+            }
+            '\n' => {
+                row.push(std::mem::take(&mut field));
+                rows.push(std::mem::take(&mut row));
+                after_quote = false;
+            }
+            _ if after_quote || character == '"' => {
+                return Err("Malformed quoted CSV field.".to_owned());
+            }
+            _ => field.push(character),
+        }
+    }
+    if quoted {
+        return Err("Unterminated quoted CSV field.".to_owned());
+    }
+    if !row.is_empty() || !field.is_empty() || after_quote {
+        row.push(field);
+        rows.push(row);
+    }
+    Ok(rows)
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
@@ -281,10 +514,51 @@ mod tests {
                 extracted_files: 1,
                 extracted_bytes: 1,
                 extracted_hashes_verified: true,
+                conversion_status: "VERIFIED".to_owned(),
+                conversion_jobs: 1,
+                converted_outputs_verified: 3,
                 evidence_status: "CHECK".to_owned(),
                 issue: "bad \"quote\"".to_owned(),
             }],
         };
         assert!(csv_report(&report).contains("\"bad \"\"quote\"\"\""));
+    }
+
+    #[test]
+    fn conversion_csv_parser_handles_quotes_commas_and_newlines() {
+        let rows = parse_csv("\u{feff}\"A\",\"B\"\r\n\"007\",\"Dr. \"\"Anka\"\", test\nnext\"\r\n")
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1], ["007", "Dr. \"Anka\", test\nnext"]);
+    }
+
+    #[test]
+    fn conversion_output_path_rejects_parent_traversal() {
+        assert!(confined_output(Path::new("."), "..\\outside.docx").is_err());
+    }
+
+    #[test]
+    fn missing_conversion_output_is_a_disk_issue_not_a_fatal_audit_error() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxvault-conversion-audit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let reports = root.join("Reports");
+        let converted = root.join("Converted");
+        fs::create_dir_all(&reports).unwrap();
+        fs::create_dir_all(&converted).unwrap();
+        fs::write(reports.join("ConversionSummary.csv"),
+            "\"Floppy\",\"SourceSHA256\",\"DeliveryOriginalPath\",\"ModernPath\",\"ModernFormat\",\"ModernOK\",\"PDFPath\",\"PDFOK\",\"Status\"\n\"007\",\"abc\",\"007\\missing.doc\",\"007\\missing.docx\",\"DOCX\",\"true\",\"007\\missing.pdf\",\"true\",\"OK\"\n").unwrap();
+        let evidence = load_conversion_evidence(&reports, &converted)
+            .unwrap()
+            .unwrap();
+        assert_eq!(evidence["007"].jobs, 1);
+        assert_eq!(evidence["007"].verified_outputs, 0);
+        assert_eq!(evidence["007"].issues.len(), 1);
+        fs::remove_dir_all(root).unwrap();
     }
 }

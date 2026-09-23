@@ -119,7 +119,7 @@ pub fn spawn_conversion(request: ConversionRequest) -> Receiver<ConversionEvent>
     receiver
 }
 
-fn run_conversion(
+pub(crate) fn run_conversion(
     request: &ConversionRequest,
     send_stage: &impl Fn(&str),
     send_progress: &impl Fn(usize, usize),
@@ -317,11 +317,7 @@ fn convert_output(
                 stderr_text
             )));
         }
-        let stem = job
-            .source_path
-            .file_stem()
-            .ok_or_else(|| "A forrásfájlnak nincs alapneve.".to_owned())?;
-        let made = output_directory.join(stem).with_extension(extension);
+        let made = libreoffice_output_path(&output_directory, &job.source_path, extension)?;
         if !validate_output(&made, extension)? {
             return Ok(failure(format!(
                 "LibreOffice output missing or invalid: {} | {} {}",
@@ -352,6 +348,20 @@ fn convert_output(
         Ok(result) => result,
         Err(error) => failure(error),
     }
+}
+
+fn libreoffice_output_path(
+    output_directory: &Path,
+    source: &Path,
+    extension: &str,
+) -> Result<PathBuf, String> {
+    let stem = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| "A forrásfájlnak nincs alapneve.".to_owned())?;
+    // `with_extension` would treat the last dot inside "Dr. Anka" as an extension
+    // and incorrectly look for "Dr.docx" instead of LibreOffice's "Dr. Anka.docx".
+    Ok(output_directory.join(format!("{stem}.{extension}")))
 }
 
 fn failure(detail: String) -> OutputResult {
@@ -397,7 +407,7 @@ fn file_uri(path: &Path) -> Result<String, String> {
     Ok(format!("file:///{encoded}"))
 }
 
-fn validate_output(path: &Path, extension: &str) -> Result<bool, String> {
+pub(crate) fn validate_output(path: &Path, extension: &str) -> Result<bool, String> {
     if !path.is_file() {
         return Ok(false);
     }
@@ -543,6 +553,14 @@ fn unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn libreoffice_output_keeps_dots_inside_source_stem() {
+        assert_eq!(
+            libreoffice_output_path(Path::new("out"), Path::new("Dr. Anka.doc"), "docx").unwrap(),
+            PathBuf::from("out").join("Dr. Anka.docx")
+        );
+    }
 
     #[test]
     fn pdf_integrity_checks_header_and_tail() {

@@ -122,6 +122,40 @@ impl FluxVaultApp {
                     ui.end_row();
                 });
         });
+
+        ui.add_space(16.0);
+        ui_theme::section(ui, "Egygombos projektfeldolgozás", |ui| {
+            ui.label("A már mentett lemezképeken automatikusan futtatja a kinyerést, az Office-konverziót, a bizonyíték-auditot és a magyar jelentést. A fizikai meghajtót nem érinti.");
+            if ui
+                .add_enabled(
+                    self.can_start_pipeline(),
+                    egui::Button::new(if self.pipeline_running {
+                        "Feldolgozás folyamatban..."
+                    } else {
+                        "Projekt feldolgozása"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_pipeline();
+            }
+            if self.ready_tool_path(ToolKind::SevenZip).is_none()
+                || self.ready_tool_path(ToolKind::LibreOffice).is_none()
+            {
+                ui.weak("Ehhez működő 7-Zip és LibreOffice szükséges; ellenőrizze a Beállítások oldalt.");
+            }
+            ui.label(&self.pipeline_stage);
+            if let Some(error) = &self.pipeline_error {
+                ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "[HIBA]");
+                ui.monospace(error);
+            }
+            if let Some(result) = &self.pipeline_result {
+                ui.label(format!("{} lemez | {} ellenőrzött | {} figyelmet igényel | {} sikeres Office-konverzió",
+                    result.extraction.total_disks, result.audit.verified_disks,
+                    result.audit.attention_disks, result.conversion.ok));
+                ui.monospace(format!("Jelentés: {}", result.workbook_path.display()));
+            }
+        });
     }
 
     fn acquire_page(&mut self, ui: &mut egui::Ui) {
@@ -1878,15 +1912,15 @@ impl FluxVaultApp {
             "Acquisition, extraction, recovery és konverziós bizonyítékok egyesített ellenőrzése.",
         );
 
-        ui_theme::section(ui, "Kép- és fájlbizonyítékok", |ui| {
+        ui_theme::section(ui, "Kép-, fájl- és konverziós bizonyítékok", |ui| {
             ui.colored_label(
                 egui::Color32::from_rgb(220, 180, 80),
-                "Ez részleges audit: a konverziók és a teljes ügyfélátadás még nincsenek minősítve.",
+                "Ez részleges audit: a teljes helyreállítás és ügyfélátadás még nincs minősítve.",
             );
-            ui.label("Újrahasheli a lemezképeket és az automatikusan kinyert fájlokat, majd lemezenként JSON/CSV bizonyítékjelentést készít.");
+            ui.label("Újrahasheli a lemezképeket és kinyert fájlokat; ellenőrzi a rögzített konverziós eredetiket, modern dokumentumokat és PDF-eket. JSON/CSV jelentést készít.");
             if ui
                 .add_enabled(
-                    self.project.is_some() && !self.audit_running,
+                    self.project.is_some() && !self.audit_running && !self.pipeline_running,
                     egui::Button::new(if self.audit_running {
                         "Audit folyamatban..."
                     } else {
@@ -1905,7 +1939,7 @@ impl FluxVaultApp {
             if let Some(result) = &self.audit_result {
                 ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "[AUDIT KESZ]");
                 ui.label(format!(
-                    "{} lemez | {} kép+fájl ellenőrzött | {} figyelmet igényel",
+                    "{} lemez | {} bizonyítéksor ellenőrzött | {} figyelmet igényel",
                     result.disk_count, result.verified_disks, result.attention_disks
                 ));
                 ui.monospace(format!("CSV: {}", result.csv_path.display()));
@@ -1929,7 +1963,7 @@ impl FluxVaultApp {
             );
             if ui
                 .add_enabled(
-                    self.project.is_some() && !self.package_running,
+                    self.project.is_some() && !self.package_running && !self.pipeline_running,
                     egui::Button::new(if self.package_running {
                         "Csomag készül..."
                     } else {

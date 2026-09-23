@@ -25,7 +25,7 @@ pub fn export_hungarian_report(
 
     let file_name = format!(
         "FluxVault_Jelentes_{}.xlsx",
-        Local::now().format("%Y%m%d_%H%M%S")
+        Local::now().format("%Y%m%d_%H%M%S_%3f")
     );
 
     let output_path = reports_directory.join(file_name);

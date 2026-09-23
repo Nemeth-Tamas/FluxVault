@@ -144,6 +144,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Detect an operator-created recovery folder without the auto-extraction marker as **manual recovery present**.
 - [x] Preserve the current concept of an immutable first recovery backup (`Recovery/NNN/pass1` or equivalent).
 - [x] Build/update a project-wide recovered-file manifest.
+- [x] Batch extraction selects the best known attempt rather than blindly using the latest; managed manifest rows use the exact extraction source hash and re-verify file integrity.
 - [x] Run project-wide batch extraction/recovery routing and emit script-compatible summary/review lists.
 - [x] Route these cases to Recovery instead of pretending success:
   - [x] non-clean image / unreadable sectors;
@@ -154,6 +155,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
   - [x] apparently readable image with zero recovered files when operator review is warranted.
 - [ ] Automatically run extraction immediately after an eligible acquisition or newly derived preferred image; no separate Files-page action in production mode.
   - [x] In the current GUI session, queue image-only extraction after each clean USB acquisition without blocking the next physical read.
+  - [x] Add a one-button offline project pass that batches eligible extraction, conversion, evidence audit, and a Hungarian workbook without touching physical media.
 - [ ] Automatically re-run extraction and file inventory whenever a better composite, decoded flux image, or reconstructed filesystem becomes preferred.
 - [ ] Replace “operator review required” as the normal next step with a bounded automatic recovery plan; operator review is the final exception state only.
 - [ ] Treat existing manual recovery folders/DMDE imports as legacy compatibility inputs, not as the intended future recovery workflow.
@@ -262,6 +264,7 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
 - [x] Validate generated Office OOXML as ZIP containers with required internal files.
 - [x] Validate generated PDFs via `%PDF-` header + `%%EOF` tail sanity check.
 - [x] Record `OK`, `PARTIAL`, `FAILED`, `TIMEOUT`, and `REUSED` results plus details/duration.
+- [x] Preserve source stems containing extra dots when locating LibreOffice output (regression-tested with `Dr. Anka.doc`).
 - [ ] Conversion issues page with retry selected / retry failed actions.
 - [ ] Production mode automatically converts all eligible files, retries transient failures within policy, and records permanent failures without asking the operator file-by-file.
 
@@ -269,7 +272,7 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
 
 Replace the current updater/audit script chain with one in-app source of truth while keeping export compatibility.
 
-- [x] Add a clearly scoped image/extraction evidence audit in GUI and CLI: re-hash acquisition images and managed recovered files, flag missing/changed evidence per disk, and export JSON/CSV without claiming customer-delivery certification.
+- [x] Add a clearly scoped evidence audit in GUI and CLI: re-hash acquisition images, managed recovered files, and conversion source copies; validate recorded Office/PDF outputs; flag missing/changed evidence per disk and export JSON/CSV without claiming customer-delivery certification.
 
 - [ ] Per-floppy audit state combines acquisition, image quality, extraction, recovered-file count, conversion status, and generated-file integrity.
 - [ ] Preserve useful statuses such as `OK`, `PARTIAL: IMAGE READ`, `PARTIAL: CONVERSION`, `CHECK: CONVERSION FAILED`, `CHECK: NO RECOVERED FILES`.
@@ -361,6 +364,7 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
 - [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.
 - [x] `fluxvault audit` and `fluxvault package build --destination PATH` reuse the same evidence-audit and verified-package services as the GUI, without changing the GUI's remembered project.
+- [x] `fluxvault process` runs the existing-image extraction -> Office conversion -> evidence audit -> workbook pipeline with no physical drive access; progress goes to stderr and `--json` output to stdout.
 
 ## 19. Milestones
 

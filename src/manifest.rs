@@ -7,7 +7,7 @@ use std::{
 
 use chrono::{DateTime, Local};
 
-use crate::imaging;
+use crate::{extraction, imaging};
 
 const EXTRACTION_MARKER: &str = ".fluxvault-extraction.json";
 
@@ -82,7 +82,8 @@ pub(crate) fn build_manifest(
 
     for (disk_number, disk_directory) in disk_directories {
         let manual_files = collect_files(&disk_directory, true)?;
-        let (content_root, files) = if manual_files.is_empty() {
+        let is_manual = !manual_files.is_empty();
+        let (content_root, files) = if !is_manual {
             let Some(managed_directory) = latest_managed_directory(&disk_directory)? else {
                 continue;
             };
@@ -96,10 +97,20 @@ pub(crate) fn build_manifest(
             continue;
         }
 
-        let image_sha256 = imaging::load_attempts_for_disk(&request.images_directory, disk_number)?
-            .last()
-            .map(|attempt| attempt.sha256.clone())
-            .unwrap_or_default();
+        let image_sha256 = if !is_manual {
+            managed_source_sha256(&content_root)?
+        } else {
+            imaging::load_attempts_for_disk(&request.images_directory, disk_number)?
+                .iter()
+                .min_by(|left, right| {
+                    left.attention_required
+                        .cmp(&right.attention_required)
+                        .then_with(|| left.bad_sectors.len().cmp(&right.bad_sectors.len()))
+                        .then_with(|| right.attempt_number.cmp(&left.attempt_number))
+                })
+                .map(|attempt| attempt.sha256.clone())
+                .unwrap_or_default()
+        };
 
         included_disks += 1;
 
@@ -193,6 +204,30 @@ fn latest_managed_directory(disk_directory: &Path) -> Result<Option<PathBuf>, St
     Ok(candidates.pop())
 }
 
+fn managed_source_sha256(directory: &Path) -> Result<String, String> {
+    let marker_path = directory.join(EXTRACTION_MARKER);
+    let marker: serde_json::Value =
+        serde_json::from_slice(&fs::read(&marker_path).map_err(|error| {
+            format!(
+                "Cannot read extraction marker {}: {error}",
+                marker_path.display()
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "Invalid extraction marker {}: {error}",
+                marker_path.display()
+            )
+        })?;
+    let hash = marker
+        .get("source_sha256")
+        .and_then(serde_json::Value::as_str)
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| format!("Missing source hash in {}", marker_path.display()))?;
+    extraction::verify_managed_extraction(directory, hash)?;
+    Ok(hash.to_owned())
+}
+
 fn collect_files(root: &Path, skip_managed_children: bool) -> Result<Vec<PathBuf>, String> {
     let mut pending = vec![root.to_path_buf()];
     let mut files = Vec::new();
@@ -247,6 +282,7 @@ fn file_attributes(metadata: &fs::Metadata) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     fn test_root() -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -255,7 +291,7 @@ mod tests {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis()
+                .as_nanos()
         ))
     }
 
@@ -292,6 +328,51 @@ mod tests {
         assert!(csv.starts_with('\u{feff}'));
         assert!(csv.contains("\"001\",\"$Root\\recovered.doc\""));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_manifest_uses_the_extraction_source_hash() {
+        let root = test_root();
+        let managed = root.join("Extracted").join("001").join("attempt_001");
+        let reports = root.join("Reports");
+        let images = root.join("Images");
+        fs::create_dir_all(&managed).unwrap();
+        fs::create_dir_all(&images).unwrap();
+        let content = b"test";
+        fs::write(managed.join("file.doc"), content).unwrap();
+        let source_hash = "a".repeat(64);
+        let file_hash = format!("{:x}", Sha256::digest(content));
+        fs::write(
+            managed.join(".fluxvault-extraction.json"),
+            serde_json::json!({
+                "schema_version":1,"source_image":"001.img","source_sha256":source_hash,
+                "extracted_unix_ms":0,"file_count":1,"total_bytes":4
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            managed.join(".fluxvault-inventory.json"),
+            serde_json::json!({
+                "schema_version":1,"source_image":"001.img","source_sha256":source_hash,
+                "files":[{"relative_path":"file.doc","bytes":4,"modified_unix_ms":null,
+                    "attributes":"","sha256":file_hash}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let result = build_manifest(
+            &ManifestRequest {
+                extracted_root: root.join("Extracted"),
+                images_directory: images,
+                reports_directory: reports,
+            },
+            &|_| {},
+        )
+        .unwrap();
+        let csv = fs::read_to_string(result.path).unwrap();
+        assert!(csv.contains(&source_hash));
         fs::remove_dir_all(root).unwrap();
     }
 }

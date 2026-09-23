@@ -210,6 +210,30 @@ pub fn spawn_checks(settings: ToolSettings, audit_path: PathBuf) -> Receiver<Too
     receiver
 }
 
+pub(crate) fn find_ready_tool(
+    kind: ToolKind,
+    configured: Option<&Path>,
+    audit_path: &Path,
+) -> Result<PathBuf, String> {
+    let status = check_tool(kind, configured, audit_path);
+    if let Some(error) = &status.audit_error {
+        return Err(format!(
+            "{} health-check audit could not be saved: {error}",
+            kind.display_name()
+        ));
+    }
+    if status.health != ToolHealth::Ready {
+        return Err(format!(
+            "{} is unavailable: {}",
+            kind.display_name(),
+            status.detail
+        ));
+    }
+    status
+        .executable
+        .ok_or_else(|| format!("{} has no executable path", kind.display_name()))
+}
+
 pub fn run_audited_command(
     tool_name: &str,
     executable: &Path,
