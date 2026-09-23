@@ -8,17 +8,25 @@ use std::{
 
 use serde_json::json;
 
-use crate::{imaging, project::ProjectState};
+use crate::{
+    audit, imaging,
+    package::{self, PackageRequest},
+    project::ProjectState,
+};
 
 const HELP: &str = "FluxVault — floppy archiving\n\
 Usage:\n\
   fluxvault                         Open the GUI\n\
   fluxvault init [path]             Create a project\n\
   fluxvault status [--project PATH] Show project status\n\
+  fluxvault audit [--project PATH]  Verify image/extraction evidence\n\
+  fluxvault package build --destination PATH [--project PATH]\n\
+                                    Create and verify an archival ZIP\n\
   fluxvault --help                  Show this help\n\
 Options:\n\
   --json                            Output machine-readable JSON\n\
-  --project PATH                    Use a specific project instead of searching upward";
+  --project PATH                    Use a specific project instead of searching upward\n\
+  --destination PATH                Output folder outside the project";
 
 pub fn run_from_env() -> Option<i32> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -45,6 +53,7 @@ pub fn run_from_env() -> Option<i32> {
 fn run(args: &[String], cwd: &Path) -> Result<String, String> {
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
+    let mut destination: Option<PathBuf> = None;
     let mut positional = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -54,6 +63,11 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
                 index += 1;
                 let value = args.get(index).ok_or("--project requires a path")?;
                 project_override = Some(PathBuf::from(value));
+            }
+            "--destination" => {
+                index += 1;
+                let value = args.get(index).ok_or("--destination requires a path")?;
+                destination = Some(PathBuf::from(value));
             }
             "--help" | "-h" => positional.push("help".to_owned()),
             value if value.starts_with('-') => {
@@ -90,13 +104,13 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
                 ))
             }
         }
-        Some("status") if positional.len() == 1 => {
+        Some("status") if positional.len() == 1 && destination.is_none() => {
             let root = match project_override {
                 Some(path) if path.is_absolute() => path,
                 Some(path) => cwd.join(path),
                 None => discover_project(cwd).ok_or("No FluxVault project found in this directory or its parents; use --project PATH")?,
             };
-            let project = ProjectState::open(root)?;
+            let project = ProjectState::open_without_session(root)?;
             let stats = imaging::load_project_statistics(&project.images_dir())?;
             if json_output {
                 Ok(json!({
@@ -121,6 +135,66 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
                     stats.partial_disks,
                     stats.total_attempts,
                     stats.best_known_bad_sectors
+                ))
+            }
+        }
+        Some("audit") if positional.len() == 1 && destination.is_none() => {
+            let root = match project_override {
+                Some(path) if path.is_absolute() => path,
+                Some(path) => cwd.join(path),
+                None => {
+                    discover_project(cwd).ok_or("No FluxVault project found; use --project PATH")?
+                }
+            };
+            let project = ProjectState::open_without_session(root)?;
+            let result = audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
+            if json_output {
+                Ok(json!({"json": result.json_path, "csv": result.csv_path, "disks": result.disk_count,
+                    "verified": result.verified_disks, "attention": result.attention_disks,
+                    "customer_delivery_certified": false}).to_string())
+            } else {
+                Ok(format!(
+                    "Evidence audit: {} of {} image/extraction sets verified; {} need attention.\nReport: {}",
+                    result.verified_disks,
+                    result.disk_count,
+                    result.attention_disks,
+                    result.csv_path.display()
+                ))
+            }
+        }
+        Some("package") if positional.len() == 2 && positional[1] == "build" => {
+            let root = match project_override {
+                Some(path) if path.is_absolute() => path,
+                Some(path) => cwd.join(path),
+                None => {
+                    discover_project(cwd).ok_or("No FluxVault project found; use --project PATH")?
+                }
+            };
+            let project = ProjectState::open_without_session(root)?;
+            let destination = destination.ok_or("package build requires --destination PATH")?;
+            let destination = if destination.is_absolute() {
+                destination
+            } else {
+                cwd.join(destination)
+            };
+            let result = package::build_package(
+                &PackageRequest {
+                    project_root: project.root().to_path_buf(),
+                    destination,
+                    project_name: project.name().to_owned(),
+                },
+                &|stage| eprintln!("{stage}"),
+            )?;
+            if json_output {
+                Ok(json!({"zip": result.zip_path, "sha256_file": result.sha256_path,
+                    "sha256": result.sha256, "files": result.file_count, "bytes": result.total_bytes}).to_string())
+            } else {
+                Ok(format!(
+                    "Verified package: {}\nFiles: {} | Source bytes: {}\nSHA-256: {}",
+                    result.zip_path.display(),
+                    result.file_count,
+                    result.total_bytes,
+                    result.sha256
                 ))
             }
         }

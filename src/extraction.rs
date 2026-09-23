@@ -141,6 +141,70 @@ pub fn inspect_extraction_presence(
     Ok(ExtractionPresence::Missing { expected_directory })
 }
 
+/// Re-hash all managed files before an extraction is trusted or reused.
+/// The marker alone is not evidence that files are still present and intact.
+pub(crate) fn verify_managed_extraction(
+    output_directory: &Path,
+    expected_source_sha256: &str,
+) -> Result<(usize, u64), String> {
+    let marker_path = output_directory.join(MARKER_FILE_NAME);
+    let inventory_path = output_directory.join(INVENTORY_FILE_NAME);
+    let marker: ExtractionMarker =
+        serde_json::from_slice(&fs::read(&marker_path).map_err(|error| {
+            format!(
+                "Cannot read extraction marker {}: {error}",
+                marker_path.display()
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "Invalid extraction marker {}: {error}",
+                marker_path.display()
+            )
+        })?;
+    let inventory: ExtractionInventory =
+        serde_json::from_slice(&fs::read(&inventory_path).map_err(|error| {
+            format!(
+                "Cannot read extraction inventory {}: {error}",
+                inventory_path.display()
+            )
+        })?)
+        .map_err(|error| {
+            format!(
+                "Invalid extraction inventory {}: {error}",
+                inventory_path.display()
+            )
+        })?;
+    if marker.schema_version != EXTRACTION_SCHEMA_VERSION
+        || inventory.schema_version != EXTRACTION_SCHEMA_VERSION
+        || marker.source_image != inventory.source_image
+        || marker.source_sha256 != expected_source_sha256
+        || inventory.source_sha256 != expected_source_sha256
+    {
+        return Err("Extraction evidence does not match the selected source image.".to_owned());
+    }
+    let actual = inventory_files(output_directory)?;
+    if actual.len() != inventory.files.len() || actual.len() != marker.file_count {
+        return Err("Extraction file count differs from its inventory/marker.".to_owned());
+    }
+    let total_bytes = actual.iter().map(|file| file.bytes).sum::<u64>();
+    if total_bytes != marker.total_bytes {
+        return Err("Extraction byte count differs from its marker.".to_owned());
+    }
+    for (actual, recorded) in actual.iter().zip(&inventory.files) {
+        if actual.relative_path != recorded.relative_path
+            || actual.bytes != recorded.bytes
+            || actual.sha256 != recorded.sha256
+        {
+            return Err(format!(
+                "Extracted file differs from inventory: {}",
+                actual.relative_path
+            ));
+        }
+    }
+    Ok((actual.len(), total_bytes))
+}
+
 fn inspect_candidate_directory(path: &Path) -> Result<ExtractionPresence, String> {
     let marker_path = path.join(MARKER_FILE_NAME);
 
@@ -466,6 +530,7 @@ fn reuse_existing_extraction(
             output_directory.display()
         ));
     }
+    verify_managed_extraction(output_directory, source_sha256)?;
 
     Ok(ExtractionResult {
         image_path: image_path.to_path_buf(),
@@ -525,6 +590,12 @@ fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String> {
             let file_type = entry
                 .file_type()
                 .map_err(|error| format!("Nem olvasható fájltípus {}: {error}", path.display()))?;
+            if file_type.is_symlink() {
+                return Err(format!(
+                    "Extraction contains a symbolic link: {}",
+                    path.display()
+                ));
+            }
 
             if file_type.is_dir() {
                 pending.push(path);
@@ -532,6 +603,13 @@ fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String> {
             }
 
             if !file_type.is_file() {
+                continue;
+            }
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == MARKER_FILE_NAME || name == INVENTORY_FILE_NAME)
+            {
                 continue;
             }
 
@@ -672,6 +750,55 @@ mod tests {
             std::process::id(),
             current_unix_ms()
         ))
+    }
+
+    #[test]
+    fn managed_extraction_verification_catches_tampering_and_extra_files() {
+        let root = test_root("verification");
+        fs::create_dir_all(&root).unwrap();
+        let source_sha = "a".repeat(64);
+        let data = b"original";
+        fs::write(root.join("file.doc"), data).unwrap();
+        let inventory = ExtractionInventory {
+            schema_version: EXTRACTION_SCHEMA_VERSION,
+            source_image: "001_attempt_001.img".to_owned(),
+            source_sha256: source_sha.clone(),
+            files: vec![ExtractedFile {
+                relative_path: "file.doc".to_owned(),
+                bytes: data.len() as u64,
+                modified_unix_ms: None,
+                attributes: String::new(),
+                sha256: format!("{:x}", Sha256::digest(data)),
+            }],
+        };
+        let marker = ExtractionMarker {
+            schema_version: EXTRACTION_SCHEMA_VERSION,
+            source_image: inventory.source_image.clone(),
+            source_sha256: source_sha.clone(),
+            extracted_unix_ms: 0,
+            file_count: 1,
+            total_bytes: data.len() as u64,
+        };
+        fs::write(
+            root.join(INVENTORY_FILE_NAME),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join(MARKER_FILE_NAME),
+            serde_json::to_vec(&marker).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            verify_managed_extraction(&root, &source_sha).unwrap(),
+            (1, 8)
+        );
+        fs::write(root.join("file.doc"), b"tampered").unwrap();
+        assert!(verify_managed_extraction(&root, &source_sha).is_err());
+        fs::write(root.join("file.doc"), data).unwrap();
+        fs::write(root.join("extra.doc"), b"extra").unwrap();
+        assert!(verify_managed_extraction(&root, &source_sha).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

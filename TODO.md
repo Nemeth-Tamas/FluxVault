@@ -43,7 +43,7 @@
 - [x] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
 - [x] Recommend the physical write-protect tab for customer disks when available.
 - [x] Query Windows disk writability without attempting a write; refuse a full USB image if protection is not positively reported.
-- [ ] Validate the current USB floppy drive's write-protect reporting with a **known-good disposable** floppy only. It reported `writable` while a customer disk's physical tab was described as open, and Windows-created filesystem metadata appeared between archived and fresh images. The damaged disposable 001 also reported `writable`, but Windows could not mount its filesystem and an identical raw-sector write failed on flush with `ERROR_INVALID_FUNCTION`; the tested boot sector remained identical and no test file was created, so that test is inconclusive. Do not test writes on customer media; treat this drive as unsafe for further customer insertions until the discrepancy is resolved or use a verified hardware write blocker/GW setup.
+- [ ] Validate the current USB floppy drive's write-protect reporting with a **known-good disposable** floppy only. It reported `writable` with the physical tab open, and Windows-created filesystem metadata appeared between archived and fresh customer-disk images. On damaged disposable 001, a deliberate one-byte marker write to a previously readable sector failed with device I/O error 1117; the immediate read failed, but after eject/reinsert the sector again matched its archived SHA-256 exactly. This confirms no persistent change to that sector, **not** that the adapter enforces write protection. Do not test writes on customer media; treat this drive as unsafe for further customer insertions until the discrepancy is resolved or use a verified hardware write blocker/GW setup.
 - [x] Keep a command/audit log for every external tool invocation.
 - [x] Never silently overwrite a previous acquisition/recovery attempt.
 
@@ -140,6 +140,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Only replace/promote an automatic extraction after the new extraction fully succeeds.
 - [x] Write per-floppy file inventory with relative path, bytes, modified time, attributes, and SHA-256 where appropriate.
 - [x] Record the source image SHA-256 marker so unchanged images do not need needless re-extraction.
+- [x] Re-hash all managed extracted files against the saved inventory before reusing an extraction; reject missing, altered, or extra files.
 - [x] Detect an operator-created recovery folder without the auto-extraction marker as **manual recovery present**.
 - [x] Preserve the current concept of an immutable first recovery backup (`Recovery/NNN/pass1` or equivalent).
 - [x] Build/update a project-wide recovered-file manifest.
@@ -268,6 +269,8 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
 
 Replace the current updater/audit script chain with one in-app source of truth while keeping export compatibility.
 
+- [x] Add a clearly scoped image/extraction evidence audit in GUI and CLI: re-hash acquisition images and managed recovered files, flag missing/changed evidence per disk, and export JSON/CSV without claiming customer-delivery certification.
+
 - [ ] Per-floppy audit state combines acquisition, image quality, extraction, recovered-file count, conversion status, and generated-file integrity.
 - [ ] Preserve useful statuses such as `OK`, `PARTIAL: IMAGE READ`, `PARTIAL: CONVERSION`, `CHECK: CONVERSION FAILED`, `CHECK: NO RECOVERED FILES`.
 - [ ] Summary metrics equivalent to the current final report.
@@ -292,16 +295,16 @@ Replace the current updater/audit script chain with one in-app source of truth w
 
 Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the GUI.
 
-- [ ] Choose destination outside project/source tree and enforce that guardrail.
-- [ ] Stage only allowed archival/customer folders.
-- [ ] Exclude internal helper/state files from customer content.
+- [x] Choose destination outside project/source tree and enforce that guardrail.
+- [x] Stage only allowed archival/customer folders in the package file list (no source-tree mutation).
+- [x] Exclude internal helper/state files from customer content.
 - [ ] Include selected customer-useful reports.
-- [ ] Generate package manifest with size, timestamp, SHA-256.
-- [ ] Generate manifest SHA-256 file.
-- [ ] Generate README explaining Images / Logs / Extracted / Converted / Recovery / Reports and known limitations.
-- [ ] Create timestamped ZIP.
-- [ ] Hash final ZIP and write `.zip.sha256`.
-- [ ] Verify ZIP inventory/count/total bytes against staging before declaring success.
+- [x] Generate package manifest with size, original modified timestamp (UTC), and SHA-256.
+- [x] Generate manifest SHA-256 file.
+- [x] Generate README explaining Images / Logs / Extracted / Converted / Recovery / Reports and known limitations.
+- [x] Create timestamped ZIP.
+- [x] Hash final ZIP and write `.zip.sha256`.
+- [x] Verify ZIP inventory/count/total bytes against staging before declaring success.
 - [ ] Optional “keep staging folder” setting.
 - [ ] One **Finalize project** action automatically refreshes recovery/extraction/conversion/audit state, builds the package, verifies it, and reports only unresolved exceptions.
 - [ ] Optional production policy automatically builds the final package when the last physical disk and all background queues are complete.
@@ -357,6 +360,7 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [ ] Shell completion generation for PowerShell initially, with Bash/Zsh completion when the application becomes cross-platform.
 - [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
 - [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.
+- [x] `fluxvault audit` and `fluxvault package build --destination PATH` reuse the same evidence-audit and verified-package services as the GUI, without changing the GUI's remembered project.
 
 ## 19. Milestones
 

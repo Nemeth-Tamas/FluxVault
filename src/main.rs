@@ -1,4 +1,5 @@
 mod app;
+mod audit;
 mod batch_extraction;
 mod cli;
 mod composite;
@@ -13,6 +14,7 @@ mod imaging;
 mod legacy_logs;
 mod manifest;
 mod manual_recovery_import;
+mod package;
 mod project;
 mod recovery_backup;
 mod report;

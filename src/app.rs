@@ -9,6 +9,7 @@ use std::{
 use chrono::{DateTime, Local, Utc};
 
 use crate::{
+    audit::{self, AuditEvent, AuditResult},
     batch_extraction::{self, BatchExtractionEvent, BatchExtractionRequest, BatchExtractionResult},
     composite::{self, CompositeEvent, CompositeResult, CompositeSource},
     conversion::{
@@ -26,6 +27,7 @@ use crate::{
     manual_recovery_import::{
         self, ManualRecoveryImportEvent, ManualRecoveryImportRequest, ManualRecoveryImportResult,
     },
+    package::{self, PackageEvent, PackageRequest, PackageResult},
     project::{self, ProjectState},
     recovery_backup::{self, RecoveryBackupEvent, RecoveryBackupResult},
     report,
@@ -202,6 +204,16 @@ pub struct FluxVaultApp {
     conversion_total: usize,
     conversion_result: Option<ConversionResult>,
     conversion_error: Option<String>,
+    audit_receiver: Option<Receiver<AuditEvent>>,
+    audit_running: bool,
+    audit_stage: String,
+    audit_result: Option<AuditResult>,
+    audit_error: Option<String>,
+    package_receiver: Option<Receiver<PackageEvent>>,
+    package_running: bool,
+    package_stage: String,
+    package_result: Option<PackageResult>,
+    package_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -294,6 +306,16 @@ impl FluxVaultApp {
             conversion_total: 0,
             conversion_result: None,
             conversion_error: None,
+            audit_receiver: None,
+            audit_running: false,
+            audit_stage: "Nincs aktív bizonyíték-audit.".to_owned(),
+            audit_result: None,
+            audit_error: None,
+            package_receiver: None,
+            package_running: false,
+            package_stage: "Nincs aktív csomagkészítés.".to_owned(),
+            package_result: None,
+            package_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -1428,6 +1450,152 @@ impl FluxVaultApp {
         }
         if !finished {
             self.conversion_receiver = Some(receiver);
+        }
+    }
+
+    fn start_audit(&mut self) {
+        if self.audit_running {
+            return;
+        }
+        let Some(project) = &self.project else {
+            self.status = "Audithoz nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        self.audit_receiver = Some(audit::spawn_audit(project.clone()));
+        self.audit_running = true;
+        self.audit_stage = "Képek és recovered fájlok ellenőrzése...".to_owned();
+        self.audit_result = None;
+        self.audit_error = None;
+        self.status = self.audit_stage.clone();
+        self.log("Read-only bizonyíték-audit elindult.");
+    }
+
+    fn poll_audit_events(&mut self) {
+        let Some(receiver) = self.audit_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+        loop {
+            match receiver.try_recv() {
+                Ok(AuditEvent::Stage(stage)) => self.audit_stage = stage,
+                Ok(AuditEvent::Finished(result)) => {
+                    finished = true;
+                    self.audit_running = false;
+                    match result {
+                        Ok(result) => {
+                            self.audit_stage = "Bizonyíték-audit kész.".to_owned();
+                            self.status = self.audit_stage.clone();
+                            self.log(format!(
+                                "Audit: {} ellenőrzött, {} figyelmet igényel.",
+                                result.verified_disks, result.attention_disks
+                            ));
+                            self.audit_result = Some(result);
+                            self.audit_error = None;
+                        }
+                        Err(error) => {
+                            self.audit_stage = "Bizonyíték-audit sikertelen.".to_owned();
+                            self.status = self.audit_stage.clone();
+                            self.log(format!("Audit hiba: {error}"));
+                            self.audit_result = None;
+                            self.audit_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.audit_running = false;
+                    self.audit_stage = "Az audit háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.audit_stage.clone();
+                    self.audit_error = Some("Az audit eredmény nélkül leállt.".to_owned());
+                    self.log("Az audit háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+        if !finished {
+            self.audit_receiver = Some(receiver);
+        }
+    }
+
+    fn choose_and_start_package(&mut self) {
+        if self.package_running {
+            return;
+        }
+        let Some(project) = &self.project else {
+            self.status = "Csomagkészítéshez nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let project_root = project.root().to_path_buf();
+        let project_name = project.name().to_owned();
+        let Some(destination) = rfd::FileDialog::new()
+            .set_title("Ügyfélcsomag célmappája (a projekten kívül)")
+            .pick_folder()
+        else {
+            return;
+        };
+        self.package_receiver = Some(package::spawn_package(PackageRequest {
+            project_root,
+            destination,
+            project_name,
+        }));
+        self.package_running = true;
+        self.package_stage = "Csomagkészítés előkészítése...".to_owned();
+        self.package_result = None;
+        self.package_error = None;
+        self.status = self.package_stage.clone();
+        self.log("Ellenőrzött archiválási ZIP készítése elindult.");
+    }
+
+    fn poll_package_events(&mut self) {
+        let Some(receiver) = self.package_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+        loop {
+            match receiver.try_recv() {
+                Ok(PackageEvent::Stage(stage)) => self.package_stage = stage,
+                Ok(PackageEvent::Finished(result)) => {
+                    finished = true;
+                    self.package_running = false;
+                    match result {
+                        Ok(result) => {
+                            self.package_stage = "Csomag ellenőrzése kész.".to_owned();
+                            self.status = self.package_stage.clone();
+                            self.log(format!(
+                                "ZIP kész: {} fájl, {} bájt | {}",
+                                result.file_count,
+                                result.total_bytes,
+                                result.zip_path.display()
+                            ));
+                            self.package_result = Some(result);
+                            self.package_error = None;
+                        }
+                        Err(error) => {
+                            self.package_stage = "Csomagkészítés sikertelen.".to_owned();
+                            self.status = self.package_stage.clone();
+                            self.log(format!("Csomagkészítési hiba: {error}"));
+                            self.package_result = None;
+                            self.package_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.package_running = false;
+                    self.package_stage = "A csomagkészítő háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.package_stage.clone();
+                    self.package_error = Some("A csomagkészítő eredmény nélkül leállt.".to_owned());
+                    self.log("A csomagkészítő háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+        if !finished {
+            self.package_receiver = Some(receiver);
         }
     }
 

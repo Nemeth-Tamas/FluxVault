@@ -1878,14 +1878,39 @@ impl FluxVaultApp {
             "Acquisition, extraction, recovery és konverziós bizonyítékok egyesített ellenőrzése.",
         );
 
-        ui_theme::section(ui, "Még nem elérhető", |ui| {
+        ui_theme::section(ui, "Kép- és fájlbizonyítékok", |ui| {
             ui.colored_label(
                 egui::Color32::from_rgb(220, 180, 80),
-                "Az egyesített auditmotor még nincs implementálva.",
+                "Ez részleges audit: a konverziók és a teljes ügyfélátadás még nincsenek minősítve.",
             );
-            ui.label(
-                "A jelenlegi acquisition metadata, 7-Zip listing, fájlleltár és külsőparancs-napló változatlanul megmarad későbbi auditáláshoz.",
-            );
+            ui.label("Újrahasheli a lemezképeket és az automatikusan kinyert fájlokat, majd lemezenként JSON/CSV bizonyítékjelentést készít.");
+            if ui
+                .add_enabled(
+                    self.project.is_some() && !self.audit_running,
+                    egui::Button::new(if self.audit_running {
+                        "Audit folyamatban..."
+                    } else {
+                        "Bizonyítékok ellenőrzése"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_audit();
+            }
+            ui.label(&self.audit_stage);
+            if let Some(error) = &self.audit_error {
+                ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "[HIBA]");
+                ui.monospace(error);
+            }
+            if let Some(result) = &self.audit_result {
+                ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "[AUDIT KESZ]");
+                ui.label(format!(
+                    "{} lemez | {} kép+fájl ellenőrzött | {} figyelmet igényel",
+                    result.disk_count, result.verified_disks, result.attention_disks
+                ));
+                ui.monospace(format!("CSV: {}", result.csv_path.display()));
+                ui.monospace(format!("JSON: {}", result.json_path.display()));
+            }
         });
     }
 
@@ -1896,14 +1921,40 @@ impl FluxVaultApp {
             "Ellenőrzött customer-delivery mappák, manifestek és ZIP csomagok készítése.",
         );
 
-        ui_theme::section(ui, "Még nem elérhető", |ui| {
+        ui_theme::section(ui, "Ellenőrzött archív ZIP", |ui| {
+            ui.label("Külön célmappába készít új, változatlan archív ZIP-et. A projektet és a floppy-meghajtót nem írja. Minden csomagolt fájlt SHA-256 alapján visszaellenőriz.");
             ui.colored_label(
                 egui::Color32::from_rgb(220, 180, 80),
-                "A csomagépítő még nincs implementálva, ezért nem ír célmappába.",
+                "Előzetes csomag: az egyesített audit és a teljes automatikus helyreállítás még nincs kész. Ügyfélátadás előtt ellenőrizze a hiányokat.",
             );
-            ui.label(
-                "A későbbi megvalósítás külön célmappát kér majd, és megakadályozza a projekt- vagy forrásfa felülírását.",
-            );
+            if ui
+                .add_enabled(
+                    self.project.is_some() && !self.package_running,
+                    egui::Button::new(if self.package_running {
+                        "Csomag készül..."
+                    } else {
+                        "Archív ZIP készítése..."
+                    }),
+                )
+                .clicked()
+            {
+                self.choose_and_start_package();
+            }
+            ui.label(&self.package_stage);
+            if let Some(error) = &self.package_error {
+                ui.colored_label(egui::Color32::from_rgb(220, 70, 70), "[HIBA]");
+                ui.monospace(error);
+            }
+            if let Some(result) = &self.package_result {
+                ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "[ELLENORIZVE]");
+                ui.label(format!(
+                    "{} fájl | {} bájt",
+                    result.file_count, result.total_bytes
+                ));
+                ui.monospace(format!("ZIP: {}", result.zip_path.display()));
+                ui.monospace(format!("SHA-256: {}", result.sha256));
+                ui.monospace(format!("Hash fájl: {}", result.sha256_path.display()));
+            }
         });
     }
 

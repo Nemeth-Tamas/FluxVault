@@ -94,6 +94,13 @@ impl ProjectState {
     }
 
     pub fn open(root: PathBuf) -> Result<Self, String> {
+        let project = Self::open_without_session(root)?;
+        remember_last_project(project.root())?;
+        Ok(project)
+    }
+
+    /// Inspect a project without modifying the GUI's last-opened session.
+    pub fn open_without_session(root: PathBuf) -> Result<Self, String> {
         let project_file = root.join(PROJECT_FILE_NAME);
 
         let json = fs::read_to_string(&project_file).map_err(|error| {
@@ -119,11 +126,7 @@ impl ProjectState {
 
         metadata.current_disk_number = metadata.current_disk_number.max(1);
 
-        let project = Self { root, metadata };
-
-        remember_last_project(project.root())?;
-
-        Ok(project)
+        Ok(Self { root, metadata })
     }
 
     pub fn save(&mut self) -> Result<(), String> {
