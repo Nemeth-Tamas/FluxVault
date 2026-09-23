@@ -1,5 +1,6 @@
 mod app;
 mod batch_extraction;
+mod cli;
 mod composite;
 mod conversion;
 mod conversion_run;
@@ -23,6 +24,10 @@ use app::FluxVaultApp;
 
 fn main() -> eframe::Result<()> {
     safety::MediaSafetyPolicy::assert_invariants();
+
+    if let Some(exit_code) = cli::run_from_env() {
+        std::process::exit(exit_code);
+    }
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

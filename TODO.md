@@ -339,7 +339,7 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 The GUI and CLI must call the same Rust workflow/services so safety, provenance, validation, and output formats cannot drift.
 
 - [ ] Install a `fluxvault` executable that can be added to `PATH` and run from PowerShell, CMD, or another automation process.
-- [ ] Discover a project by walking upward from the current directory, like Git, with an explicit `--project <path>` override.
+- [x] Discover a project by walking upward from the current directory, like Git, with an explicit `--project <path>` override for the first CLI status command.
 - [ ] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
 - [ ] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
 - [ ] Read-only drive commands: `drive list` and `drive probe --drive A:`.
