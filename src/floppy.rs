@@ -7,11 +7,11 @@ use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
 use windows::{
     Win32::{
-        Foundation::HANDLE,
+        Foundation::{ERROR_WRITE_PROTECT, HANDLE},
         Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives},
         System::{
             IO::DeviceIoControl,
-            Ioctl::{DISK_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY},
+            Ioctl::{DISK_GEOMETRY, IOCTL_DISK_GET_DRIVE_GEOMETRY, IOCTL_DISK_IS_WRITABLE},
         },
     },
     core::PCWSTR,
@@ -92,6 +92,70 @@ pub struct ProbeResult {
     pub boot_signature: Option<[u8; 2]>,
     pub geometry: Option<DiskGeometry>,
     pub geometry_error: Option<String>,
+    pub write_protection: WriteProtectionStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteProtectionStatus {
+    Protected,
+    Writable,
+    Unknown(String),
+}
+
+#[cfg(windows)]
+pub fn query_write_protection(file: &File) -> WriteProtectionStatus {
+    let mut bytes_returned = 0u32;
+    let result = unsafe {
+        DeviceIoControl(
+            HANDLE(file.as_raw_handle()),
+            IOCTL_DISK_IS_WRITABLE,
+            None,
+            0,
+            None,
+            0,
+            Some(&mut bytes_returned),
+            None,
+        )
+    };
+    classify_write_protection(result)
+}
+
+#[cfg(windows)]
+fn classify_write_protection(result: windows::core::Result<()>) -> WriteProtectionStatus {
+    match result {
+        Ok(()) => WriteProtectionStatus::Writable,
+        Err(error) if error.code() == windows::core::HRESULT::from_win32(ERROR_WRITE_PROTECT.0) => {
+            WriteProtectionStatus::Protected
+        }
+        Err(error) => WriteProtectionStatus::Unknown(error.to_string()),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod write_protection_tests {
+    use super::*;
+
+    #[test]
+    fn maps_windows_write_protect_error_to_protected() {
+        let error = windows::core::Error::from_hresult(windows::core::HRESULT::from_win32(
+            ERROR_WRITE_PROTECT.0,
+        ));
+        assert_eq!(
+            classify_write_protection(Err(error)),
+            WriteProtectionStatus::Protected
+        );
+        assert_eq!(
+            classify_write_protection(Ok(())),
+            WriteProtectionStatus::Writable
+        );
+    }
+}
+
+#[cfg(not(windows))]
+pub fn query_write_protection(_file: &File) -> WriteProtectionStatus {
+    WriteProtectionStatus::Unknown(
+        "Write-protection detection is only available on Windows.".to_owned(),
+    )
 }
 
 impl ProbeResult {
@@ -213,6 +277,7 @@ pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
         Ok(geometry) => (Some(geometry), None),
         Err(error) => (None, Some(error)),
     };
+    let write_protection = query_write_protection(&file);
 
     let mut sector = [0u8; PROBE_SIZE];
     let mut total_read = 0usize;
@@ -253,5 +318,6 @@ pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
         boot_signature,
         geometry,
         geometry_error,
+        write_protection,
     })
 }

@@ -255,6 +255,9 @@ impl FluxVaultApp {
                 .and_then(|result| result.geometry)
                 .map(|geometry| geometry.looks_like_floppy())
                 .unwrap_or(false)
+                && self.probe_result.as_ref().is_some_and(|result| {
+                    result.write_protection == crate::floppy::WriteProtectionStatus::Protected
+                })
                 && !self.imaging_running;
 
             let imaging_button_text = if self.imaging_running {
@@ -280,10 +283,7 @@ impl FluxVaultApp {
                 acquisition_directory.display()
             ));
 
-            ui.weak(
-                "Ügyféllemeznél használja a floppy fizikai írásvédő kapcsolóját is, \
-                 ha a lemez típusa rendelkezik vele.",
-            );
+            ui.weak("Ügyféllemezt csak megbízható írásvédelemmel olvasson (nyitott írásvédő lyuk). A Windows egy írható lemezt a háttérben is módosíthat.");
 
             if self.project.is_none() {
                 ui.colored_label(
@@ -297,16 +297,38 @@ impl FluxVaultApp {
             ui.add_space(16.0);
 
             ui.group(|ui| {
+                let protected = result.write_protection
+                    == crate::floppy::WriteProtectionStatus::Protected;
                 ui.colored_label(
-                    egui::Color32::from_rgb(70, 200, 120),
-                    egui::RichText::new("[READ OK] Fizikai floppy olvashato")
-                        .strong()
-                        .size(18.0),
+                    if protected {
+                        egui::Color32::from_rgb(70, 200, 120)
+                    } else {
+                        egui::Color32::from_rgb(230, 105, 95)
+                    },
+                    egui::RichText::new(if protected {
+                        "[READ OK] Fizikai floppy olvasható; a meghajtó írásvédettnek jelzi"
+                    } else {
+                        "[STOP] Fizikai floppy olvasható, de az írásvédelem nem igazolt"
+                    })
+                    .strong()
+                    .size(18.0),
                 );
 
                 ui.add_space(8.0);
 
                 ui.label(format!("Beolvasott bajtok: {}", result.bytes_read));
+                match &result.write_protection {
+                    crate::floppy::WriteProtectionStatus::Protected => {
+                        ui.colored_label(egui::Color32::from_rgb(70, 200, 120), "[OK] A meghajtó írásvédettnek jelzi a lemezt.");
+                    }
+                    crate::floppy::WriteProtectionStatus::Writable => {
+                        ui.colored_label(egui::Color32::from_rgb(230, 105, 95), "[STOP] A meghajtó írhatónak jelzi a lemezt. Ellenőrizze az írásvédő fület (nyitott lyuk); ha már védett, ez az USB meghajtó lehet, hogy nem jelenti vagy nem tartja tiszteletben a védelmet. A kép készítése tiltva.");
+                    }
+                    crate::floppy::WriteProtectionStatus::Unknown(error) => {
+                        ui.colored_label(egui::Color32::from_rgb(230, 105, 95), "[STOP] Az írásvédelem nem ellenőrizhető; a kép készítése tiltva.");
+                        ui.monospace(error);
+                    }
+                }
                 ui.monospace(format!("Elso 16 bajt: {}", result.first_bytes_hex()));
                 ui.label(format!("510-511. bajt: {}", result.boot_signature_hex()));
 

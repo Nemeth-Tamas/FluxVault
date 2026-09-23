@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     dmde_logs::{self, ParsedDmdeLog},
-    floppy::{DiskGeometry, FloppyDrive},
+    floppy::{self, DiskGeometry, FloppyDrive},
     legacy_logs::{self, ParsedArchiverLog},
     safety::MediaSafetyPolicy,
 };
@@ -267,6 +267,14 @@ fn run_imaging(
             drive.device_path
         )
     })?;
+
+    let write_protection = floppy::query_write_protection(&source);
+    if write_protection != floppy::WriteProtectionStatus::Protected {
+        return Err(format!(
+            "A(z) {} forraslemez irasvedelme nincs igazolva ({write_protection:?}). A lemezkep keszitese megtagadva. Ellenorizze a floppy irasvedo fulet (nyitott lyuk); ha mar vedett, tesztelje az USB meghajtot kulon, eldobhato lemezzel.",
+            drive.root,
+        ));
+    }
 
     let mut output = OpenOptions::new()
         .write(true)

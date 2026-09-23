@@ -16,7 +16,7 @@ use crate::{
     conversion_run::{self, ConversionEvent, ConversionRequest, ConversionResult},
     external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
     extraction::{self, ExtractionEvent, ExtractionPresence, ExtractionResult},
-    floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
+    floppy::{self, DiskGeometry, FloppyDrive, ProbeResult, WriteProtectionStatus},
     imaging::{
         self, AttemptComparison, AttemptSummary, ImagingEvent, ImagingResult, ProjectStatistics,
         SectorReadState,
@@ -1600,6 +1600,19 @@ impl FluxVaultApp {
             return;
         }
 
+        if self
+            .probe_result
+            .as_ref()
+            .map(|result| &result.write_protection)
+            != Some(&WriteProtectionStatus::Protected)
+        {
+            self.status =
+                "A floppy fizikai írásvédelme nem igazolt; a lemezkép készítése megtagadva."
+                    .to_owned();
+            self.log("A forráslemez írásvédelme nem igazolt. Ellenőrizze a fület (nyitott lyuk); ha már védett, az USB meghajtót külön, eldobható lemezzel kell ellenőrizni.");
+            return;
+        }
+
         let total_sectors = geometry.total_sectors() as usize;
 
         self.imaging_geometry = Some(geometry);
@@ -1785,6 +1798,22 @@ impl FluxVaultApp {
                     "READ ONLY próbaolvasás sikeres: {} bájt a(z) {} meghajtóról.",
                     result.bytes_read, drive.root
                 ));
+
+                match &result.write_protection {
+                    WriteProtectionStatus::Protected => {
+                        self.log("A meghajtó írásvédettnek jelzi a lemezt.")
+                    }
+                    WriteProtectionStatus::Writable => {
+                        self.status =
+                            "FIGYELEM: a floppy írható; a teljes lemezkép tiltva.".to_owned();
+                        self.log("A meghajtó írhatónak jelzi a lemezt. A Windows a háttérben is módosíthatja. Ellenőrizze a fizikai fület (nyitott lyuk); ha az már védett, a meghajtó/adapter írásvédelmi működését külön kell ellenőrizni, nem ügyféllemezen.");
+                    }
+                    WriteProtectionStatus::Unknown(error) => {
+                        self.status = "Az írásvédelem nem ellenőrizhető; a teljes lemezkép tiltva."
+                            .to_owned();
+                        self.log(format!("Az írásvédelem ellenőrzése sikertelen: {error}"));
+                    }
+                }
 
                 self.probe_result = Some(result);
             }
