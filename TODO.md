@@ -359,6 +359,7 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [ ] Conversion, audit/report, and validated customer-package commands matching the GUI workflow.
 - [ ] Human-readable output by default plus stable `--json` output for scripts; progress goes to stderr so JSON/stdout remains machine-readable.
 - [ ] Stable documented exit codes for success, partial recovery, operator action required, invalid project/input, missing tool, and fatal failure.
+  - [x] Initial CLI contract: 0 complete, 3 attention/partial, 2 invalid input/operation error; `audit` and `process` return 3 when recovery or conversion attention remains.
 - [ ] Non-interactive/background operations require explicit policy flags; physical-media operations retain read-only safety while confirmations are limited to unavoidable custody/media changes.
 - [ ] Every CLI external-tool invocation uses argument arrays and the same command/audit log as the GUI; never expose Greaseweazle write/erase commands.
 - [ ] Shell completion generation for PowerShell initially, with Bash/Zsh completion when the application becomes cross-platform.

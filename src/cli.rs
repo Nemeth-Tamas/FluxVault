@@ -34,7 +34,13 @@ Usage:\n\
 Options:\n\
   --json                            Output machine-readable JSON\n\
   --project PATH                    Use a specific project instead of searching upward\n\
-  --destination PATH                Output folder outside the project";
+  --destination PATH                Output folder outside the project\n\
+Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error";
+
+struct CliResponse {
+    output: String,
+    exit_code: i32,
+}
 
 pub fn run_from_env() -> Option<i32> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -46,9 +52,9 @@ pub fn run_from_env() -> Option<i32> {
             &args,
             &env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         ) {
-            Ok(output) => {
-                println!("{output}");
-                0
+            Ok(response) => {
+                println!("{}", response.output);
+                response.exit_code
             }
             Err(message) => {
                 eprintln!("FluxVault: {message}");
@@ -58,7 +64,7 @@ pub fn run_from_env() -> Option<i32> {
     )
 }
 
-fn run(args: &[String], cwd: &Path) -> Result<String, String> {
+fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
     let mut destination: Option<PathBuf> = None;
@@ -86,7 +92,8 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
         index += 1;
     }
 
-    match positional.first().map(String::as_str) {
+    let mut needs_attention = false;
+    let output = match positional.first().map(String::as_str) {
         Some("help") if positional.len() == 1 => Ok(HELP.to_owned()),
         Some("init") if positional.len() <= 2 && project_override.is_none() => {
             let root = positional
@@ -219,6 +226,7 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let result = audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
+            needs_attention = result.attention_disks > 0;
             if json_output {
                 Ok(json!({"json": result.json_path, "csv": result.csv_path, "disks": result.disk_count,
                     "verified": result.verified_disks, "attention": result.attention_disks,
@@ -257,6 +265,10 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
                 },
                 &|stage| eprintln!("{stage}"),
             )?;
+            needs_attention = result.audit.attention_disks > 0
+                || result.extraction.recovery_disks > 0
+                || result.conversion.partial > 0
+                || result.conversion.failed > 0;
             if json_output {
                 Ok(json!({"disks": result.extraction.total_disks,
                     "extracted": result.extraction.extracted_disks,
@@ -301,10 +313,11 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             )?;
             if json_output {
                 Ok(json!({"zip": result.zip_path, "sha256_file": result.sha256_path,
-                    "sha256": result.sha256, "files": result.file_count, "bytes": result.total_bytes}).to_string())
+                    "sha256": result.sha256, "files": result.file_count, "bytes": result.total_bytes,
+                    "customer_delivery_certified": false}).to_string())
             } else {
                 Ok(format!(
-                    "Verified package: {}\nFiles: {} | Source bytes: {}\nSHA-256: {}",
+                    "Verified archival ZIP (not customer-certified): {}\nFiles: {} | Source bytes: {}\nSHA-256: {}",
                     result.zip_path.display(),
                     result.file_count,
                     result.total_bytes,
@@ -313,7 +326,11 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             }
         }
         _ => Err(format!("Unsupported command or arguments.\n{HELP}")),
-    }
+    }?;
+    Ok(CliResponse {
+        output,
+        exit_code: if needs_attention { 3 } else { 0 },
+    })
 }
 
 fn resolve_project_root(cwd: &Path, project_override: Option<&Path>) -> Result<PathBuf, String> {
@@ -370,7 +387,8 @@ mod tests {
             Path::new("."),
         )
         .unwrap();
-        assert!(output.contains("Created project"));
+        assert!(output.output.contains("Created project"));
+        assert_eq!(output.exit_code, 0);
         assert!(root.join("project.json").is_file());
         let list = run(
             &[
@@ -383,7 +401,7 @@ mod tests {
             Path::new("."),
         )
         .unwrap();
-        let json: serde_json::Value = serde_json::from_str(&list).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&list.output).unwrap();
         assert_eq!(json["disks"].as_array().unwrap().len(), 0);
         assert!(
             run(

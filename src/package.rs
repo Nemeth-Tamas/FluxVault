@@ -175,6 +175,12 @@ fn collect_project_files(project: &Path) -> Result<Vec<PackageFile>, String> {
         if !root.exists() {
             continue;
         }
+        if is_reparse_point(&root)? {
+            return Err(format!(
+                "Package refuses a linked project folder: {}",
+                root.display()
+            ));
+        }
         let mut pending = vec![root];
         while let Some(current) = pending.pop() {
             for entry in fs::read_dir(&current)
