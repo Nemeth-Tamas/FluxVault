@@ -270,6 +270,7 @@ fn is_customer_report(name: &str, latest_workbook: Option<&str>) -> bool {
         "integrityvalidation.csv",
         "evidenceaudit.csv",
         "evidenceaudit.json",
+        "offlinerecoverydecisions.json",
     ];
     EXACT.contains(&normalized.as_str())
         || (normalized.starts_with("finalaudit")
@@ -535,6 +536,13 @@ mod tests {
         fs::write(windows_metadata.join("IndexerVolumeGuid"), b"OS metadata").unwrap();
         fs::write(project.join("Reports").join("EvidenceAudit.csv"), b"audit").unwrap();
         fs::write(
+            project
+                .join("Reports")
+                .join("OfflineRecoveryDecisions.json"),
+            b"{}",
+        )
+        .unwrap();
+        fs::write(
             project.join("Reports").join("private-working-note.txt"),
             b"private",
         )
@@ -562,13 +570,14 @@ mod tests {
             &|_| {},
         )
         .unwrap();
-        assert_eq!(result.file_count, 4);
-        assert_eq!(result.total_bytes, 21);
+        assert_eq!(result.file_count, 5);
+        assert_eq!(result.total_bytes, 23);
         assert!(result.sha256_path.is_file());
         let mut zip = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
         assert!(zip.by_name("Images/001.img").is_ok());
         assert!(zip.by_name("Extracted/001/customer.doc").is_ok());
         assert!(zip.by_name("Reports/EvidenceAudit.csv").is_ok());
+        assert!(zip.by_name("Reports/OfflineRecoveryDecisions.json").is_ok());
         assert!(
             zip.by_name("Reports/FluxVault_Jelentes_20260102.xlsx")
                 .is_ok()

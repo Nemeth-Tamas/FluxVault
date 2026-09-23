@@ -171,6 +171,8 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Reject composite sources whose recorded image hash changed or whose mutually readable sectors disagree; reject duplicate attempt IDs and unsafe source file types.
 - [x] Add a read-only per-disk recovery plan (`fluxvault recovery plan`) that re-hashes saved attempts and ranks composite, mirrored-FAT, and physical reread/flux candidates without writing to source media.
 - [x] The one-button offline `process` workflow automatically creates or verifies/reuses mirrored-FAT derived images where the saved-image plan finds redundant readable sectors; unresolved data stays explicitly partial.
+- [x] The offline `process` workflow automatically attempts provenance-tracked composites when saved attempts have complementary readable sectors, reuses verified prior results, and declines conflicting captures without stopping other disks. It can then apply mirrored-FAT repair to a still-partial composite.
+- [x] Persist each offline recovery decision and exception in `Reports/OfflineRecoveryDecisions.json` for audit/customer-package context; this is not a claim that unresolved sectors were recovered.
 - [x] Never destroy original attempt images when creating a composite.
 - [x] Legacy/fallback compatibility: allow import of a DMDE-recovered folder and DMDE log. This must not remain part of the intended normal workflow.
 - [ ] Immediately re-run extraction/audit state after a new recovery result is imported.

@@ -176,7 +176,10 @@ fn plan_disk(
     Ok(plan)
 }
 
-fn resolve_image_path(images_directory: &Path, recorded: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_image_path(
+    images_directory: &Path,
+    recorded: &str,
+) -> Result<PathBuf, String> {
     let source = Path::new(recorded);
     let path = if source.is_absolute() {
         source.to_path_buf()

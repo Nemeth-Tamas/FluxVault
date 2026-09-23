@@ -933,6 +933,7 @@ impl FluxVaultApp {
             })
             .collect();
         let request = composite::CompositeRequest {
+            images_directory: project.images_dir(),
             recovery_root: project.recovery_dir(),
             disk_number: self.current_disk_number,
             sources,
@@ -967,7 +968,9 @@ impl FluxVaultApp {
 
                     match result {
                         Ok(result) => {
-                            self.composite_stage = if result.replacements.is_empty() {
+                            self.composite_stage = if result.reused {
+                                "Korábbi kompozitkép ellenőrizve és újrahasznosítva.".to_owned()
+                            } else if result.replacements.is_empty() {
                                 "A próbálkozások között nincs bizonyíthatóan pótolható szektor."
                                     .to_owned()
                             } else if result.unresolved_bad_sectors.is_empty() {
@@ -1610,7 +1613,7 @@ impl FluxVaultApp {
                 Ok(PipelineEvent::Finished(result)) => {
                     finished = true;
                     self.pipeline_running = false;
-                    match result {
+                    match *result {
                         Ok(result) => {
                             self.pipeline_stage =
                                 "Projektfeldolgozás kész; kivételek ellenőrzendők.".to_owned();

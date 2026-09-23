@@ -8,8 +8,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::recovery_plan;
 
 const PROVENANCE_SCHEMA_VERSION: u32 = 1;
 
@@ -24,6 +26,7 @@ pub struct CompositeSource {
 
 #[derive(Debug, Clone)]
 pub struct CompositeRequest {
+    pub images_directory: PathBuf,
     pub recovery_root: PathBuf,
     pub disk_number: u32,
     pub sources: Vec<CompositeSource>,
@@ -43,9 +46,10 @@ pub struct CompositeResult {
     pub derived_sha256: Option<String>,
     pub replacements: Vec<CompositeReplacement>,
     pub unresolved_bad_sectors: Vec<u64>,
+    pub reused: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompositeReplacement {
     pub target_lba: u64,
     pub source_attempt: u32,
@@ -53,7 +57,7 @@ pub struct CompositeReplacement {
     pub source_sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CompositeSourceProvenance {
     attempt_number: u32,
     image: String,
@@ -61,7 +65,7 @@ struct CompositeSourceProvenance {
     bad_sectors: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CompositeProvenance {
     schema_version: u32,
     created_unix_ms: u64,
@@ -98,7 +102,7 @@ pub fn spawn_composite(request: CompositeRequest) -> Receiver<CompositeEvent> {
     receiver
 }
 
-fn run_composite(
+pub(crate) fn run_composite(
     request: &CompositeRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<CompositeResult, String> {
@@ -114,6 +118,13 @@ fn run_composite(
     let mut attempt_numbers = BTreeSet::new();
 
     for source in &request.sources {
+        recovery_plan::resolve_image_path(
+            &request.images_directory,
+            &source.image_path.display().to_string(),
+        )
+        .map_err(|error| {
+            format!("Composite source is outside this project's Images directory: {error}")
+        })?;
         if !attempt_numbers.insert(source.attempt_number) {
             return Err(format!(
                 "A(z) {:03} próbálkozás többször szerepel a kompozit forrásai között.",
@@ -287,6 +298,7 @@ fn run_composite(
             derived_sha256: None,
             replacements,
             unresolved_bad_sectors,
+            reused: false,
         });
     }
 
@@ -295,6 +307,36 @@ fn run_composite(
     let disk_directory = request
         .recovery_root
         .join(format!("{:03}", request.disk_number));
+    let provenance_sources = loaded
+        .iter()
+        .map(|source| CompositeSourceProvenance {
+            attempt_number: source.source.attempt_number,
+            image: source.source.image_path.display().to_string(),
+            sha256: source.sha256.clone(),
+            bad_sectors: source.bad_sectors.iter().copied().collect(),
+        })
+        .collect::<Vec<_>>();
+    if let Some((derived_image, provenance_path)) = find_existing_composite(
+        &disk_directory,
+        request.disk_number,
+        base_attempt,
+        &derived_sha256,
+        bytes_per_sector,
+        total_sectors,
+        &provenance_sources,
+        &replacements,
+        &unresolved_bad_sectors,
+    )? {
+        return Ok(CompositeResult {
+            base_attempt,
+            derived_image: Some(derived_image),
+            provenance_path: Some(provenance_path),
+            derived_sha256: Some(derived_sha256),
+            replacements,
+            unresolved_bad_sectors,
+            reused: true,
+        });
+    }
     fs::create_dir_all(&disk_directory).map_err(|error| {
         format!(
             "Nem sikerült létrehozni a recovery mappát {}: {error}",
@@ -323,15 +365,7 @@ fn run_composite(
         derived_sha256: derived_sha256.clone(),
         bytes_per_sector,
         total_sectors,
-        sources: loaded
-            .iter()
-            .map(|source| CompositeSourceProvenance {
-                attempt_number: source.source.attempt_number,
-                image: source.source.image_path.display().to_string(),
-                sha256: source.sha256.clone(),
-                bad_sectors: source.bad_sectors.iter().copied().collect(),
-            })
-            .collect(),
+        sources: provenance_sources,
         replacements: replacements.clone(),
         unresolved_bad_sectors: unresolved_bad_sectors.clone(),
         warning: "DERIVED IMAGE: sectors copied from independently acquired attempts; never treat as an untouched physical capture."
@@ -363,7 +397,104 @@ fn run_composite(
         derived_sha256: Some(derived_sha256),
         replacements,
         unresolved_bad_sectors,
+        reused: false,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_existing_composite(
+    disk_directory: &Path,
+    disk_number: u32,
+    base_attempt: u32,
+    derived_sha256: &str,
+    bytes_per_sector: usize,
+    total_sectors: usize,
+    sources: &[CompositeSourceProvenance],
+    replacements: &[CompositeReplacement],
+    unresolved: &[u64],
+) -> Result<Option<(PathBuf, PathBuf)>, String> {
+    if !disk_directory.is_dir() {
+        return Ok(None);
+    }
+    let mut entries = fs::read_dir(disk_directory)
+        .map_err(|error| {
+            format!(
+                "Cannot inspect recovery directory {}: {error}",
+                disk_directory.display()
+            )
+        })?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Cannot list composite evidence: {error}"))?;
+    entries.sort();
+    let prefix = format!("{disk_number:03}_from_attempt_{base_attempt:03}_composite_");
+    for provenance_path in entries {
+        let Some(name) = provenance_path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) || !name.ends_with(".json") || name.ends_with(".partial.json")
+        {
+            continue;
+        }
+        if !fs::symlink_metadata(&provenance_path)
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+        {
+            return Err(format!(
+                "Composite provenance is not a regular file: {}",
+                provenance_path.display()
+            ));
+        }
+        let provenance: CompositeProvenance = serde_json::from_slice(
+            &fs::read(&provenance_path)
+                .map_err(|error| format!("Cannot read {}: {error}", provenance_path.display()))?,
+        )
+        .map_err(|error| {
+            format!(
+                "Invalid composite provenance {}: {error}",
+                provenance_path.display()
+            )
+        })?;
+        if provenance.schema_version != PROVENANCE_SCHEMA_VERSION
+            || provenance.disk_number != disk_number
+            || provenance.base_attempt != base_attempt
+            || provenance.derived_sha256 != derived_sha256
+            || provenance.bytes_per_sector != bytes_per_sector
+            || provenance.total_sectors != total_sectors
+            || provenance.sources != sources
+            || provenance.replacements != replacements
+            || provenance.unresolved_bad_sectors != unresolved
+        {
+            continue;
+        }
+        let derived_image = PathBuf::from(&provenance.derived_image);
+        let disk_root = fs::canonicalize(disk_directory)
+            .map_err(|error| format!("Cannot resolve recovery directory: {error}"))?;
+        let resolved_image = fs::canonicalize(&derived_image)
+            .map_err(|error| format!("Recorded composite image is missing: {error}"))?;
+        if resolved_image.parent() != Some(disk_root.as_path())
+            || !fs::symlink_metadata(&derived_image)
+                .is_ok_and(|metadata| metadata.file_type().is_file())
+        {
+            return Err(format!(
+                "Recorded composite image is outside its recovery directory or is not a regular file: {}",
+                derived_image.display()
+            ));
+        }
+        let actual_hash = sha256_bytes(&fs::read(&derived_image).map_err(|error| {
+            format!(
+                "Cannot read composite image {}: {error}",
+                derived_image.display()
+            )
+        })?);
+        if actual_hash != derived_sha256 {
+            return Err(format!(
+                "Existing composite image has changed since provenance was recorded: {}",
+                derived_image.display()
+            ));
+        }
+        return Ok(Some((derived_image, provenance_path)));
+    }
+    Ok(None)
 }
 
 fn copy_sector(
@@ -441,6 +572,7 @@ mod tests {
         fs::write(&second, second_bytes).unwrap();
 
         let request = CompositeRequest {
+            images_directory: root.clone(),
             recovery_root: root.join("Recovery"),
             disk_number: 1,
             sources: vec![
@@ -471,6 +603,25 @@ mod tests {
         assert!(result.unresolved_bad_sectors.is_empty());
         assert!(derived[512..1024].iter().all(|byte| *byte == 0xA5));
         assert!(result.provenance_path.as_ref().unwrap().is_file());
+        assert!(!result.reused);
+
+        let repeated = run_composite(&request, &|_| {}).unwrap();
+        assert!(repeated.reused);
+        assert_eq!(repeated.derived_image, result.derived_image);
+        assert_eq!(repeated.provenance_path, result.provenance_path);
+        assert_eq!(
+            fs::read_dir(request.recovery_root.join("001"))
+                .unwrap()
+                .count(),
+            2
+        );
+
+        fs::write(result.derived_image.as_ref().unwrap(), vec![0u8; 4 * 512]).unwrap();
+        assert!(
+            run_composite(&request, &|_| {})
+                .unwrap_err()
+                .contains("changed since provenance")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -485,6 +636,7 @@ mod tests {
         fs::write(&second, vec![0u8; 2 * 512]).unwrap();
 
         let request = CompositeRequest {
+            images_directory: root.clone(),
             recovery_root: root.join("Recovery"),
             disk_number: 1,
             sources: vec![
@@ -523,6 +675,7 @@ mod tests {
         fs::write(&first, vec![0u8; 2 * 512]).unwrap();
         fs::write(&second, vec![0u8; 2 * 512]).unwrap();
         let request = CompositeRequest {
+            images_directory: root.clone(),
             recovery_root: root.join("Recovery"),
             disk_number: 1,
             sources: vec![
@@ -563,6 +716,7 @@ mod tests {
         fs::write(&first, first_bytes).unwrap();
         fs::write(&second, second_bytes).unwrap();
         let request = CompositeRequest {
+            images_directory: root.clone(),
             recovery_root: root.join("Recovery"),
             disk_number: 1,
             sources: vec![

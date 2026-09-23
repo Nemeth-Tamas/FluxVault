@@ -246,10 +246,10 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .into_iter()
                 .filter(|plan| requested_disk.is_none_or(|number| plan.disk_number == number))
                 .collect::<Vec<_>>();
-            if let Some(number) = requested_disk {
-                if plans.is_empty() {
-                    return Err(format!("No saved disk {number:03} in this project"));
-                }
+            if let Some(number) = requested_disk
+                && plans.is_empty()
+            {
+                return Err(format!("No saved disk {number:03} in this project"));
             }
             needs_attention = plans
                 .iter()
@@ -321,10 +321,15 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             )?;
             needs_attention = result.audit.attention_disks > 0
                 || result.extraction.recovery_disks > 0
+                || result.declined_composites > 0
                 || result.conversion.partial > 0
                 || result.conversion.failed > 0;
             if json_output {
                 Ok(json!({"disks": result.extraction.total_disks,
+                    "composited_disks": result.composited_disks,
+                    "composites_reused": result.reused_composites,
+                    "composites_declined": result.declined_composites,
+                    "recovery_decisions": result.recovery_decisions_path,
                     "mirrored_fat_derived_disks": result.reconstructed_disks,
                     "mirrored_fat_reused": result.reused_reconstructions,
                     "extracted": result.extraction.extracted_disks,
@@ -339,15 +344,19 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .to_string())
             } else {
                 Ok(format!(
-                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed.\nWorkbook: {}",
+                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed.\nRecovery decisions: {}\nWorkbook: {}",
                     result.extraction.total_disks,
                     result.audit.verified_disks,
                     result.audit.attention_disks,
+                    result.composited_disks,
+                    result.reused_composites,
+                    result.declined_composites,
                     result.reconstructed_disks,
                     result.reused_reconstructions,
                     result.conversion.ok,
                     result.conversion.partial,
                     result.conversion.failed,
+                    result.recovery_decisions_path.display(),
                     result.workbook_path.display()
                 ))
             }
