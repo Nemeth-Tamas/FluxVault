@@ -153,6 +153,10 @@ impl FluxVaultApp {
                 ui.label(format!("{} lemez | {} ellenőrzött | {} figyelmet igényel | {} sikeres Office-konverzió",
                     result.extraction.total_disks, result.audit.verified_disks,
                     result.audit.attention_disks, result.conversion.ok));
+                ui.label(format!(
+                    "Tükrözött FAT: {} lemeznél származtatott kép ({} ellenőrzött korábbi eredmény újrahasznosítva). A megoldatlan szektorok továbbra is figyelmet igényelnek.",
+                    result.reconstructed_disks, result.reused_reconstructions
+                ));
                 ui.monospace(format!("Jelentés: {}", result.workbook_path.display()));
             }
         });
@@ -554,7 +558,11 @@ impl FluxVaultApp {
                 if let Some(path) = &result.derived_image {
                     ui.colored_label(
                         egui::Color32::from_rgb(70, 200, 120),
-                        "[SZARMAZTATOTT KEP ELKESZULT]",
+                        if result.reused {
+                            "[ELLENŐRZÖTT KORÁBBI SZÁRMAZTATOTT KÉP]"
+                        } else {
+                            "[SZARMAZTATOTT KEP ELKESZULT]"
+                        },
                     );
                     ui.monospace(format!("Származtatott kép: {}", path.display()));
                 }

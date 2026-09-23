@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const PROVENANCE_SCHEMA_VERSION: u32 = 1;
@@ -39,16 +39,17 @@ pub struct ReconstructionResult {
     pub reconstructed: Vec<ReconstructionRecord>,
     pub unresolved_bad_sectors: Vec<u64>,
     pub filesystem: String,
+    pub reused: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReconstructionRecord {
     pub target_lba: u64,
     pub source_lba: u64,
     pub method: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReconstructionProvenance {
     schema_version: u32,
     created_unix_ms: u64,
@@ -86,7 +87,7 @@ pub fn spawn_reconstruction(request: ReconstructionRequest) -> Receiver<Reconstr
     receiver
 }
 
-fn run_reconstruction(
+pub(crate) fn run_reconstruction(
     request: &ReconstructionRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ReconstructionResult, String> {
@@ -148,6 +149,7 @@ fn run_reconstruction(
             reconstructed: records,
             unresolved_bad_sectors,
             filesystem,
+            reused: false,
         });
     }
 
@@ -170,6 +172,26 @@ fn run_reconstruction(
     let disk_directory = request
         .recovery_root
         .join(format!("{:03}", request.disk_number));
+    if let Some((derived_image, provenance_path)) = find_existing_reconstruction(
+        &disk_directory,
+        request,
+        &source_sha256,
+        &derived_sha256,
+        &records,
+        &unresolved_bad_sectors,
+    )? {
+        return Ok(ReconstructionResult {
+            source_image: request.image_path.clone(),
+            derived_image: Some(derived_image),
+            provenance_path: Some(provenance_path),
+            source_sha256,
+            derived_sha256: Some(derived_sha256),
+            reconstructed: records,
+            unresolved_bad_sectors,
+            filesystem,
+            reused: true,
+        });
+    }
     fs::create_dir_all(&disk_directory).map_err(|error| {
         format!(
             "Nem sikerült létrehozni a recovery mappát {}: {error}",
@@ -230,7 +252,100 @@ fn run_reconstruction(
         reconstructed: records,
         unresolved_bad_sectors,
         filesystem,
+        reused: false,
     })
+}
+
+fn find_existing_reconstruction(
+    disk_directory: &Path,
+    request: &ReconstructionRequest,
+    source_sha256: &str,
+    derived_sha256: &str,
+    records: &[ReconstructionRecord],
+    unresolved: &[u64],
+) -> Result<Option<(PathBuf, PathBuf)>, String> {
+    if !disk_directory.is_dir() {
+        return Ok(None);
+    }
+    let mut entries = fs::read_dir(disk_directory)
+        .map_err(|error| {
+            format!(
+                "Cannot inspect recovery directory {}: {error}",
+                disk_directory.display()
+            )
+        })?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Cannot list recovery evidence: {error}"))?;
+    entries.sort();
+    for provenance_path in entries {
+        let Some(name) = provenance_path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&format!(
+            "{:03}_from_attempt_{:03}_fat_reconstruction_",
+            request.disk_number, request.attempt_number
+        )) || !name.ends_with(".json")
+            || name.ends_with(".partial.json")
+        {
+            continue;
+        }
+        if !fs::symlink_metadata(&provenance_path)
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+        {
+            return Err(format!(
+                "Recovery provenance is not a regular file: {}",
+                provenance_path.display()
+            ));
+        }
+        let provenance: ReconstructionProvenance = serde_json::from_slice(
+            &fs::read(&provenance_path)
+                .map_err(|error| format!("Cannot read {}: {error}", provenance_path.display()))?,
+        )
+        .map_err(|error| {
+            format!(
+                "Invalid recovery provenance {}: {error}",
+                provenance_path.display()
+            )
+        })?;
+        if provenance.schema_version != PROVENANCE_SCHEMA_VERSION
+            || provenance.source_image != request.image_path.display().to_string()
+            || provenance.source_sha256 != source_sha256
+            || provenance.derived_sha256 != derived_sha256
+            || provenance.reconstructed_sectors != records
+            || provenance.unresolved_bad_sectors != unresolved
+        {
+            continue;
+        }
+        let derived_image = PathBuf::from(&provenance.derived_image);
+        let disk_root = fs::canonicalize(disk_directory)
+            .map_err(|error| format!("Cannot resolve recovery directory: {error}"))?;
+        let resolved_image = fs::canonicalize(&derived_image)
+            .map_err(|error| format!("Recorded derived image is missing: {error}"))?;
+        if resolved_image.parent() != Some(disk_root.as_path())
+            || !fs::symlink_metadata(&derived_image)
+                .is_ok_and(|metadata| metadata.file_type().is_file())
+        {
+            return Err(format!(
+                "Recorded derived image is outside its recovery directory or is not a regular file: {}",
+                derived_image.display()
+            ));
+        }
+        let actual_hash = sha256_bytes(&fs::read(&derived_image).map_err(|error| {
+            format!(
+                "Cannot read derived image {}: {error}",
+                derived_image.display()
+            )
+        })?);
+        if actual_hash != derived_sha256 {
+            return Err(format!(
+                "Existing derived image has changed since its provenance was recorded: {}",
+                derived_image.display()
+            ));
+        }
+        return Ok(Some((derived_image, provenance_path)));
+    }
+    Ok(None)
 }
 
 pub(crate) fn inspect_mirrored_fat(
@@ -530,6 +645,40 @@ mod tests {
                 .contains("SHA-256")
         );
         assert!(!request.recovery_root.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reuses_verified_reconstruction_without_creating_another_image() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxvault-fat-reuse-{}-{}",
+            std::process::id(),
+            current_unix_ms()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let image_path = root.join("001.img");
+        let image = synthetic_fat12_image();
+        fs::write(&image_path, &image).unwrap();
+        let request = ReconstructionRequest {
+            image_path,
+            expected_sha256: Some(sha256_bytes(&image)),
+            recovery_root: root.join("Recovery"),
+            disk_number: 1,
+            attempt_number: 1,
+            bad_sectors: vec![1],
+        };
+        let first = run_reconstruction(&request, &|_| {}).unwrap();
+        let second = run_reconstruction(&request, &|_| {}).unwrap();
+        assert!(!first.reused);
+        assert!(second.reused);
+        assert_eq!(first.derived_image, second.derived_image);
+        assert_eq!(first.provenance_path, second.provenance_path);
+        assert_eq!(
+            fs::read_dir(request.recovery_root.join("001"))
+                .unwrap()
+                .count(),
+            2
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -840,7 +840,10 @@ impl FluxVaultApp {
 
                     match result {
                         Ok(result) => {
-                            self.reconstruction_stage = if result.reconstructed.is_empty() {
+                            self.reconstruction_stage = if result.reused {
+                                "Korábbi FAT rekonstrukció ellenőrizve és újrahasznosítva."
+                                    .to_owned()
+                            } else if result.reconstructed.is_empty() {
                                 "Nincs biztonságosan rekonstruálható szektor.".to_owned()
                             } else if result.unresolved_bad_sectors.is_empty() {
                                 "FAT redundancia-alapú szektorrekonstrukció elkészült.".to_owned()

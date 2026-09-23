@@ -325,6 +325,8 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 || result.conversion.failed > 0;
             if json_output {
                 Ok(json!({"disks": result.extraction.total_disks,
+                    "mirrored_fat_derived_disks": result.reconstructed_disks,
+                    "mirrored_fat_reused": result.reused_reconstructions,
                     "extracted": result.extraction.extracted_disks,
                     "recovery_queue": result.extraction.recovery_disks,
                     "converted_ok": result.conversion.ok,
@@ -337,10 +339,12 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .to_string())
             } else {
                 Ok(format!(
-                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nConversions: {} OK, {} partial, {} failed.\nWorkbook: {}",
+                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed.\nWorkbook: {}",
                     result.extraction.total_disks,
                     result.audit.verified_disks,
                     result.audit.attention_disks,
+                    result.reconstructed_disks,
+                    result.reused_reconstructions,
                     result.conversion.ok,
                     result.conversion.partial,
                     result.conversion.failed,
