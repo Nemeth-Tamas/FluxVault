@@ -1174,6 +1174,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "windows",
+ "zip",
 ]
 
 [[package]]

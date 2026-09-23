@@ -252,12 +252,12 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
   - [x] Spreadsheet-family -> XLSX + PDF: `.xls`, `.xlw`, `.xlt`, `.wk1`, `.wk3`, `.wk4`, `.wks`, `.123`, `.wb1`, `.wb2`, `.wq1`, `.wq2`, `.sdc`.
   - [x] Presentation-family -> PPTX + PDF: `.ppt`, `.pps`, `.pot`, `.sdd`.
 - [ ] Configurable worker/thread count.
-- [ ] Per-output timeout (default 45 s to match current workflow).
-- [ ] Process-tree kill on timeout.
-- [ ] Skip/reuse already-valid outputs unless force reconversion requested.
-- [ ] Validate generated Office OOXML as ZIP containers with required internal files.
-- [ ] Validate generated PDFs via `%PDF-` header + `%%EOF` tail sanity check.
-- [ ] Record `OK`, `PARTIAL`, `FAILED`, `TIMEOUT`, and `REUSED` results plus details/duration.
+- [x] Per-output timeout (default 45 s to match current workflow).
+- [x] Process-tree kill on timeout.
+- [x] Skip/reuse already-valid outputs; forced reconversion remains an advanced future option.
+- [x] Validate generated Office OOXML as ZIP containers with required internal files.
+- [x] Validate generated PDFs via `%PDF-` header + `%%EOF` tail sanity check.
+- [x] Record `OK`, `PARTIAL`, `FAILED`, `TIMEOUT`, and `REUSED` results plus details/duration.
 - [ ] Conversion issues page with retry selected / retry failed actions.
 - [ ] Production mode automatically converts all eligible files, retries transient failures within policy, and records permanent failures without asking the operator file-by-file.
 
@@ -321,13 +321,13 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [ ] Unit tests for floppy-number parsing and zero-padding.
 - [x] Unit tests for legacy archiver-log parsing.
 - [x] Unit tests for DMDE multi-pass map replay (later successful `C` replaces earlier `E`).
-- [ ] Unit tests for path cleanup / delivery naming / collision handling.
+- [x] Unit tests for path cleanup / delivery naming / collision handling.
 - [x] Unit tests for Greaseweazle command construction, especially raw-flux safety flags.
 - [ ] Unit tests for project persistence and migrations.
 - [ ] Unit tests for SHA/integrity helpers.
 - [ ] Fixture-based tests using scrubbed/sample logs and tiny synthetic images; never require a customer floppy for automated tests.
 - [x] Integration test for 7-Zip adapter.
-- [ ] Integration test for LibreOffice adapter when installed.
+- [x] Integration test for LibreOffice adapter when installed.
 - [x] Greaseweazle hardware tests marked/isolated so normal `cargo test` works without hardware.
 - [ ] End-to-end automated fixture test: acquisition artifact -> triage -> extraction/recovery -> conversion -> audit -> verified package with no technical operator choices.
 - [ ] Scheduler tests prove USB and Greaseweazle jobs can run concurrently without disk-number or artifact cross-contamination.

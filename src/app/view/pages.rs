@@ -1733,7 +1733,9 @@ impl FluxVaultApp {
             );
             if ui
                 .add_enabled(
-                    self.project.is_some() && !self.conversion_planning_running,
+                    self.project.is_some()
+                        && !self.conversion_planning_running
+                        && !self.conversion_running,
                     egui::Button::new(if self.conversion_planning_running {
                         "Delivery plan készítése folyamatban..."
                     } else {
@@ -1776,13 +1778,65 @@ impl FluxVaultApp {
         ui.add_space(12.0);
 
         ui_theme::section(ui, "LibreOffice átalakítás", |ui| {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 180, 80),
-                "A tényleges DOCX/XLSX/PPTX/PDF futtatás a következő lépés; a források és célok most már determinisztikus planből jönnek.",
-            );
             ui.label(
-                "A LibreOffice felismerése és egészségügyi ellenőrzése a Beállítások oldalon működik.",
+                "A recovered eredetiket tükrözi, majd a támogatott régi Office fájlokból modern dokumentumot és PDF-et készít. A meglévő érvényes outputokat újra felhasználja; fájlonként 45 másodperces időkorlátot alkalmaz.",
             );
+            let libreoffice_ready = self.ready_tool_path(ToolKind::LibreOffice).is_some();
+            if ui
+                .add_enabled(
+                    self.project.is_some()
+                        && libreoffice_ready
+                        && !self.conversion_running
+                        && !self.conversion_planning_running,
+                    egui::Button::new(if self.conversion_running {
+                        "Office konverzió folyamatban..."
+                    } else {
+                        "Teljes Office konverziós sor futtatása"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_conversion();
+            }
+            if !libreoffice_ready {
+                ui.weak("A LibreOffice nem érhető el; ellenőrizze a Beállítások oldalt.");
+            }
+            ui.label(&self.conversion_stage);
+            if self.conversion_running && self.conversion_total > 0 {
+                ui.add(
+                    egui::ProgressBar::new(
+                        self.conversion_completed as f32 / self.conversion_total as f32,
+                    )
+                    .show_percentage()
+                    .text(format!(
+                        "{} / {} fájl",
+                        self.conversion_completed, self.conversion_total
+                    )),
+                );
+            }
+            if let Some(error) = &self.conversion_error {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 70, 70),
+                    "[HIBA] Az Office konverziós sor sikertelen.",
+                );
+                ui.monospace(error);
+            }
+            if let Some(result) = &self.conversion_result {
+                ui.colored_label(
+                    egui::Color32::from_rgb(70, 200, 120),
+                    "[OFFICE KONVERZIO KESZ]",
+                );
+                ui.label(format!(
+                    "{} OK | {} részleges | {} sikertelen | {} timeout | {} újrahasznált output",
+                    result.ok,
+                    result.partial,
+                    result.failed,
+                    result.timed_out,
+                    result.reused_outputs
+                ));
+                ui.monospace(format!("Összesítő: {}", result.summary_path.display()));
+                ui.monospace(format!("Kivételek: {}", result.failures_path.display()));
+            }
         });
     }
 

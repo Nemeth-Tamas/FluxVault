@@ -334,6 +334,7 @@ impl eframe::App for FluxVaultApp {
         self.poll_manual_recovery_import_events();
         self.poll_manifest_events();
         self.poll_conversion_planning_events();
+        self.poll_conversion_events();
 
         if self.imaging_running
             || self.tool_check_running
@@ -342,6 +343,7 @@ impl eframe::App for FluxVaultApp {
             || self.reconstruction_running
             || self.manual_recovery_import_running
             || self.conversion_planning_running
+            || self.conversion_running
         {
             ui.ctx().request_repaint_after(Duration::from_millis(40));
         }

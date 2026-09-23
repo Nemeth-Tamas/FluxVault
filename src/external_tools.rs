@@ -366,7 +366,7 @@ fn add_python_script_candidates(candidates: &mut Vec<PathBuf>) {
     }
 }
 
-fn append_audit(path: &Path, audit: &CommandAudit) -> Result<(), String> {
+pub(crate) fn append_audit(path: &Path, audit: &CommandAudit) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(

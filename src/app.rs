@@ -13,6 +13,7 @@ use crate::{
     conversion::{
         self, ConversionPlanningEvent, ConversionPlanningRequest, ConversionPlanningResult,
     },
+    conversion_run::{self, ConversionEvent, ConversionRequest, ConversionResult},
     external_tools::{self, ToolCheckEvent, ToolKind, ToolSettings, ToolStatus},
     extraction::{self, ExtractionEvent, ExtractionPresence, ExtractionResult},
     floppy::{self, DiskGeometry, FloppyDrive, ProbeResult},
@@ -132,6 +133,13 @@ pub struct FluxVaultApp {
     conversion_planning_stage: String,
     conversion_planning_result: Option<ConversionPlanningResult>,
     conversion_planning_error: Option<String>,
+    conversion_receiver: Option<Receiver<ConversionEvent>>,
+    conversion_running: bool,
+    conversion_stage: String,
+    conversion_completed: usize,
+    conversion_total: usize,
+    conversion_result: Option<ConversionResult>,
+    conversion_error: Option<String>,
     status: String,
     operator_log: Vec<String>,
 }
@@ -216,6 +224,13 @@ impl FluxVaultApp {
             conversion_planning_stage: "Nincs aktív delivery/conversion tervezés.".to_owned(),
             conversion_planning_result: None,
             conversion_planning_error: None,
+            conversion_receiver: None,
+            conversion_running: false,
+            conversion_stage: "Nincs aktív Office konverzió.".to_owned(),
+            conversion_completed: 0,
+            conversion_total: 0,
+            conversion_result: None,
+            conversion_error: None,
             status: "Készen áll".to_owned(),
             operator_log: Vec::new(),
         };
@@ -1107,7 +1122,7 @@ impl FluxVaultApp {
     }
 
     fn start_conversion_planning(&mut self) {
-        if self.conversion_planning_running {
+        if self.conversion_planning_running || self.conversion_running {
             return;
         }
         let Some(project) = &self.project else {
@@ -1182,6 +1197,97 @@ impl FluxVaultApp {
         }
         if !finished {
             self.conversion_planning_receiver = Some(receiver);
+        }
+    }
+
+    fn start_conversion(&mut self) {
+        if self.conversion_running || self.conversion_planning_running {
+            return;
+        }
+        let Some(project) = &self.project else {
+            self.status = "Konverzió előtt nyisson meg egy projektet.".to_owned();
+            return;
+        };
+        let Some(libreoffice_executable) = self.ready_tool_path(ToolKind::LibreOffice) else {
+            self.status =
+                "A LibreOffice nem érhető el. Ellenőrizze a Beállítások oldalon.".to_owned();
+            return;
+        };
+        let request = ConversionRequest {
+            planning: ConversionPlanningRequest {
+                extracted_root: project.extracted_dir(),
+                converted_root: project.converted_dir(),
+                reports_directory: project.reports_dir(),
+            },
+            libreoffice_executable,
+            command_audit_path: self.tool_audit_path(),
+            timeout_seconds: 45,
+        };
+        self.conversion_receiver = Some(conversion_run::spawn_conversion(request));
+        self.conversion_running = true;
+        self.conversion_stage = "Office konverziós sor előkészítése...".to_owned();
+        self.conversion_completed = 0;
+        self.conversion_total = 0;
+        self.conversion_result = None;
+        self.conversion_error = None;
+        self.status = self.conversion_stage.clone();
+        self.log("Régi Office fájlok DOCX/XLSX/PPTX és PDF konverziója elindult.");
+    }
+
+    fn poll_conversion_events(&mut self) {
+        let Some(receiver) = self.conversion_receiver.take() else {
+            return;
+        };
+        let mut finished = false;
+        loop {
+            match receiver.try_recv() {
+                Ok(ConversionEvent::Stage(stage)) => self.conversion_stage = stage,
+                Ok(ConversionEvent::Progress { completed, total }) => {
+                    self.conversion_completed = completed;
+                    self.conversion_total = total;
+                }
+                Ok(ConversionEvent::Finished(result)) => {
+                    finished = true;
+                    self.conversion_running = false;
+                    match result {
+                        Ok(result) => {
+                            self.conversion_stage = "Office konverziós sor elkészült.".to_owned();
+                            self.status = self.conversion_stage.clone();
+                            self.log(format!(
+                                "Office konverzió: {} OK, {} részleges, {} sikertelen, {} timeout.",
+                                result.ok, result.partial, result.failed, result.timed_out
+                            ));
+                            self.conversion_planning_result = Some(result.planning.clone());
+                            self.conversion_result = Some(result);
+                            self.conversion_error = None;
+                        }
+                        Err(error) => {
+                            self.conversion_stage = "Office konverziós sor sikertelen.".to_owned();
+                            self.status = self.conversion_stage.clone();
+                            self.log(format!("Office konverzió hiba: {error}"));
+                            self.conversion_result = None;
+                            self.conversion_error = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    finished = true;
+                    self.conversion_running = false;
+                    self.conversion_stage =
+                        "Az Office konverziós háttérfolyamat megszakadt.".to_owned();
+                    self.status = self.conversion_stage.clone();
+                    self.conversion_error = Some(
+                        "Az Office konverziós háttérfolyamat eredmény nélkül leállt.".to_owned(),
+                    );
+                    self.log("Az Office konverziós háttérfolyamat váratlanul leállt.");
+                    break;
+                }
+            }
+        }
+        if !finished {
+            self.conversion_receiver = Some(receiver);
         }
     }
 

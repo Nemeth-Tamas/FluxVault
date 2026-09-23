@@ -32,6 +32,23 @@ pub struct ConversionPlanningResult {
     pub conversion_candidates: usize,
     pub path_map: PathBuf,
     pub conversion_plan: PathBuf,
+    pub jobs: Vec<ConversionJob>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversionJob {
+    pub floppy: String,
+    pub source_path: PathBuf,
+    pub original_forensic_path: String,
+    pub delivery_original_path: String,
+    pub recovery_method: String,
+    pub source_type: String,
+    pub source_sha256: String,
+    pub modern_format: String,
+    pub modern_filter: String,
+    pub pdf_filter: String,
+    pub modern_path: PathBuf,
+    pub pdf_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +112,7 @@ pub fn spawn_conversion_planning(
     receiver
 }
 
-fn build_conversion_plan(
+pub(crate) fn build_conversion_plan(
     request: &ConversionPlanningRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ConversionPlanningResult, String> {
@@ -132,6 +149,7 @@ fn build_conversion_plan(
     let mut claimed = BTreeMap::<String, String>::new();
     let mut path_rows = Vec::new();
     let mut plan_rows = Vec::new();
+    let mut jobs = Vec::new();
     let mut mirrored_files = 0usize;
     let mut reused_files = 0usize;
     let mut included_disks = 0usize;
@@ -152,6 +170,7 @@ fn build_conversion_plan(
                 .map_err(|error| format!("Forensic relatívútvonal-hiba: {error}"))?;
             let forensic_text = forensic_path.to_string_lossy().replace('/', "\\");
             let (mut delivery_relative, recovery_method) = clean_delivery_path(forensic_path)?;
+            let original_delivery_relative = delivery_relative.clone();
 
             let source_sha256 = sha256_file(&source)?;
             let forensic_key = forensic_text.to_ascii_lowercase();
@@ -169,7 +188,7 @@ fn build_conversion_plan(
                     claimed.insert(key, forensic_key.clone());
                     break;
                 }
-                delivery_relative = collision_path(&delivery_relative, ordinal)?;
+                delivery_relative = collision_path(&original_delivery_relative, ordinal)?;
                 ordinal += 1;
             }
 
@@ -201,7 +220,7 @@ fn build_conversion_plan(
                 original_forensic_path: forensic_text.clone(),
                 delivery_path: delivery_with_floppy.to_string_lossy().replace('/', "\\"),
                 recovery_method,
-                source_sha256,
+                source_sha256: source_sha256.clone(),
             });
 
             let Some(plan) = office_plan(&source) else {
@@ -233,6 +252,20 @@ fn build_conversion_plan(
                 modern_path: modern_path.display().to_string(),
                 pdf_path: pdf_path.display().to_string(),
             });
+            jobs.push(ConversionJob {
+                floppy: floppy.clone(),
+                source_path: source,
+                original_forensic_path: plan_rows.last().unwrap().original_forensic_path.clone(),
+                delivery_original_path: plan_rows.last().unwrap().delivery_original_path.clone(),
+                recovery_method: recovery_method.label().to_owned(),
+                source_type: format!(".{}", extension.to_ascii_lowercase()),
+                source_sha256: path_rows.last().unwrap().source_sha256.clone(),
+                modern_format: plan.modern_extension.to_ascii_uppercase(),
+                modern_filter: plan.modern_filter.to_owned(),
+                pdf_filter: plan.pdf_filter.to_owned(),
+                modern_path,
+                pdf_path,
+            });
         }
     }
 
@@ -255,6 +288,7 @@ fn build_conversion_plan(
         conversion_candidates: plan_rows.len(),
         path_map,
         conversion_plan,
+        jobs,
     })
 }
 
