@@ -10,6 +10,7 @@ use serde_json::json;
 
 use crate::{
     audit,
+    conversion_run::DEFAULT_CONVERSION_WORKERS,
     external_tools::{self, ToolKind},
     imaging,
     package::{self, PackageRequest},
@@ -29,7 +30,7 @@ Usage:\n\
   fluxvault recovery plan [N] [--project PATH]\n\
                                     Inspect evidence-ranked offline next steps\n\
   fluxvault audit [--project PATH]  Verify image/extraction evidence\n\
-  fluxvault process [--project PATH]\n\
+  fluxvault process [--project PATH] [--conversion-workers N]\n\
                                     Extract, convert, audit, and report\n\
   fluxvault package build --destination PATH [--project PATH]\n\
                                     Create and verify an archival ZIP\n\
@@ -38,6 +39,7 @@ Options:\n\
   --json                            Output machine-readable JSON\n\
   --project PATH                    Use a specific project instead of searching upward\n\
   --destination PATH                Output folder outside the project\n\
+  --conversion-workers N            Parallel Office files during process (1-16; default 4)\n\
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error";
 
 struct CliResponse {
@@ -71,6 +73,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
     let mut destination: Option<PathBuf> = None;
+    let mut conversion_workers: Option<usize> = None;
     let mut positional = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -86,6 +89,19 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 let value = args.get(index).ok_or("--destination requires a path")?;
                 destination = Some(PathBuf::from(value));
             }
+            "--conversion-workers" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or("--conversion-workers requires a number")?;
+                let workers = value
+                    .parse::<usize>()
+                    .map_err(|_| "--conversion-workers must be a number from 1 to 16")?;
+                if !(1..=16).contains(&workers) {
+                    return Err("--conversion-workers must be a number from 1 to 16".to_owned());
+                }
+                conversion_workers = Some(workers);
+            }
             "--help" | "-h" => positional.push("help".to_owned()),
             value if value.starts_with('-') => {
                 return Err(format!("Unknown option: {value}\n{HELP}"));
@@ -93,6 +109,10 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             value => positional.push(value.to_owned()),
         }
         index += 1;
+    }
+
+    if conversion_workers.is_some() && positional.first().map(String::as_str) != Some("process") {
+        return Err("--conversion-workers is only valid with process".to_owned());
     }
 
     let mut needs_attention = false;
@@ -316,6 +336,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     seven_zip_executable,
                     libreoffice_executable,
                     command_audit_path,
+                    conversion_workers: conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
                 },
                 &|stage| eprintln!("{stage}"),
             )?;
@@ -437,6 +458,34 @@ mod tests {
     #[test]
     fn rejects_unknown_commands_without_opening_gui() {
         assert!(run(&["acquire".to_owned()], Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_conversion_worker_options_before_project_access() {
+        for workers in ["0", "17", "oops"] {
+            assert!(
+                run(
+                    &[
+                        "process".to_owned(),
+                        "--conversion-workers".to_owned(),
+                        workers.to_owned()
+                    ],
+                    Path::new("."),
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            run(
+                &[
+                    "status".to_owned(),
+                    "--conversion-workers".to_owned(),
+                    "2".to_owned()
+                ],
+                Path::new("."),
+            )
+            .is_err()
+        );
     }
 
     #[test]

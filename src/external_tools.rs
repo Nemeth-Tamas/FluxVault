@@ -5,7 +5,10 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    sync::mpsc::{self, Receiver},
+    sync::{
+        Mutex,
+        mpsc::{self, Receiver},
+    },
     thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -14,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const TOOL_AUDIT_FILE_NAME: &str = "external-tools.jsonl";
+static AUDIT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolKind {
@@ -391,6 +395,9 @@ fn add_python_script_candidates(candidates: &mut Vec<PathBuf>) {
 }
 
 pub(crate) fn append_audit(path: &Path, audit: &CommandAudit) -> Result<(), String> {
+    let _guard = AUDIT_WRITE_LOCK
+        .lock()
+        .map_err(|_| "Az eszköznapló zárolása sikertelen.".to_owned())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(

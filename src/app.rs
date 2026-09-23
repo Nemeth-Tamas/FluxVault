@@ -1422,6 +1422,7 @@ impl FluxVaultApp {
             libreoffice_executable,
             command_audit_path: self.tool_audit_path(),
             timeout_seconds: 45,
+            workers: conversion_run::DEFAULT_CONVERSION_WORKERS,
         };
         self.conversion_receiver = Some(conversion_run::spawn_conversion(request));
         self.conversion_running = true;
@@ -1585,6 +1586,7 @@ impl FluxVaultApp {
         let project = self.project.clone().expect("checked above");
         let request = PipelineRequest {
             project,
+            conversion_workers: conversion_run::DEFAULT_CONVERSION_WORKERS,
             seven_zip_executable: self
                 .ready_tool_path(ToolKind::SevenZip)
                 .expect("checked above"),

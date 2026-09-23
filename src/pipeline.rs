@@ -29,6 +29,7 @@ pub struct PipelineRequest {
     pub seven_zip_executable: PathBuf,
     pub libreoffice_executable: PathBuf,
     pub command_audit_path: PathBuf,
+    pub conversion_workers: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +336,7 @@ pub(crate) fn run_pipeline(
             libreoffice_executable: request.libreoffice_executable.clone(),
             command_audit_path: request.command_audit_path.clone(),
             timeout_seconds: 45,
+            workers: request.conversion_workers,
         },
         &|message| stage(&format!("3/5: {message}")),
         &|completed, total| stage(&format!("3/5: {completed}/{total} conversions processed")),
@@ -420,6 +422,7 @@ mod tests {
             seven_zip_executable: fake_tool.clone(),
             libreoffice_executable: fake_tool,
             command_audit_path: root.join("Logs").join("tools.jsonl"),
+            conversion_workers: conversion_run::DEFAULT_CONVERSION_WORKERS,
         };
         let first = run_pipeline(&request, &|_| {}).unwrap();
         assert_eq!(first.composited_disks, 1);

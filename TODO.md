@@ -262,7 +262,7 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
   - [x] Word-family -> DOCX + PDF: `.doc`, `.rtf`, `.wps`, `.wri`, `.wpd`, `.sdw`.
   - [x] Spreadsheet-family -> XLSX + PDF: `.xls`, `.xlw`, `.xlt`, `.wk1`, `.wk3`, `.wk4`, `.wks`, `.123`, `.wb1`, `.wb2`, `.wq1`, `.wq2`, `.sdc`.
   - [x] Presentation-family -> PPTX + PDF: `.ppt`, `.pps`, `.pot`, `.sdd`.
-- [ ] Configurable worker/thread count.
+- [x] Bounded parallel Office conversion (four workers by default, CLI-configurable from 1 to 16), with isolated LibreOffice profiles, ordered reports, and serialized command audit records.
 - [x] Per-output timeout (default 45 s to match current workflow).
 - [x] Process-tree kill on timeout.
 - [x] Skip/reuse already-valid outputs; forced reconversion remains an advanced future option.

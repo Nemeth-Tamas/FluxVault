@@ -3,7 +3,10 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, Receiver},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -22,7 +25,11 @@ pub struct ConversionRequest {
     pub libreoffice_executable: PathBuf,
     pub command_audit_path: PathBuf,
     pub timeout_seconds: u64,
+    pub workers: usize,
 }
+
+pub const DEFAULT_CONVERSION_WORKERS: usize = 4;
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub enum ConversionEvent {
@@ -133,34 +140,39 @@ pub(crate) fn run_conversion(
     if !(10..=600).contains(&request.timeout_seconds) {
         return Err("A konverziós időkorlát 10 és 600 másodperc között lehet.".to_owned());
     }
+    if !(1..=16).contains(&request.workers) {
+        return Err("A konverziós munkaszálak száma 1 és 16 között lehet.".to_owned());
+    }
 
     send_stage("Delivery eredetik és friss conversion plan készítése...");
     let planning = conversion::build_conversion_plan(&request.planning, send_stage)?;
     let total = planning.jobs.len();
-    let mut rows = Vec::with_capacity(total);
-    for (index, job) in planning.jobs.iter().enumerate() {
-        send_stage(&format!(
-            "Régi Office fájl átalakítása ({}/{total}): {}",
-            index + 1,
-            job.original_forensic_path
-        ));
-        let started = Instant::now();
-        let modern = convert_output(
-            request,
-            job,
-            &job.modern_path,
-            &job.modern_format.to_ascii_lowercase(),
-            &job.modern_filter,
-        );
-        let pdf = convert_output(request, job, &job.pdf_path, "pdf", &job.pdf_filter);
-        rows.push(JobResult {
-            job: job.clone(),
-            modern,
-            pdf,
-            duration_seconds: started.elapsed().as_secs_f64(),
-        });
-        send_progress(index + 1, total);
-    }
+    send_stage(&format!(
+        "Régi Office fájlok átalakítása: {total} fájl, legfeljebb {} párhuzamos munkaszál...",
+        request.workers
+    ));
+    let rows = run_bounded(
+        &planning.jobs,
+        request.workers,
+        |job| {
+            let started = Instant::now();
+            let modern = convert_output(
+                request,
+                job,
+                &job.modern_path,
+                &job.modern_format.to_ascii_lowercase(),
+                &job.modern_filter,
+            );
+            let pdf = convert_output(request, job, &job.pdf_path, "pdf", &job.pdf_filter);
+            JobResult {
+                job: job.clone(),
+                modern,
+                pdf,
+                duration_seconds: started.elapsed().as_secs_f64(),
+            }
+        },
+        |completed| send_progress(completed, total),
+    )?;
 
     let summary_path = request
         .planning
@@ -196,6 +208,50 @@ pub(crate) fn run_conversion(
     })
 }
 
+// Results arrive in completion order, but reports must retain the plan's stable order.
+fn run_bounded<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    work: impl Fn(&T) -> R + Sync,
+    on_complete: impl Fn(usize),
+) -> Result<Vec<R>, String> {
+    let mut results: Vec<Option<R>> = std::iter::repeat_with(|| None).take(items.len()).collect();
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+    let next = AtomicUsize::new(0);
+    thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel();
+        for _ in 0..workers.min(items.len()) {
+            let sender = sender.clone();
+            let next = &next;
+            let work = &work;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(index) else { break };
+                    if sender.send((index, work(item))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        let mut completed = 0;
+        for (index, result) in receiver {
+            results[index] = Some(result);
+            completed += 1;
+            on_complete(completed);
+        }
+    });
+    results
+        .into_iter()
+        .map(|result| {
+            result.ok_or_else(|| "A konverziós munkaszál eredmény nélkül leállt.".to_owned())
+        })
+        .collect()
+}
+
 fn convert_output(
     request: &ConversionRequest,
     job: &ConversionJob,
@@ -221,9 +277,10 @@ fn convert_output(
     }
 
     let root = std::env::temp_dir().join(format!(
-        "fluxvault-office-{}-{}-{}",
+        "fluxvault-office-{}-{}-{}-{}",
         std::process::id(),
         unix_ms(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
         extension
     ));
     let output_directory = root.join("out");
@@ -553,6 +610,34 @@ fn unix_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn bounded_workers_preserve_plan_order_and_report_completion() {
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let completed = AtomicUsize::new(0);
+        let jobs: Vec<usize> = (0..12).collect();
+        let results = run_bounded(
+            &jobs,
+            4,
+            |job| {
+                let running = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(running, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(if *job == 0 { 80 } else { 10 }));
+                active.fetch_sub(1, Ordering::SeqCst);
+                job * 2
+            },
+            |count| {
+                assert_eq!(count, completed.fetch_add(1, Ordering::SeqCst) + 1);
+            },
+        )
+        .unwrap();
+        assert_eq!(results, jobs.iter().map(|job| job * 2).collect::<Vec<_>>());
+        assert_eq!(completed.load(Ordering::SeqCst), jobs.len());
+        assert!(peak.load(Ordering::SeqCst) <= 4);
+        assert!(peak.load(Ordering::SeqCst) > 1);
+    }
 
     #[test]
     fn libreoffice_output_keeps_dots_inside_source_stem() {
@@ -590,8 +675,13 @@ mod tests {
         ));
         let source_directory = root.join("Extracted").join("001");
         fs::create_dir_all(&source_directory).unwrap();
-        let source = source_directory.join("sample.rtf");
-        fs::write(&source, b"{\\rtf1\\ansi FluxVault conversion test.}").unwrap();
+        for index in 0..4 {
+            fs::write(
+                source_directory.join(format!("sample{index}.rtf")),
+                b"{\\rtf1\\ansi FluxVault conversion test.}",
+            )
+            .unwrap();
+        }
         let request = ConversionRequest {
             planning: ConversionPlanningRequest {
                 extracted_root: root.join("Extracted"),
@@ -601,22 +691,33 @@ mod tests {
             libreoffice_executable: executable,
             command_audit_path: root.join("Logs").join("external-tools.jsonl"),
             timeout_seconds: 45,
+            workers: DEFAULT_CONVERSION_WORKERS,
         };
 
         let first = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
-        assert_eq!(first.ok, 1);
+        assert_eq!(first.ok, 4);
         assert_eq!(first.reused_outputs, 0);
-        assert!(first.planning.jobs[0].modern_path.is_file());
-        assert!(first.planning.jobs[0].pdf_path.is_file());
+        for job in &first.planning.jobs {
+            assert!(job.modern_path.is_file());
+            assert!(job.pdf_path.is_file());
+        }
         assert!(first.summary_path.is_file());
+        let audit = fs::read_to_string(&request.command_audit_path).unwrap();
+        assert_eq!(audit.lines().count(), 8);
+        for line in audit.lines() {
+            let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(record["tool"], "LibreOffice conversion");
+        }
 
         let second = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
-        assert_eq!(second.ok, 1);
-        assert_eq!(second.reused_outputs, 2);
-        assert_eq!(
-            fs::read(&source).unwrap(),
-            b"{\\rtf1\\ansi FluxVault conversion test.}"
-        );
+        assert_eq!(second.ok, 4);
+        assert_eq!(second.reused_outputs, 8);
+        for index in 0..4 {
+            assert_eq!(
+                fs::read(source_directory.join(format!("sample{index}.rtf"))).unwrap(),
+                b"{\\rtf1\\ansi FluxVault conversion test.}"
+            );
+        }
 
         fs::remove_dir_all(root).unwrap();
     }
