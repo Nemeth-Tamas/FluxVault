@@ -22,6 +22,9 @@ Usage:\n\
   fluxvault                         Open the GUI\n\
   fluxvault init [path]             Create a project\n\
   fluxvault status [--project PATH] Show project status\n\
+  fluxvault disk list [--project PATH]\n\
+  fluxvault disk show N [--project PATH]\n\
+                                    Inspect saved disk attempts\n\
   fluxvault audit [--project PATH]  Verify image/extraction evidence\n\
   fluxvault process [--project PATH]\n\
                                     Extract, convert, audit, and report\n\
@@ -110,11 +113,7 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             }
         }
         Some("status") if positional.len() == 1 && destination.is_none() => {
-            let root = match project_override {
-                Some(path) if path.is_absolute() => path,
-                Some(path) => cwd.join(path),
-                None => discover_project(cwd).ok_or("No FluxVault project found in this directory or its parents; use --project PATH")?,
-            };
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let stats = imaging::load_project_statistics(&project.images_dir())?;
             if json_output {
@@ -143,14 +142,81 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
                 ))
             }
         }
+        Some("disk")
+            if destination.is_none() && positional.len() == 2 && positional[1] == "list" =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let stats = imaging::load_project_statistics(&project.images_dir())?;
+            if json_output {
+                Ok(json!({"project": project.root(), "disks": stats.disks.iter().map(|disk| json!({
+                    "number": disk.disk_number, "attempts": disk.attempt_count,
+                    "best_attempt": disk.best_attempt_number, "best_bad_sectors": disk.best_bad_sectors,
+                    "latest_attempt": disk.latest_attempt_number, "attention_required": disk.attention_required
+                })).collect::<Vec<_>>()}).to_string())
+            } else if stats.disks.is_empty() {
+                Ok("No acquired disks in this project.".to_owned())
+            } else {
+                Ok(stats
+                    .disks
+                    .iter()
+                    .map(|disk| {
+                        format!(
+                            "{:03} | {} attempts | best #{:03}: {} bad sectors | {}",
+                            disk.disk_number,
+                            disk.attempt_count,
+                            disk.best_attempt_number,
+                            disk.best_bad_sectors,
+                            if disk.attention_required {
+                                "needs recovery"
+                            } else {
+                                "OK"
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        Some("disk")
+            if destination.is_none() && positional.len() == 3 && positional[1] == "show" =>
+        {
+            let disk_number = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or("disk show requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
+            if attempts.is_empty() {
+                return Err(format!("No image attempts found for disk {disk_number:03}"));
+            }
+            if json_output {
+                Ok(json!({"project": project.root(), "disk": disk_number, "attempts": attempts.iter().map(|attempt| json!({
+                    "number": attempt.attempt_number, "status": attempt.status,
+                    "image": attempt.image_file, "sha256": attempt.sha256,
+                    "bad_sectors": attempt.bad_sectors, "attention_required": attempt.attention_required
+                })).collect::<Vec<_>>()}).to_string())
+            } else {
+                Ok(format!(
+                    "Disk {disk_number:03}\n{}",
+                    attempts
+                        .iter()
+                        .map(|attempt| format!(
+                            "  #{:03} | {} | {} bad sectors | {}",
+                            attempt.attempt_number,
+                            attempt.status,
+                            attempt.bad_sectors.len(),
+                            attempt.image_file
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ))
+            }
+        }
         Some("audit") if positional.len() == 1 && destination.is_none() => {
-            let root = match project_override {
-                Some(path) if path.is_absolute() => path,
-                Some(path) => cwd.join(path),
-                None => {
-                    discover_project(cwd).ok_or("No FluxVault project found; use --project PATH")?
-                }
-            };
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let result = audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
             if json_output {
@@ -168,13 +234,7 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             }
         }
         Some("process") if positional.len() == 1 && destination.is_none() => {
-            let root = match project_override {
-                Some(path) if path.is_absolute() => path,
-                Some(path) => cwd.join(path),
-                None => {
-                    discover_project(cwd).ok_or("No FluxVault project found; use --project PATH")?
-                }
-            };
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let settings = external_tools::load_settings()?;
             let command_audit_path = project.logs_dir().join("external-tools.jsonl");
@@ -223,13 +283,7 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             }
         }
         Some("package") if positional.len() == 2 && positional[1] == "build" => {
-            let root = match project_override {
-                Some(path) if path.is_absolute() => path,
-                Some(path) => cwd.join(path),
-                None => {
-                    discover_project(cwd).ok_or("No FluxVault project found; use --project PATH")?
-                }
-            };
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let destination = destination.ok_or("package build requires --destination PATH")?;
             let destination = if destination.is_absolute() {
@@ -259,6 +313,17 @@ fn run(args: &[String], cwd: &Path) -> Result<String, String> {
             }
         }
         _ => Err(format!("Unsupported command or arguments.\n{HELP}")),
+    }
+}
+
+fn resolve_project_root(cwd: &Path, project_override: Option<&Path>) -> Result<PathBuf, String> {
+    match project_override {
+        Some(path) if path.is_absolute() => Ok(path.to_path_buf()),
+        Some(path) => Ok(cwd.join(path)),
+        None => discover_project(cwd).ok_or_else(|| {
+            "No FluxVault project found in this directory or its parents; use --project PATH"
+                .to_owned()
+        }),
     }
 }
 
@@ -307,6 +372,32 @@ mod tests {
         .unwrap();
         assert!(output.contains("Created project"));
         assert!(root.join("project.json").is_file());
+        let list = run(
+            &[
+                "disk".to_owned(),
+                "list".to_owned(),
+                "--json".to_owned(),
+                "--project".to_owned(),
+                root.display().to_string(),
+            ],
+            Path::new("."),
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&list).unwrap();
+        assert_eq!(json["disks"].as_array().unwrap().len(), 0);
+        assert!(
+            run(
+                &[
+                    "disk".to_owned(),
+                    "show".to_owned(),
+                    "1".to_owned(),
+                    "--project".to_owned(),
+                    root.display().to_string()
+                ],
+                Path::new(".")
+            )
+            .is_err()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

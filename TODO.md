@@ -301,7 +301,7 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the GUI.
 - [x] Choose destination outside project/source tree and enforce that guardrail.
 - [x] Stage only allowed archival/customer folders in the package file list (no source-tree mutation).
 - [x] Exclude internal helper/state files from customer content.
-- [ ] Include selected customer-useful reports.
+- [x] Include only selected customer-useful reports, plus the evidence audit and latest FluxVault workbook; exclude working notes and stale workbooks.
 - [x] Generate package manifest with size, original modified timestamp (UTC), and SHA-256.
 - [x] Generate manifest SHA-256 file.
 - [x] Generate README explaining Images / Logs / Extracted / Converted / Recovery / Reports and known limitations.
@@ -351,6 +351,7 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [x] Discover a project by walking upward from the current directory, like Git, with an explicit `--project <path>` override for the first CLI status command.
 - [ ] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
 - [ ] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
+  - [x] Read-only `disk list` and `disk show N` with human/JSON output and no physical drive access.
 - [ ] Read-only drive commands: `drive list` and `drive probe --drive A:`.
 - [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` plus a production `scan` workflow where the only interaction is media-change confirmation.
 - [ ] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.

@@ -169,6 +169,7 @@ pub(crate) fn build_package(
 
 fn collect_project_files(project: &Path) -> Result<Vec<PackageFile>, String> {
     let mut files = Vec::new();
+    let latest_workbook = latest_workbook_name(&project.join("Reports"))?;
     for directory in INCLUDED_DIRECTORIES {
         let root = project.join(directory);
         if !root.exists() {
@@ -192,6 +193,15 @@ fn collect_project_files(project: &Path) -> Result<Vec<PackageFile>, String> {
                 }
                 if should_exclude(&path) {
                     continue;
+                }
+                if *directory == "Reports" && kind.is_dir() {
+                    continue;
+                }
+                if *directory == "Reports" && kind.is_file() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !is_customer_report(&name, latest_workbook.as_deref()) {
+                        continue;
+                    }
                 }
                 if kind.is_dir() {
                     pending.push(path);
@@ -217,6 +227,48 @@ fn collect_project_files(project: &Path) -> Result<Vec<PackageFile>, String> {
     }
     files.sort_by(|left, right| left.archive_path.cmp(&right.archive_path));
     Ok(files)
+}
+
+fn latest_workbook_name(reports: &Path) -> Result<Option<String>, String> {
+    if !reports.is_dir() {
+        return Ok(None);
+    }
+    let mut names = fs::read_dir(reports)
+        .map_err(|error| format!("Cannot read Reports folder {}: {error}", reports.display()))?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            (entry.path().is_file()
+                && name.starts_with("FluxVault_Jelentes_")
+                && name.to_ascii_lowercase().ends_with(".xlsx"))
+            .then_some(name)
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names.pop())
+}
+
+fn is_customer_report(name: &str, latest_workbook: Option<&str>) -> bool {
+    let normalized = name.to_ascii_lowercase();
+    const EXACT: &[&str] = &[
+        "archiveindex.csv",
+        "extractionsummary.csv",
+        "masterfilelist.csv",
+        "conversionsummary.csv",
+        "conversionfailures.txt",
+        "deliverypathmap.csv",
+        "deliverymanifest.csv",
+        "deliverymanifest.sha256",
+        "floppyfinalaudit.csv",
+        "floppyfinalaudit.txt",
+        "integrityvalidation.csv",
+        "evidenceaudit.csv",
+        "evidenceaudit.json",
+    ];
+    EXACT.contains(&normalized.as_str())
+        || (normalized.starts_with("finalaudit")
+            && (normalized.ends_with(".csv") || normalized.ends_with(".txt")))
+        || latest_workbook.is_some_and(|latest| latest == name)
 }
 
 fn should_exclude(path: &Path) -> bool {
@@ -441,6 +493,7 @@ mod tests {
         let destination = root.join("delivery");
         fs::create_dir_all(project.join("Images")).unwrap();
         fs::create_dir_all(project.join("Extracted").join("001")).unwrap();
+        fs::create_dir_all(project.join("Reports")).unwrap();
         fs::create_dir_all(&destination).unwrap();
         fs::write(project.join("project.json"), "{}").unwrap();
         fs::write(project.join("Images").join("001.img"), b"image").unwrap();
@@ -458,6 +511,26 @@ mod tests {
             b"internal",
         )
         .unwrap();
+        fs::write(project.join("Reports").join("EvidenceAudit.csv"), b"audit").unwrap();
+        fs::write(
+            project.join("Reports").join("private-working-note.txt"),
+            b"private",
+        )
+        .unwrap();
+        fs::write(
+            project
+                .join("Reports")
+                .join("FluxVault_Jelentes_20260101.xlsx"),
+            b"old",
+        )
+        .unwrap();
+        fs::write(
+            project
+                .join("Reports")
+                .join("FluxVault_Jelentes_20260102.xlsx"),
+            b"new",
+        )
+        .unwrap();
         let result = build_package(
             &PackageRequest {
                 project_root: project.clone(),
@@ -467,12 +540,22 @@ mod tests {
             &|_| {},
         )
         .unwrap();
-        assert_eq!(result.file_count, 2);
-        assert_eq!(result.total_bytes, 13);
+        assert_eq!(result.file_count, 4);
+        assert_eq!(result.total_bytes, 21);
         assert!(result.sha256_path.is_file());
         let mut zip = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
         assert!(zip.by_name("Images/001.img").is_ok());
         assert!(zip.by_name("Extracted/001/customer.doc").is_ok());
+        assert!(zip.by_name("Reports/EvidenceAudit.csv").is_ok());
+        assert!(
+            zip.by_name("Reports/FluxVault_Jelentes_20260102.xlsx")
+                .is_ok()
+        );
+        assert!(
+            zip.by_name("Reports/FluxVault_Jelentes_20260101.xlsx")
+                .is_err()
+        );
+        assert!(zip.by_name("Reports/private-working-note.txt").is_err());
         assert!(zip.by_name("Images/001.partial.img").is_err());
         assert!(
             zip.by_name("Extracted/001/.fluxvault-inventory.json")
