@@ -329,6 +329,12 @@ fn collect_files(root: &Path, skip_managed_children: bool) -> Result<Vec<PathBuf
                 continue;
             }
             if file_type.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.eq_ignore_ascii_case("System Volume Information")
+                    || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+                {
+                    continue;
+                }
                 if skip_managed_children && path.join(EXTRACTION_MARKER).is_file() {
                     continue;
                 }
@@ -563,7 +569,7 @@ mod tests {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis()
+                .as_nanos()
         ));
         let extracted = root.join("Extracted");
         let converted = root.join("Converted");
@@ -582,6 +588,12 @@ mod tests {
         fs::create_dir_all(noname_doc.parent().unwrap()).unwrap();
         fs::write(&root_doc, b"first").unwrap();
         fs::write(&noname_doc, b"second").unwrap();
+        let os_metadata = extracted
+            .join("001")
+            .join("System Volume Information")
+            .join("IndexerVolumeGuid");
+        fs::create_dir_all(os_metadata.parent().unwrap()).unwrap();
+        fs::write(&os_metadata, b"Windows metadata").unwrap();
 
         let result = build_conversion_plan(
             &ConversionPlanningRequest {
@@ -596,6 +608,12 @@ mod tests {
         assert_eq!(result.disk_count, 1);
         assert_eq!(result.mirrored_files, 2);
         assert_eq!(result.conversion_candidates, 2);
+        assert!(
+            !converted
+                .join("001")
+                .join("System Volume Information")
+                .exists()
+        );
         assert!(converted.join("001").join("docs").join("a.doc").is_file());
         assert!(
             converted

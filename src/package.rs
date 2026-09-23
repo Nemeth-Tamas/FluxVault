@@ -278,6 +278,16 @@ fn is_customer_report(name: &str, latest_workbook: Option<&str>) -> bool {
 }
 
 fn should_exclude(path: &Path) -> bool {
+    if path.components().any(|component| match component {
+        Component::Normal(name) => {
+            let name = name.to_string_lossy();
+            name.eq_ignore_ascii_case("System Volume Information")
+                || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+        }
+        _ => false,
+    }) {
+        return true;
+    }
     let name = path
         .file_name()
         .unwrap_or_default()
@@ -444,7 +454,7 @@ fn manifest_text(rows: &[ManifestRow]) -> String {
 
 fn readme_text(project_name: &str, file_count: usize, total_bytes: u64) -> String {
     format!(
-        "FluxVault archival package\r\nProject: {project_name}\r\nFiles: {file_count}\r\nSource bytes: {total_bytes}\r\n\r\nImages: original and derived sector images.\r\nLogs: acquisition and recovery logs.\r\nExtracted: recovered source files.\r\nConverted: customer-friendly converted copies.\r\nRecovery: preserved recovery evidence and backups.\r\nReports: generated inventories and reports.\r\nFlux: raw flux captures, where available.\r\n\r\nCheck PACKAGE_MANIFEST.csv for each file's SHA-256.\r\nA partial image or recovered file is not proof that every original byte was readable.\r\nReview audit and recovery reports for limitations before delivery.\r\n"
+        "FluxVault archival package\r\nProject: {project_name}\r\nFiles: {file_count}\r\nSource bytes: {total_bytes}\r\n\r\nImages: acquired sector images.\r\nLogs: acquisition and recovery logs.\r\nExtracted: recovered source files.\r\nConverted: customer-friendly converted copies.\r\nRecovery: preserved recovery evidence, derived images, and backups.\r\nReports: selected inventories and reports.\r\nFlux: raw flux captures, where available.\r\n\r\nWindows System Volume Information and Recycle Bin folders are excluded from delivery files; original sector images retain all captured bytes.\r\nCheck PACKAGE_MANIFEST.csv for each included file's SHA-256.\r\nA partial image or recovered file is not proof that every original byte was readable.\r\nReview audit and recovery reports for limitations before delivery.\r\n"
     )
 }
 
@@ -517,6 +527,12 @@ mod tests {
             b"internal",
         )
         .unwrap();
+        let windows_metadata = project
+            .join("Extracted")
+            .join("001")
+            .join("System Volume Information");
+        fs::create_dir_all(&windows_metadata).unwrap();
+        fs::write(windows_metadata.join("IndexerVolumeGuid"), b"OS metadata").unwrap();
         fs::write(project.join("Reports").join("EvidenceAudit.csv"), b"audit").unwrap();
         fs::write(
             project.join("Reports").join("private-working-note.txt"),
@@ -562,6 +578,10 @@ mod tests {
                 .is_err()
         );
         assert!(zip.by_name("Reports/private-working-note.txt").is_err());
+        assert!(
+            zip.by_name("Extracted/001/System Volume Information/IndexerVolumeGuid")
+                .is_err()
+        );
         assert!(zip.by_name("Images/001.partial.img").is_err());
         assert!(
             zip.by_name("Extracted/001/.fluxvault-inventory.json")

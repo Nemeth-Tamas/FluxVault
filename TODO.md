@@ -301,6 +301,7 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the GUI.
 - [x] Choose destination outside project/source tree and enforce that guardrail.
 - [x] Stage only allowed archival/customer folders in the package file list (no source-tree mutation).
 - [x] Exclude internal helper/state files from customer content.
+- [x] Exclude Windows `System Volume Information` / Recycle Bin folders from customer delivery and future conversion mirroring, while preserving their captured bytes in source images and forensic extraction evidence.
 - [x] Include only selected customer-useful reports, plus the evidence audit and latest FluxVault workbook; exclude working notes and stale workbooks.
 - [x] Generate package manifest with size, original modified timestamp (UTC), and SHA-256.
 - [x] Generate manifest SHA-256 file.
