@@ -142,6 +142,8 @@ mod tests {
     #[test]
     fn discovers_project_from_nested_directory() {
         let temp = env::temp_dir().join(format!("fluxvault-cli-discovery-{}", std::process::id()));
+        // Never delete an existing directory, even if an earlier test run left it behind.
+        std::fs::create_dir(&temp).unwrap();
         let nested = temp.join("Extracted").join("007");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(temp.join("project.json"), "{}").unwrap();
