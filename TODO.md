@@ -356,24 +356,30 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 The GUI and CLI must call the same Rust workflow/services so safety, provenance, validation, and output formats cannot drift.
 
 - [ ] Install a `fluxvault` executable that can be added to `PATH` and run from PowerShell, CMD, or another automation process.
+  - [x] Build and smoke-test a release executable in PowerShell and CMD; provide a dry-run-capable installer with opt-in user `PATH` changes. Actual installation is left to the operator.
 - [x] Discover a project by walking upward from the current directory, like Git, with an explicit `--project <path>` override for the first CLI status command.
 - [x] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
 - [x] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
   - [x] Read-only `disk list` and `disk show N` with human/JSON output and no physical drive access.
 - [x] Read-only drive commands: `drive list` and `drive probe --drive A:`. Probe only accepts an enumerated removable drive, performs no write, and reports whether software guards pass; the current USB adapter still needs independent hardware write-protection validation before customer use.
 - [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` plus a production `scan` workflow where the only interaction is media-change confirmation.
+  - [x] Add gated CLI `acquire` using the GUI's read-only USB backend, positive write-protection and floppy-geometry checks, and a required independently verified hardware protection assertion. Hardware execution remains untested; the current adapter is not approved for customer media.
+  - [ ] Add guided `scan` media-change loop and downstream automatic queueing.
 - [x] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
   - [x] `extract all` reuses the GUI batch service, recovery backups, manual-recovery detection, and manifest generation without requiring LibreOffice.
   - [x] `extract disk N` uses the same eligibility rules, preserves operator recovery, makes/reuses the immutable pass-1 backup when needed, and refreshes the file manifest.
-- [ ] Recovery commands for queue/status, attempt comparison, composite creation, and DMDE result import.
+- [x] Recovery commands for queue/status, attempt comparison, composite creation, and DMDE result import.
   - [x] `recovery plan`, `recovery compare N`, and idempotent `recovery backup N` operate on saved evidence without physical-drive access.
+  - [x] `recovery queue`, `recovery composite N`, `recovery fat N`, and guarded `recovery import N --source DIR --dmde-log FILE` reuse the GUI's saved-image and evidence-import services.
 - [ ] Conversion, audit/report, and validated customer-package commands matching the GUI workflow.
   - [x] `report export` reuses the GUI's Hungarian XLSX exporter; `tools check` reuses version checks and the audited external-command runner.
+  - [x] `conversion plan`, `conversion run`, and `files manifest` reuse the GUI's delivery planning, bounded conversion, and inventory services.
+  - [x] Make selected conversion-issue retry resumable after CLI process restart without weakening source provenance checks. CLI `conversion run`/`process` save project-scoped state; `conversion retry [SOURCE]` reloads it and validates fresh source hashes, delivery paths, and existing outputs.
 - [ ] Human-readable output by default plus stable `--json` output for scripts; progress goes to stderr so JSON/stdout remains machine-readable.
 - [ ] Stable documented exit codes for success, partial recovery, operator action required, invalid project/input, missing tool, and fatal failure.
   - [x] Initial CLI contract: 0 complete, 3 attention/partial, 2 invalid input/operation error; `audit` and `process` return 3 when recovery or conversion attention remains.
 - [ ] Non-interactive/background operations require explicit policy flags; physical-media operations retain read-only safety while confirmations are limited to unavoidable custody/media changes.
-- [ ] Every CLI external-tool invocation uses argument arrays and the same command/audit log as the GUI; never expose Greaseweazle write/erase commands.
+- [x] Every CLI external-tool invocation uses argument arrays and the same command/audit log as the GUI; never expose Greaseweazle write/erase commands.
 - [ ] Shell completion generation for PowerShell initially, with Bash/Zsh completion when the application becomes cross-platform.
 - [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
 - [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.

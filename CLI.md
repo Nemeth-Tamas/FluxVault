@@ -1,6 +1,6 @@
 # FluxVault CLI (in progress)
 
-Build with `cargo build --release`; the executable is `target\release\fluxvault.exe` on Windows. Add the directory containing that executable to your `PATH` to call `fluxvault` from any folder. Running it without arguments opens the GUI; `fluxvault --help` lists commands.
+Build with `cargo build --release`; the executable is `target\release\fluxvault.exe` on Windows. To install a copy and optionally add its directory to your user `PATH`, run `powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath` from the repository root; omit `-AddToPath` to copy without changing PATH, or add `-WhatIf` to preview. Open a new terminal after a PATH change. Running `fluxvault` without arguments opens the GUI; `fluxvault --help` lists commands. The release executable was checked from PowerShell and CMD, and the installer was exercised with a disposable directory. No installation or PATH change was performed in your user profile.
 
 From a project folder (or any subfolder), for example:
 
@@ -8,20 +8,30 @@ From a project folder (or any subfolder), for example:
 fluxvault status
 fluxvault disk list
 fluxvault recovery plan
+fluxvault recovery queue
 fluxvault recovery compare 7
 fluxvault recovery backup 7
+fluxvault recovery composite 7
+fluxvault recovery fat 7
 fluxvault tools check
+fluxvault tools show
 fluxvault extract all
 fluxvault extract disk 7
+fluxvault files manifest
+fluxvault conversion plan
+fluxvault conversion run
+fluxvault conversion issues
+fluxvault conversion retry
+fluxvault conversion retry C:\path\to\Extracted\001\problem.rtf
 fluxvault report export
 fluxvault audit
 fluxvault package build --destination C:\CustomerPackages
 ```
 
-Use `--project C:\path\to\project` to select a project explicitly. Add `--json` to a command for machine-readable stdout; long-running progress goes to stderr. Exit code 0 means complete, 3 means attention/partial, and 2 means invalid input or an operation error. These codes will be refined as production automation is added.
+Use `--project C:\path\to\project` to select a project explicitly. Add `--json` to a command for machine-readable stdout (including structured errors); long-running progress goes to stderr. Exit code 0 means complete, 3 means attention/partial, and 2 means invalid input or an operation error. These codes will be refined as production automation is added.
 
-`fluxvault drive list` enumerates removable drives without reading inserted media. `fluxvault drive probe --drive A:` opens only an enumerated drive read-only, reads at most the first 512 bytes, and reports geometry and the Windows write-protection result. A positive software result is **not proof that this USB adapter enforces physical write protection**. Its behavior remains unverified; do not insert customer media into it for testing. There is currently no CLI acquisition command.
+`fluxvault drive list` enumerates removable drives without reading inserted media. `fluxvault drive probe --drive A:` opens only an enumerated drive read-only, reads at most the first 512 bytes, and reports geometry and the Windows write-protection result. A positive software result is **not proof that this USB adapter enforces physical write protection**. Its behavior remains unverified; do not insert customer media into it for testing. `fluxvault acquire --drive A: --disk N --retries 2 --write-blocker-verified` is gated: use it only after independent write-protection validation with a known-good disposable disk or a verified hardware write blocker. The CLI refuses acquisition without the flag, a positive protection report, and plausible floppy geometry; the imaging backend checks protection again when it opens the drive read-only. This command has not been live-tested on hardware.
 
-`fluxvault tools check` uses the same 7-Zip, LibreOffice, and Greaseweazle version checks as the GUI, and records executed commands in the project tool audit log (or the application audit log when no project is selected). `recovery compare N` compares the two latest compatible saved attempts; `recovery backup N` creates or reuses an immutable pass-1 evidence copy for an incomplete attempt. `extract all` uses the GUI's batch extraction service and needs 7-Zip but not LibreOffice. `extract disk N` applies the same clean-image eligibility rules to one disk, preserves manual recovery, and creates or reuses a pass-1 recovery backup when extraction is unsafe or unsuccessful. `process` additionally runs the existing-image recovery, conversion, audit, and workbook pipeline, and needs both 7-Zip and LibreOffice. These commands operate on saved project images, not a physical drive.
+`fluxvault tools check` uses the same 7-Zip, LibreOffice, and Greaseweazle version checks as the GUI, and records executed commands in the project tool audit log (or the application audit log when no project is selected). `tools show`, `tools set NAME PATH`, and `tools clear NAME` manage the same per-user tool paths as the GUI. `recovery queue` shows unfinished cases; `recovery compare N`, `recovery backup N`, `recovery composite N`, and `recovery fat N` use the GUI's saved-evidence services. `recovery import N --source DIR --dmde-log FILE` copies external DMDE results into guarded project recovery locations without overwriting an earlier import. `extract all` and `extract disk N` use the GUI's extraction rules and need 7-Zip, not LibreOffice. `files manifest` refreshes the recovered-file inventory. `conversion plan` builds delivery paths without LibreOffice; `conversion run` executes the same bounded, audited Office conversion as the GUI. `conversion issues` reads saved exceptions. `conversion retry [SOURCE]` reloads the project-scoped conversion state after a restart, retries all saved issues or the selected source, and rejects changed source hashes or paths. `process` runs the existing-image recovery, extraction, conversion, audit, and workbook pipeline. Except for gated `acquire`, these commands operate on saved project evidence, not a physical drive.
 
-The CLI does not yet cover drive acquisition, full recovery controls, selective conversion, or the two-drive production scheduler. Track those in [TODO.md](TODO.md).
+The CLI still lacks a one-command interactive disk-change loop, full zero-touch recovery policy, and the two-drive production scheduler. Live USB acquisition remains blocked in practice until the write-protection discrepancy is resolved. Track these in [TODO.md](TODO.md).

@@ -13,6 +13,7 @@ use std::{
 };
 
 use chrono::Local;
+use serde::{Deserialize, Serialize};
 use zip::ZipArchive;
 
 use crate::{
@@ -32,6 +33,7 @@ pub struct ConversionRequest {
 }
 
 pub const DEFAULT_CONVERSION_WORKERS: usize = 4;
+const CONVERSION_SNAPSHOT_FILE: &str = "ConversionState.json";
 const CONVERSION_RETRY_DELAY: Duration = Duration::from_millis(250);
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -42,7 +44,7 @@ pub enum ConversionEvent {
     Finished(Box<Result<ConversionResult, String>>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionResult {
     pub planning: ConversionPlanningResult,
     pub ok: usize,
@@ -57,7 +59,7 @@ pub struct ConversionResult {
     rows: Vec<JobResult>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionIssue {
     pub source_path: PathBuf,
     pub floppy: String,
@@ -69,7 +71,7 @@ pub struct ConversionIssue {
     pub pdf_detail: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum OutputState {
     Ok,
     Reused,
@@ -92,7 +94,7 @@ impl OutputState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct OutputResult {
     state: OutputState,
     detail: String,
@@ -100,12 +102,63 @@ struct OutputResult {
     retry_count: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct JobResult {
     job: ConversionJob,
     modern: OutputResult,
     pdf: OutputResult,
     duration_seconds: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ConversionSnapshot {
+    schema_version: u32,
+    project_root: PathBuf,
+    result: ConversionResult,
+}
+
+pub(crate) fn save_snapshot(
+    reports_directory: &Path,
+    project_root: &Path,
+    result: &ConversionResult,
+) -> Result<PathBuf, String> {
+    let path = reports_directory.join(CONVERSION_SNAPSHOT_FILE);
+    let snapshot = ConversionSnapshot {
+        schema_version: 1,
+        project_root: project_root
+            .canonicalize()
+            .map_err(|error| format!("Cannot resolve project root: {error}"))?,
+        result: result.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&snapshot)
+        .map_err(|error| format!("Cannot serialize conversion state: {error}"))?;
+    fs::write(&path, bytes)
+        .map_err(|error| format!("Cannot save conversion state {}: {error}", path.display()))?;
+    Ok(path)
+}
+
+pub(crate) fn load_snapshot(
+    reports_directory: &Path,
+    project_root: &Path,
+) -> Result<ConversionResult, String> {
+    let path = reports_directory.join(CONVERSION_SNAPSHOT_FILE);
+    let bytes = fs::read(&path).map_err(|error| {
+        format!(
+            "No saved conversion state {}: {error}; run conversion run first",
+            path.display()
+        )
+    })?;
+    let snapshot: ConversionSnapshot = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("Invalid saved conversion state {}: {error}", path.display()))?;
+    if snapshot.schema_version != 1
+        || snapshot.project_root
+            != project_root
+                .canonicalize()
+                .map_err(|error| format!("Cannot resolve project root: {error}"))?
+    {
+        return Err("Saved conversion state belongs to a different project or schema".to_owned());
+    }
+    Ok(snapshot.result)
 }
 
 impl JobResult {
@@ -824,6 +877,46 @@ fn unix_ms() -> u64 {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn conversion_state_survives_restart_but_is_scoped_to_its_project() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxvault-conversion-state-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        let reports = first.join("Reports");
+        fs::create_dir_all(&reports).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let result = ConversionResult {
+            planning: ConversionPlanningResult {
+                disk_count: 0,
+                mirrored_files: 0,
+                reused_files: 0,
+                conversion_candidates: 0,
+                path_map: reports.join("PathMap.csv"),
+                conversion_plan: reports.join("ConversionPlan.csv"),
+                jobs: Vec::new(),
+            },
+            ok: 0,
+            partial: 0,
+            failed: 0,
+            timed_out: 0,
+            reused_outputs: 0,
+            retried_outputs: 0,
+            issues: Vec::new(),
+            summary_path: reports.join("ConversionSummary.csv"),
+            failures_path: reports.join("ConversionFailures.csv"),
+            rows: Vec::new(),
+        };
+        let path = save_snapshot(&reports, &first, &result).unwrap();
+        assert!(path.is_file());
+        assert_eq!(load_snapshot(&reports, &first).unwrap().ok, 0);
+        assert!(load_snapshot(&reports, &second).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn transient_failure_is_retried_once_and_both_attempts_are_recorded() {

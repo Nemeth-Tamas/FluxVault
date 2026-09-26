@@ -7,6 +7,7 @@ use std::{
     thread,
 };
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const EXTRACTION_MARKER: &str = ".fluxvault-extraction.json";
@@ -24,7 +25,7 @@ pub enum ConversionPlanningEvent {
     Finished(Result<ConversionPlanningResult, String>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionPlanningResult {
     pub disk_count: usize,
     pub mirrored_files: usize,
@@ -35,7 +36,7 @@ pub struct ConversionPlanningResult {
     pub jobs: Vec<ConversionJob>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionJob {
     pub floppy: String,
     pub source_path: PathBuf,

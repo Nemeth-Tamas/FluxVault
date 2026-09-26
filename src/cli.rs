@@ -1,5 +1,8 @@
-//! Small, hardware-free CLI foundation. Physical media commands will be added
-//! only when they can use the same read-only workflow as the GUI.
+//! Command-line entry points over the same guarded workflow services as the GUI.
+
+mod acquire;
+mod office;
+mod recovery;
 
 use std::{
     env,
@@ -11,10 +14,11 @@ use serde_json::json;
 use crate::{
     audit,
     batch_extraction::{self, BatchExtractionRequest},
-    conversion_run::DEFAULT_CONVERSION_WORKERS,
+    conversion_run::{self, DEFAULT_CONVERSION_WORKERS},
     external_tools::{self, ToolHealth, ToolKind},
     floppy::{self, FloppyDrive, WriteProtectionStatus},
     imaging,
+    manifest::{self, ManifestRequest},
     package::{self, PackageRequest},
     pipeline::{self, PipelineRequest},
     project::ProjectState,
@@ -39,8 +43,13 @@ Usage:
                                     Select the current/next disk number (no drive access)
   fluxvault drive list              List removable drives without reading media
   fluxvault drive probe --drive A:  Read-only 512-byte media and protection probe
+  fluxvault acquire --drive A: --disk N [--retries N] --write-blocker-verified
+                                    Read-only image; requires independently verified hardware
   fluxvault tools check [--project PATH]
                                     Check external tool versions and record audit
+  fluxvault tools show              Show configured tool paths
+  fluxvault tools set NAME PATH     Configure sevenzip/libreoffice/greaseweazle
+  fluxvault tools clear NAME        Return a tool to auto-discovery
   fluxvault extract all [--project PATH]
                                     Process saved images with the GUI's extraction service
   fluxvault extract disk N [--project PATH]
@@ -51,6 +60,24 @@ Usage:
                                     Compare the two latest saved attempts
   fluxvault recovery backup N [--project PATH]
                                     Create/reuse immutable pass-1 evidence backup
+  fluxvault recovery queue [--project PATH]
+                                    Show disks needing recovery decisions
+  fluxvault recovery composite N [--project PATH]
+                                    Build/reuse an evidence-checked image composite
+  fluxvault recovery fat N [--project PATH]
+                                    Reconstruct only provable mirrored FAT sectors
+  fluxvault recovery import N --source DIR --dmde-log FILE
+                                    Import external DMDE recovery without overwriting it
+  fluxvault conversion plan [--project PATH]
+                                    Plan delivery paths and Office conversions
+  fluxvault conversion run [--project PATH] [--conversion-workers N]
+                                    Convert saved recovered files with LibreOffice
+  fluxvault conversion issues [--project PATH]
+                                    Show saved conversion exceptions
+  fluxvault conversion retry [SOURCE] [--project PATH]
+                                    Retry saved issues after restart; optionally one source
+  fluxvault files manifest [--project PATH]
+                                    Refresh recovered-file inventory
   fluxvault audit [--project PATH]  Verify image/extraction evidence
   fluxvault report export [--project PATH]
                                     Export the Hungarian XLSX workbook
@@ -64,9 +91,15 @@ Options:
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
   --drive LETTER:                   Enumerated removable drive for read-only probe
+  --disk N                          Disk number for acquisition
+  --retries N                       Bad-sector retry passes for acquisition (0-10; default 2)
+  --write-blocker-verified          Operator asserts separate hardware protection test
+  --source DIR                      External recovered-files folder for DMDE import
+  --dmde-log FILE                   Matching DMDE log for recovery import
   --conversion-workers N            Parallel Office files during process (1-16; default 4)
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
 
+#[derive(Debug)]
 struct CliResponse {
     output: String,
     exit_code: i32,
@@ -77,6 +110,7 @@ pub fn run_from_env() -> Option<i32> {
     if args.is_empty() {
         return None;
     }
+    let json_output = args.iter().any(|argument| argument == "--json");
     Some(
         match run(
             &args,
@@ -87,11 +121,19 @@ pub fn run_from_env() -> Option<i32> {
                 response.exit_code
             }
             Err(message) => {
-                eprintln!("FluxVault: {message}");
+                if json_output {
+                    println!("{}", json_error(&message));
+                } else {
+                    eprintln!("FluxVault: {message}");
+                }
                 2
             }
         },
     )
+}
+
+fn json_error(message: &str) -> String {
+    json!({"error": {"code": "operation_error", "message": message}}).to_string()
 }
 
 fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
@@ -99,6 +141,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut project_override: Option<PathBuf> = None;
     let mut destination: Option<PathBuf> = None;
     let mut drive_override: Option<String> = None;
+    let mut acquisition_disk: Option<u32> = None;
+    let mut acquisition_retries: Option<usize> = None;
+    let mut write_blocker_verified = false;
+    let mut import_source: Option<PathBuf> = None;
+    let mut import_log: Option<PathBuf> = None;
     let mut conversion_workers: Option<usize> = None;
     let mut positional = Vec::new();
     let mut index = 0;
@@ -120,6 +167,41 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 let value = args.get(index).ok_or("--drive requires a drive letter")?;
                 drive_override = Some(value.to_owned());
             }
+            "--disk" => {
+                index += 1;
+                acquisition_disk = Some(
+                    args.get(index)
+                        .ok_or("--disk requires a number")?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|number| *number > 0)
+                        .ok_or("--disk requires a positive number")?,
+                );
+            }
+            "--retries" => {
+                index += 1;
+                acquisition_retries = Some(
+                    args.get(index)
+                        .ok_or("--retries requires a number")?
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|number| *number <= 10)
+                        .ok_or("--retries must be from 0 to 10")?,
+                );
+            }
+            "--write-blocker-verified" => write_blocker_verified = true,
+            "--source" => {
+                index += 1;
+                import_source = Some(PathBuf::from(
+                    args.get(index).ok_or("--source requires a folder")?,
+                ));
+            }
+            "--dmde-log" => {
+                index += 1;
+                import_log = Some(PathBuf::from(
+                    args.get(index).ok_or("--dmde-log requires a file")?,
+                ));
+            }
             "--conversion-workers" => {
                 index += 1;
                 let value = args
@@ -135,20 +217,40 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             }
             "--help" | "-h" => positional.push("help".to_owned()),
             value if value.starts_with('-') => {
-                return Err(format!("Unknown option: {value}\n{HELP}"));
+                return Err(format!("Unknown option: {value}. Run fluxvault --help"));
             }
             value => positional.push(value.to_owned()),
         }
         index += 1;
     }
 
-    if conversion_workers.is_some() && positional.first().map(String::as_str) != Some("process") {
-        return Err("--conversion-workers is only valid with process".to_owned());
+    if conversion_workers.is_some()
+        && positional.first().map(String::as_str) != Some("process")
+        && !(positional.len() >= 2
+            && positional[0] == "conversion"
+            && matches!(positional[1].as_str(), "run" | "retry"))
+    {
+        return Err(
+            "--conversion-workers is only valid with process or conversion run/retry".to_owned(),
+        );
     }
     if drive_override.is_some()
         && !(positional.len() == 2 && positional[0] == "drive" && positional[1] == "probe")
+        && !(positional.len() == 1 && positional[0] == "acquire")
     {
-        return Err("--drive is only valid with drive probe".to_owned());
+        return Err("--drive is only valid with drive probe or acquire".to_owned());
+    }
+    if (acquisition_disk.is_some() || acquisition_retries.is_some() || write_blocker_verified)
+        && !(positional.len() == 1 && positional[0] == "acquire")
+    {
+        return Err(
+            "--disk, --retries and --write-blocker-verified are only valid with acquire".to_owned(),
+        );
+    }
+    if (import_source.is_some() || import_log.is_some())
+        && !(positional.len() == 3 && positional[0] == "recovery" && positional[1] == "import")
+    {
+        return Err("--source and --dmde-log are only valid with recovery import".to_owned());
     }
 
     let mut needs_attention = false;
@@ -177,6 +279,18 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     project.root().display()
                 ))
             }
+        }
+        Some("acquire") if positional.len() == 1 && destination.is_none() => {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            return acquire::run(
+                &project,
+                json_output,
+                drive_override.as_deref(),
+                acquisition_disk,
+                acquisition_retries.unwrap_or(2),
+                write_blocker_verified,
+            );
         }
         Some("status") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
@@ -490,6 +604,78 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     .join("\n"))
             }
         }
+        Some("tools")
+            if destination.is_none()
+                && project_override.is_none()
+                && ((positional.len() == 2 && positional[1] == "show")
+                    || (positional.len() == 4 && positional[1] == "set")
+                    || (positional.len() == 3 && positional[1] == "clear")) =>
+        {
+            let mut settings = external_tools::load_settings()?;
+            if positional[1] != "show" {
+                let kind = parse_tool_kind(&positional[2])?;
+                if positional[1] == "set" {
+                    let configured = PathBuf::from(&positional[3]);
+                    let configured = if configured.is_absolute() {
+                        configured
+                    } else {
+                        cwd.join(configured)
+                    };
+                    if !configured.is_file() {
+                        return Err(format!(
+                            "Tool executable not found: {}",
+                            configured.display()
+                        ));
+                    }
+                    settings.set_path(kind, Some(configured));
+                } else {
+                    settings.set_path(kind, None);
+                }
+                external_tools::save_settings(&settings)?;
+            }
+            if json_output {
+                Ok(json!({
+                    "tools": ToolKind::ALL.iter().map(|kind| json!({
+                        "name": kind.display_name(),
+                        "configured_path": settings.path(*kind),
+                        "auto_discovery": settings.path(*kind).is_none()
+                    })).collect::<Vec<_>>()
+                })
+                .to_string())
+            } else {
+                Ok(ToolKind::ALL
+                    .iter()
+                    .map(|kind| {
+                        format!(
+                            "{}: {}",
+                            kind.display_name(),
+                            settings
+                                .path(*kind)
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|| "auto-discovery".to_owned())
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        Some("recovery")
+            if destination.is_none()
+                && ((positional.len() == 2 && positional[1] == "queue")
+                    || (positional.len() == 3
+                        && matches!(positional[1].as_str(), "composite" | "fat" | "import"))) =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            return recovery::run_advanced(
+                &positional,
+                &project,
+                cwd,
+                json_output,
+                import_source.as_deref(),
+                import_log.as_deref(),
+            );
+        }
         Some("recovery")
             if destination.is_none()
                 && positional.len() == 3
@@ -626,6 +812,53 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     })
                     .collect::<Vec<_>>()
                     .join("\n"))
+            }
+        }
+        Some("conversion")
+            if ((positional.len() == 2
+                && matches!(positional[1].as_str(), "plan" | "run" | "issues" | "retry"))
+                || (positional.len() == 3 && positional[1] == "retry"))
+                && destination.is_none() =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            return office::run(
+                &positional[1],
+                &project,
+                json_output,
+                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                positional.get(2).map(Path::new),
+                cwd,
+            );
+        }
+        Some("files")
+            if positional.len() == 2 && positional[1] == "manifest" && destination.is_none() =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let result = manifest::build_manifest(
+                &ManifestRequest {
+                    extracted_root: project.extracted_dir(),
+                    images_directory: project.images_dir(),
+                    reports_directory: project.reports_dir(),
+                },
+                &|stage| eprintln!("{stage}"),
+            )?;
+            if json_output {
+                Ok(json!({
+                    "project": project.root(), "manifest": result.path,
+                    "disks": result.disk_count, "files": result.file_count,
+                    "bytes": result.total_bytes
+                })
+                .to_string())
+            } else {
+                Ok(format!(
+                    "Recovered-file manifest: {} disks, {} files, {} bytes.\n{}",
+                    result.disk_count,
+                    result.file_count,
+                    result.total_bytes,
+                    result.path.display()
+                ))
             }
         }
         Some("audit") if positional.len() == 1 && destination.is_none() => {
@@ -775,6 +1008,8 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("process") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            let project_root = project.root().to_path_buf();
+            let reports_directory = project.reports_dir();
             let settings = external_tools::load_settings()?;
             let command_audit_path = project.logs_dir().join("external-tools.jsonl");
             let seven_zip_executable = external_tools::find_ready_tool(
@@ -797,6 +1032,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 },
                 &|stage| eprintln!("{stage}"),
             )?;
+            let conversion_state = conversion_run::save_snapshot(
+                &reports_directory,
+                &project_root,
+                &result.conversion,
+            )?;
             needs_attention = result.audit.attention_disks > 0
                 || result.extraction.recovery_disks > 0
                 || result.declined_composites > 0
@@ -816,6 +1056,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     "converted_partial": result.conversion.partial,
                     "converted_failed": result.conversion.failed,
                     "converted_retried_outputs": result.conversion.retried_outputs,
+                    "conversion_state": conversion_state,
                     "evidence_verified": result.audit.verified_disks,
                     "evidence_attention": result.audit.attention_disks,
                     "workbook": result.workbook_path,
@@ -823,7 +1064,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .to_string())
             } else {
                 Ok(format!(
-                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}",
+                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}\nConversion state: {}",
                     result.extraction.total_disks,
                     result.audit.verified_disks,
                     result.audit.attention_disks,
@@ -837,7 +1078,8 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     result.conversion.failed,
                     result.conversion.retried_outputs,
                     result.recovery_decisions_path.display(),
-                    result.workbook_path.display()
+                    result.workbook_path.display(),
+                    conversion_state.display()
                 ))
             }
         }
@@ -872,7 +1114,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 ))
             }
         }
-        _ => Err(format!("Unsupported command or arguments.\n{HELP}")),
+        _ => Err("Unsupported command or arguments. Run fluxvault --help".to_owned()),
     }?;
     Ok(CliResponse {
         output,
@@ -906,6 +1148,17 @@ fn select_removable_drive(drives: &[FloppyDrive], requested: &str) -> Result<Flo
         .ok_or_else(|| format!("{root} is not a currently enumerated removable drive"))
 }
 
+fn parse_tool_kind(value: &str) -> Result<ToolKind, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "sevenzip" | "7zip" | "7z" => Ok(ToolKind::SevenZip),
+        "libreoffice" | "office" => Ok(ToolKind::LibreOffice),
+        "greaseweazle" | "gw" => Ok(ToolKind::Greaseweazle),
+        _ => Err(format!(
+            "Unknown tool {value}; choose sevenzip, libreoffice, or greaseweazle"
+        )),
+    }
+}
+
 fn resolve_project_root(cwd: &Path, project_override: Option<&Path>) -> Result<PathBuf, String> {
     match project_override {
         Some(path) if path.is_absolute() => Ok(path.to_path_buf()),
@@ -929,6 +1182,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tool_names_are_exact_and_safe() {
+        assert_eq!(parse_tool_kind("7z").unwrap(), ToolKind::SevenZip);
+        assert_eq!(
+            parse_tool_kind("LibreOffice").unwrap(),
+            ToolKind::LibreOffice
+        );
+        assert_eq!(parse_tool_kind("GW").unwrap(), ToolKind::Greaseweazle);
+        assert!(parse_tool_kind("write").is_err());
+        assert!(parse_tool_kind("7z.exe --delete").is_err());
+    }
+
+    #[test]
+    fn json_error_is_machine_readable_even_with_quoted_message() {
+        let error: serde_json::Value = serde_json::from_str(&json_error("bad \"disk\"")).unwrap();
+        assert_eq!(error["error"]["code"], "operation_error");
+        assert_eq!(error["error"]["message"], "bad \"disk\"");
+    }
+
+    #[test]
     fn drive_probe_rejects_arbitrary_paths_and_unlisted_drives() {
         let drives = vec![FloppyDrive {
             root: "A:\\".to_owned(),
@@ -944,6 +1216,17 @@ mod tests {
         assert!(
             run(
                 &["status".to_owned(), "--drive".to_owned(), "A:".to_owned()],
+                Path::new(".")
+            )
+            .is_err()
+        );
+        assert!(
+            run(
+                &[
+                    "drive".to_owned(),
+                    "list".to_owned(),
+                    "--write-blocker-verified".to_owned()
+                ],
                 Path::new(".")
             )
             .is_err()
@@ -974,6 +1257,36 @@ mod tests {
         assert_eq!(response.exit_code, 0);
         assert_eq!(json["disks"], 0);
         assert!(Path::new(json["workbook"].as_str().unwrap()).is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn files_manifest_route_is_machine_readable_without_hardware() {
+        let root = env::temp_dir().join(format!(
+            "fluxvault-cli-manifest-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        let recovered = project.extracted_dir().join("001").join("document.txt");
+        std::fs::create_dir_all(recovered.parent().unwrap()).unwrap();
+        std::fs::write(&recovered, b"synthetic fixture").unwrap();
+        let response = run(
+            &[
+                "files".to_owned(),
+                "manifest".to_owned(),
+                "--json".to_owned(),
+            ],
+            &root,
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&response.output).unwrap();
+        assert_eq!(json["files"], 1);
+        assert!(Path::new(json["manifest"].as_str().unwrap()).is_file());
+        assert_eq!(std::fs::read(recovered).unwrap(), b"synthetic fixture");
         std::fs::remove_dir_all(root).unwrap();
     }
 

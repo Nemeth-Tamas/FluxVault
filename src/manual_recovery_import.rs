@@ -76,7 +76,7 @@ pub fn spawn_import(request: ManualRecoveryImportRequest) -> Receiver<ManualReco
     receiver
 }
 
-fn import_manual_recovery(
+pub(crate) fn import_manual_recovery(
     request: &ManualRecoveryImportRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ManualRecoveryImportResult, String> {
