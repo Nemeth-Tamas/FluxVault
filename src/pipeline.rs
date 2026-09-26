@@ -337,6 +337,8 @@ pub(crate) fn run_pipeline(
             command_audit_path: request.command_audit_path.clone(),
             timeout_seconds: 45,
             workers: request.conversion_workers,
+            selected_sources: None,
+            previous_result: None,
         },
         &|message| stage(&format!("3/5: {message}")),
         &|completed, total| stage(&format!("3/5: {completed}/{total} conversions processed")),

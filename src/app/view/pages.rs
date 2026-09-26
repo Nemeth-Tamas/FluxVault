@@ -1858,6 +1858,7 @@ impl FluxVaultApp {
 
         ui.add_space(12.0);
 
+        let mut retry_selected = None;
         ui_theme::section(ui, "LibreOffice átalakítás", |ui| {
             ui.label(
                 "A recovered eredetiket tükrözi, majd a támogatott régi Office fájlokból modern dokumentumot és PDF-et készít. A meglévő érvényes outputokat újra felhasználja; fájlonként 45 másodperces időkorlátot és átmeneti hiba esetén egy automatikus újrapróbálkozást alkalmaz.",
@@ -1868,7 +1869,8 @@ impl FluxVaultApp {
                     self.project.is_some()
                         && libreoffice_ready
                         && !self.conversion_running
-                        && !self.conversion_planning_running,
+                        && !self.conversion_planning_running
+                        && !self.pipeline_running,
                     egui::Button::new(if self.conversion_running {
                         "Office konverzió folyamatban..."
                     } else if self
@@ -1883,7 +1885,7 @@ impl FluxVaultApp {
                 )
                 .clicked()
             {
-                self.start_conversion();
+                self.start_conversion(None);
             }
             if !libreoffice_ready {
                 ui.weak("A LibreOffice nem érhető el; ellenőrizze a Beállítások oldalt.");
@@ -1911,7 +1913,11 @@ impl FluxVaultApp {
             if let Some(result) = &self.conversion_result {
                 ui.colored_label(
                     egui::Color32::from_rgb(70, 200, 120),
-                    "[OFFICE KONVERZIO KESZ]",
+                    if self.conversion_running {
+                        "[ELŐZŐ OFFICE EREDMÉNY]"
+                    } else {
+                        "[OFFICE KONVERZIÓ KÉSZ]"
+                    },
                 );
                 ui.label(format!(
                     "{} OK | {} részleges | {} sikertelen | {} timeout | {} újrahasznált | {} újrapróbált output",
@@ -1924,8 +1930,75 @@ impl FluxVaultApp {
                 ));
                 ui.monospace(format!("Összesítő: {}", result.summary_path.display()));
                 ui.monospace(format!("Kivételek: {}", result.failures_path.display()));
+                if !result.issues.is_empty() {
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.label(format!(
+                        "Figyelmet igénylő konverziók: {}",
+                        result.issues.len()
+                    ));
+                    ui.weak("Jelölje ki a fájlokat, amelyeket újra szeretne próbálni. A többi sor újraellenőrzés után megmarad az összesítőben; a meglévő érvényes outputok nem íródnak felül.");
+                    egui::ScrollArea::vertical()
+                        .max_height(280.0)
+                        .show(ui, |ui| {
+                            for issue in &result.issues {
+                                ui.push_id(&issue.source_path, |ui| {
+                                    let mut selected = self
+                                        .conversion_issue_selection
+                                        .contains(&issue.source_path);
+                                    if ui
+                                        .checkbox(
+                                            &mut selected,
+                                            format!("{} | {}", issue.floppy, issue.status),
+                                        )
+                                        .changed()
+                                    {
+                                        if selected {
+                                            self.conversion_issue_selection
+                                                .insert(issue.source_path.clone());
+                                        } else {
+                                            self.conversion_issue_selection
+                                                .remove(&issue.source_path);
+                                        }
+                                    }
+                                    ui.label(&issue.forensic_path);
+                                    ui.collapsing("Részletek", |ui| {
+                                        ui.label(format!(
+                                            "Modern: {} - {}",
+                                            issue.modern_result, issue.modern_detail
+                                        ));
+                                        ui.label(format!(
+                                            "PDF: {} - {}",
+                                            issue.pdf_result, issue.pdf_detail
+                                        ));
+                                    });
+                                    ui.separator();
+                                });
+                            }
+                        });
+                    let selected_count = self.conversion_issue_selection.len();
+                    if ui
+                        .add_enabled(
+                            selected_count > 0
+                                && libreoffice_ready
+                                && !self.conversion_running
+                                && !self.conversion_planning_running
+                                && !self.pipeline_running,
+                            egui::Button::new(format!(
+                                "Kijelöltek újrapróbálása ({selected_count})"
+                            )),
+                        )
+                        .clicked()
+                    {
+                        retry_selected =
+                            Some(self.conversion_issue_selection.iter().cloned().collect());
+                    }
+                }
             }
         });
+        if let Some(sources) = retry_selected {
+            self.start_conversion(Some(sources));
+        }
     }
 
     fn audit_page(&mut self, ui: &mut egui::Ui) {

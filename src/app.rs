@@ -1,7 +1,7 @@
 mod view;
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::mpsc::{Receiver, TryRecvError},
 };
@@ -204,6 +204,7 @@ pub struct FluxVaultApp {
     conversion_completed: usize,
     conversion_total: usize,
     conversion_result: Option<ConversionResult>,
+    conversion_issue_selection: HashSet<PathBuf>,
     conversion_error: Option<String>,
     audit_receiver: Option<Receiver<AuditEvent>>,
     audit_running: bool,
@@ -311,6 +312,7 @@ impl FluxVaultApp {
             conversion_completed: 0,
             conversion_total: 0,
             conversion_result: None,
+            conversion_issue_selection: HashSet::new(),
             conversion_error: None,
             audit_receiver: None,
             audit_running: false,
@@ -1400,7 +1402,7 @@ impl FluxVaultApp {
         }
     }
 
-    fn start_conversion(&mut self) {
+    fn start_conversion(&mut self, selected_sources: Option<Vec<PathBuf>>) {
         if self.conversion_running || self.conversion_planning_running || self.pipeline_running {
             return;
         }
@@ -1423,13 +1425,17 @@ impl FluxVaultApp {
             command_audit_path: self.tool_audit_path(),
             timeout_seconds: 45,
             workers: conversion_run::DEFAULT_CONVERSION_WORKERS,
+            previous_result: selected_sources
+                .as_ref()
+                .and_then(|_| self.conversion_result.clone().map(Box::new)),
+            selected_sources,
         };
         self.conversion_receiver = Some(conversion_run::spawn_conversion(request));
         self.conversion_running = true;
         self.conversion_stage = "Office konverziós sor előkészítése...".to_owned();
         self.conversion_completed = 0;
         self.conversion_total = 0;
-        self.conversion_result = None;
+        self.conversion_issue_selection.clear();
         self.conversion_error = None;
         self.status = self.conversion_stage.clone();
         self.log("Régi Office fájlok DOCX/XLSX/PPTX és PDF konverziója elindult.");
@@ -1466,7 +1472,6 @@ impl FluxVaultApp {
                             self.conversion_stage = "Office konverziós sor sikertelen.".to_owned();
                             self.status = self.conversion_stage.clone();
                             self.log(format!("Office konverzió hiba: {error}"));
-                            self.conversion_result = None;
                             self.conversion_error = Some(error);
                         }
                     }
@@ -1785,6 +1790,8 @@ impl FluxVaultApp {
         self.imaging_output = None;
         self.imaging_result = None;
         self.imaging_error = None;
+        self.conversion_result = None;
+        self.conversion_issue_selection.clear();
 
         self.status = format!("Projekt megnyitva: {name}");
 

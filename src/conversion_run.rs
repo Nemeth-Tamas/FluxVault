@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -26,6 +27,8 @@ pub struct ConversionRequest {
     pub command_audit_path: PathBuf,
     pub timeout_seconds: u64,
     pub workers: usize,
+    pub selected_sources: Option<Vec<PathBuf>>,
+    pub previous_result: Option<Box<ConversionResult>>,
 }
 
 pub const DEFAULT_CONVERSION_WORKERS: usize = 4;
@@ -48,8 +51,22 @@ pub struct ConversionResult {
     pub timed_out: usize,
     pub reused_outputs: usize,
     pub retried_outputs: usize,
+    pub issues: Vec<ConversionIssue>,
     pub summary_path: PathBuf,
     pub failures_path: PathBuf,
+    rows: Vec<JobResult>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversionIssue {
+    pub source_path: PathBuf,
+    pub floppy: String,
+    pub forensic_path: String,
+    pub status: String,
+    pub modern_result: String,
+    pub modern_detail: String,
+    pub pdf_result: String,
+    pub pdf_detail: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +92,7 @@ impl OutputState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct OutputResult {
     state: OutputState,
     detail: String,
@@ -83,7 +100,7 @@ struct OutputResult {
     retry_count: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct JobResult {
     job: ConversionJob,
     modern: OutputResult,
@@ -147,9 +164,54 @@ pub(crate) fn run_conversion(
     if !(1..=16).contains(&request.workers) {
         return Err("A konverziós munkaszálak száma 1 és 16 között lehet.".to_owned());
     }
+    if let Some(sources) = &request.selected_sources
+        && (sources.is_empty() || request.previous_result.is_none())
+    {
+        return Err(
+            "A kiválasztott újrapróbáláshoz korábbi eredmény és legalább egy forrás szükséges."
+                .to_owned(),
+        );
+    }
 
     send_stage("Delivery eredetik és friss conversion plan készítése...");
     let planning = conversion::build_conversion_plan(&request.planning, send_stage)?;
+    let selected_sources = request
+        .selected_sources
+        .as_ref()
+        .map(|sources| sources.iter().collect::<HashSet<_>>());
+    if let Some(selected) = &selected_sources {
+        let matched = planning
+            .jobs
+            .iter()
+            .filter(|job| selected.contains(&job.source_path))
+            .count();
+        if matched != selected.len() {
+            return Err("Egy kiválasztott fájl már nincs a friss konverziós tervben; futtassa újra a teljes sort.".to_owned());
+        }
+    }
+    let previous_rows: HashMap<&PathBuf, &JobResult> = request
+        .previous_result
+        .as_ref()
+        .map(|previous| {
+            previous
+                .rows
+                .iter()
+                .map(|row| (&row.job.source_path, row))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(selected) = &selected_sources
+        && planning.jobs.iter().any(|job| {
+            selected.contains(&job.source_path)
+                && previous_rows.get(&job.source_path).is_none_or(|previous| {
+                    previous.job.source_sha256 != job.source_sha256
+                        || previous.job.modern_path != job.modern_path
+                        || previous.job.pdf_path != job.pdf_path
+                })
+        })
+    {
+        return Err("A kiválasztott fájl forrása vagy delivery útvonala megváltozott; a korábbi konverziós eredmény nem használható biztonságos újrapróbáláshoz.".to_owned());
+    }
     let total = planning.jobs.len();
     send_stage(&format!(
         "Régi Office fájlok átalakítása: {total} fájl, legfeljebb {} párhuzamos munkaszál...",
@@ -160,18 +222,39 @@ pub(crate) fn run_conversion(
         request.workers,
         |job| {
             let started = Instant::now();
-            let modern = retry_transient_failure(|| {
-                convert_output(
-                    request,
-                    job,
-                    &job.modern_path,
-                    &job.modern_format.to_ascii_lowercase(),
-                    &job.modern_filter,
+            let selected = selected_sources
+                .as_ref()
+                .is_none_or(|sources| sources.contains(&job.source_path));
+            let previous = previous_rows.get(&job.source_path).copied().filter(|row| {
+                row.job.source_sha256 == job.source_sha256
+                    && row.job.modern_path == job.modern_path
+                    && row.job.pdf_path == job.pdf_path
+            });
+            let (modern, pdf) = if selected {
+                (
+                    retry_transient_failure(|| {
+                        convert_output(
+                            request,
+                            job,
+                            &job.modern_path,
+                            &job.modern_format.to_ascii_lowercase(),
+                            &job.modern_filter,
+                        )
+                    }),
+                    retry_transient_failure(|| {
+                        convert_output(request, job, &job.pdf_path, "pdf", &job.pdf_filter)
+                    }),
                 )
-            });
-            let pdf = retry_transient_failure(|| {
-                convert_output(request, job, &job.pdf_path, "pdf", &job.pdf_filter)
-            });
+            } else {
+                (
+                    inspect_without_conversion(
+                        previous.map(|row| &row.modern),
+                        &job.modern_path,
+                        &job.modern_format.to_ascii_lowercase(),
+                    ),
+                    inspect_without_conversion(previous.map(|row| &row.pdf), &job.pdf_path, "pdf"),
+                )
+            };
             JobResult {
                 job: job.clone(),
                 modern,
@@ -192,6 +275,21 @@ pub(crate) fn run_conversion(
         .join("ConversionFailures.txt");
     write_summary(&summary_path, &rows, &request.planning.converted_root)?;
     write_failures(&failures_path, &rows)?;
+
+    let issues = rows
+        .iter()
+        .filter(|row| row.status() != "OK")
+        .map(|row| ConversionIssue {
+            source_path: row.job.source_path.clone(),
+            floppy: row.job.floppy.clone(),
+            forensic_path: row.job.original_forensic_path.clone(),
+            status: row.status().to_owned(),
+            modern_result: row.modern.state.label().to_owned(),
+            modern_detail: row.modern.detail.clone(),
+            pdf_result: row.pdf.state.label().to_owned(),
+            pdf_detail: row.pdf.detail.clone(),
+        })
+        .collect();
 
     Ok(ConversionResult {
         ok: rows.iter().filter(|row| row.status() == "OK").count(),
@@ -214,10 +312,41 @@ pub(crate) fn run_conversion(
             .iter()
             .map(|row| usize::from(row.modern.retry_count + row.pdf.retry_count))
             .sum(),
+        issues,
         planning,
         summary_path,
         failures_path,
+        rows,
     })
+}
+
+fn inspect_without_conversion(
+    previous: Option<&OutputResult>,
+    target: &Path,
+    extension: &str,
+) -> OutputResult {
+    match validate_output(target, extension) {
+        Ok(true) => OutputResult {
+            state: OutputState::Reused,
+            detail: "Existing output passed integrity validation".to_owned(),
+            retryable: false,
+            retry_count: 0,
+        },
+        Ok(false) if target.exists() => failure(format!(
+            "Existing output failed integrity validation; preserved without overwrite: {}",
+            target.display()
+        )),
+        Ok(false) => match previous {
+            Some(result) if !result.state.successful() => {
+                let mut result = result.clone();
+                result.retryable = false;
+                result.retry_count = 0;
+                result
+            }
+            _ => failure("Not selected for this run; output is missing".to_owned()),
+        },
+        Err(error) => failure(error),
+    }
 }
 
 fn retry_transient_failure(mut attempt: impl FnMut() -> OutputResult) -> OutputResult {
@@ -764,6 +893,35 @@ mod tests {
         assert!(result.detail.contains("attempt 2: LibreOffice exit 2"));
     }
 
+    #[test]
+    fn unselected_missing_output_cannot_inherit_an_old_success() {
+        let missing = std::env::temp_dir().join(format!(
+            "fluxvault-missing-output-{}-{}.pdf",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let previous_ok = OutputResult {
+            state: OutputState::Ok,
+            detail: "Previously valid".to_owned(),
+            retryable: false,
+            retry_count: 0,
+        };
+        let result = inspect_without_conversion(Some(&previous_ok), &missing, "pdf");
+        assert_eq!(result.state, OutputState::Failed);
+        assert!(result.detail.contains("missing"));
+
+        let previous_timeout = OutputResult {
+            state: OutputState::Timeout,
+            detail: "Previous timeout".to_owned(),
+            retryable: false,
+            retry_count: 1,
+        };
+        let result = inspect_without_conversion(Some(&previous_timeout), &missing, "pdf");
+        assert_eq!(result.state, OutputState::Timeout);
+        assert_eq!(result.detail, "Previous timeout");
+        assert_eq!(result.retry_count, 0);
+    }
+
     #[cfg(windows)]
     #[test]
     #[ignore = "requires permission to terminate a disposable Windows process tree"]
@@ -912,6 +1070,8 @@ mod tests {
             command_audit_path: root.join("Logs").join("external-tools.jsonl"),
             timeout_seconds: 45,
             workers: DEFAULT_CONVERSION_WORKERS,
+            selected_sources: None,
+            previous_result: None,
         };
 
         let first = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
@@ -935,6 +1095,63 @@ mod tests {
         let second = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
         assert_eq!(second.ok, 4);
         assert_eq!(second.reused_outputs, 8);
+
+        let selected_job = second.planning.jobs[0].clone();
+        let unselected_job = second.planning.jobs[1].clone();
+        fs::remove_file(&selected_job.pdf_path).unwrap();
+        fs::remove_file(&unselected_job.pdf_path).unwrap();
+        let mut selected_request = request.clone();
+        selected_request.selected_sources = Some(vec![selected_job.source_path.clone()]);
+        selected_request.previous_result = Some(Box::new(second));
+        let selected = run_conversion(&selected_request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(selected.ok, 3);
+        assert_eq!(selected.partial, 1);
+        assert_eq!(selected.issues.len(), 1);
+        assert_eq!(selected.issues[0].source_path, unselected_job.source_path);
+        assert!(selected_job.pdf_path.is_file());
+        assert!(!unselected_job.pdf_path.exists());
+        assert_eq!(
+            fs::read_to_string(&selected.summary_path)
+                .unwrap()
+                .lines()
+                .count(),
+            5
+        );
+        assert_eq!(
+            fs::read_to_string(&request.command_audit_path)
+                .unwrap()
+                .lines()
+                .count(),
+            9
+        );
+
+        let retry_failed = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(retry_failed.ok, 4);
+        assert!(retry_failed.issues.is_empty());
+        assert!(unselected_job.pdf_path.is_file());
+
+        fs::write(
+            &selected_job.source_path,
+            b"{\\rtf1\\ansi Changed test source.}",
+        )
+        .unwrap();
+        let mut stale_request = request.clone();
+        stale_request.selected_sources = Some(vec![selected_job.source_path.clone()]);
+        stale_request.previous_result = Some(Box::new(retry_failed));
+        let stale_error = run_conversion(&stale_request, &|_| {}, &|_, _| {}).unwrap_err();
+        assert!(stale_error.contains("megváltozott"));
+        assert_eq!(
+            fs::read_to_string(&request.command_audit_path)
+                .unwrap()
+                .lines()
+                .count(),
+            10
+        );
+        fs::write(
+            &selected_job.source_path,
+            b"{\\rtf1\\ansi FluxVault conversion test.}",
+        )
+        .unwrap();
         for index in 0..4 {
             assert_eq!(
                 fs::read(source_directory.join(format!("sample{index}.rtf"))).unwrap(),
