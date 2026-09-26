@@ -10,42 +10,62 @@ use serde_json::json;
 
 use crate::{
     audit,
+    batch_extraction::{self, BatchExtractionRequest},
     conversion_run::DEFAULT_CONVERSION_WORKERS,
-    external_tools::{self, ToolKind},
+    external_tools::{self, ToolHealth, ToolKind},
+    floppy::{self, FloppyDrive, WriteProtectionStatus},
     imaging,
     package::{self, PackageRequest},
     pipeline::{self, PipelineRequest},
     project::ProjectState,
+    recovery_backup::{self, RecoveryBackupRequest},
     recovery_plan::{self, RecoveryAction},
+    report,
+    safety::MediaSafetyPolicy,
 };
 
-const HELP: &str = "FluxVault — floppy archiving\n\
-Usage:\n\
-  fluxvault                         Open the GUI\n\
-  fluxvault init [path]             Create a project\n\
-  fluxvault status [--project PATH] Show project status\n\
-  fluxvault project show [--project PATH]\n\
-                                    Show saved project metadata\n\
-  fluxvault disk list [--project PATH]\n\
-  fluxvault disk show N [--project PATH]\n\
-                                    Inspect saved disk attempts\n\
-  fluxvault disk select N [--project PATH]\n\
-  fluxvault disk next [--project PATH]\n\
-                                    Select the current/next disk number (no drive access)\n\
-  fluxvault recovery plan [N] [--project PATH]\n\
-                                    Inspect evidence-ranked offline next steps\n\
-  fluxvault audit [--project PATH]  Verify image/extraction evidence\n\
-  fluxvault process [--project PATH] [--conversion-workers N]\n\
-                                    Extract, convert, audit, and report\n\
-  fluxvault package build --destination PATH [--project PATH]\n\
-                                    Create and verify an archival ZIP\n\
-  fluxvault --help                  Show this help\n\
-Options:\n\
-  --json                            Output machine-readable JSON\n\
-  --project PATH                    Use a specific project instead of searching upward\n\
-  --destination PATH                Output folder outside the project\n\
-  --conversion-workers N            Parallel Office files during process (1-16; default 4)\n\
-Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error";
+const HELP: &str = r#"FluxVault — floppy archiving
+Usage:
+  fluxvault                         Open the GUI
+  fluxvault init [path]             Create a project
+  fluxvault status [--project PATH] Show project status
+  fluxvault project show [--project PATH]
+                                    Show saved project metadata
+  fluxvault disk list [--project PATH]
+  fluxvault disk show N [--project PATH]
+                                    Inspect saved disk attempts
+  fluxvault disk select N [--project PATH]
+  fluxvault disk next [--project PATH]
+                                    Select the current/next disk number (no drive access)
+  fluxvault drive list              List removable drives without reading media
+  fluxvault drive probe --drive A:  Read-only 512-byte media and protection probe
+  fluxvault tools check [--project PATH]
+                                    Check external tool versions and record audit
+  fluxvault extract all [--project PATH]
+                                    Process saved images with the GUI's extraction service
+  fluxvault extract disk N [--project PATH]
+                                    Extract one saved disk or preserve recovery evidence
+  fluxvault recovery plan [N] [--project PATH]
+                                    Inspect evidence-ranked offline next steps
+  fluxvault recovery compare N [--project PATH]
+                                    Compare the two latest saved attempts
+  fluxvault recovery backup N [--project PATH]
+                                    Create/reuse immutable pass-1 evidence backup
+  fluxvault audit [--project PATH]  Verify image/extraction evidence
+  fluxvault report export [--project PATH]
+                                    Export the Hungarian XLSX workbook
+  fluxvault process [--project PATH] [--conversion-workers N]
+                                    Extract, convert, audit, and report
+  fluxvault package build --destination PATH [--project PATH]
+                                    Create and verify an archival ZIP
+  fluxvault --help                  Show this help
+Options:
+  --json                            Output machine-readable JSON
+  --project PATH                    Use a specific project instead of searching upward
+  --destination PATH                Output folder outside the project
+  --drive LETTER:                   Enumerated removable drive for read-only probe
+  --conversion-workers N            Parallel Office files during process (1-16; default 4)
+Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
 
 struct CliResponse {
     output: String,
@@ -78,6 +98,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
     let mut destination: Option<PathBuf> = None;
+    let mut drive_override: Option<String> = None;
     let mut conversion_workers: Option<usize> = None;
     let mut positional = Vec::new();
     let mut index = 0;
@@ -93,6 +114,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 index += 1;
                 let value = args.get(index).ok_or("--destination requires a path")?;
                 destination = Some(PathBuf::from(value));
+            }
+            "--drive" => {
+                index += 1;
+                let value = args.get(index).ok_or("--drive requires a drive letter")?;
+                drive_override = Some(value.to_owned());
             }
             "--conversion-workers" => {
                 index += 1;
@@ -118,6 +144,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
 
     if conversion_workers.is_some() && positional.first().map(String::as_str) != Some("process") {
         return Err("--conversion-workers is only valid with process".to_owned());
+    }
+    if drive_override.is_some()
+        && !(positional.len() == 2 && positional[0] == "drive" && positional[1] == "probe")
+    {
+        return Err("--drive is only valid with drive probe".to_owned());
     }
 
     let mut needs_attention = false;
@@ -309,6 +340,243 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 ))
             }
         }
+        Some("drive")
+            if positional.len() == 2
+                && positional[1] == "list"
+                && drive_override.is_none()
+                && project_override.is_none()
+                && destination.is_none() =>
+        {
+            let drives = floppy::enumerate_removable_drives()?;
+            if json_output {
+                Ok(json!({"drives": drives.iter().map(|drive| json!({
+                    "root": drive.root, "device": drive.device_path
+                })).collect::<Vec<_>>(), "media_read": false})
+                .to_string())
+            } else if drives.is_empty() {
+                Ok("No removable drives found; no media was read.".to_owned())
+            } else {
+                Ok(drives
+                    .iter()
+                    .map(FloppyDrive::display_name)
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        Some("drive")
+            if positional.len() == 2
+                && positional[1] == "probe"
+                && project_override.is_none()
+                && destination.is_none() =>
+        {
+            MediaSafetyPolicy::assert_invariants();
+            let requested = drive_override
+                .as_deref()
+                .ok_or("drive probe requires --drive A:")?;
+            let drives = floppy::enumerate_removable_drives()?;
+            let drive = select_removable_drive(&drives, requested)?;
+            let probe = floppy::probe_read_only(&drive)?;
+            let protection = match &probe.write_protection {
+                WriteProtectionStatus::Protected => "protected",
+                WriteProtectionStatus::Writable => "writable",
+                WriteProtectionStatus::Unknown(_) => "unknown",
+            };
+            let safe_to_image = probe
+                .geometry
+                .is_some_and(|geometry| geometry.looks_like_floppy())
+                && probe.write_protection == WriteProtectionStatus::Protected;
+            needs_attention = !safe_to_image;
+            if json_output {
+                Ok(json!({
+                    "drive": drive.root, "device": drive.device_path,
+                    "read_only": true, "bytes_read": probe.bytes_read,
+                    "first_bytes_hex": probe.first_bytes_hex(),
+                    "boot_signature_hex": probe.boot_signature_hex(),
+                    "write_protection": protection,
+                    "write_protection_detail": match &probe.write_protection {
+                        WriteProtectionStatus::Unknown(detail) => Some(detail.as_str()),
+                        _ => None,
+                    },
+                    "geometry": probe.geometry.map(|geometry| json!({
+                        "cylinders": geometry.cylinders, "heads": geometry.heads,
+                        "sectors_per_track": geometry.sectors_per_track,
+                        "bytes_per_sector": geometry.bytes_per_sector,
+                        "total_bytes": geometry.total_bytes(),
+                        "format": geometry.format_guess(),
+                        "looks_like_floppy": geometry.looks_like_floppy()
+                    })),
+                    "geometry_error": probe.geometry_error,
+                    "acquisition_permitted_by_software_checks": safe_to_image,
+                    "hardware_write_protection_independently_verified": false
+                })
+                .to_string())
+            } else {
+                Ok(format!(
+                    "{}: read-only probe read {} bytes; write protection: {}; geometry: {}; acquisition {} by software checks.\nFirst bytes: {}\nBoot signature: {}\nVerify this adapter's physical write protection separately before customer media.",
+                    drive.root,
+                    probe.bytes_read,
+                    protection,
+                    probe
+                        .geometry
+                        .map(|geometry| format!(
+                            "{} ({} bytes)",
+                            geometry.format_guess(),
+                            geometry.total_bytes()
+                        ))
+                        .or(probe.geometry_error.clone())
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                    if safe_to_image {
+                        "permitted by checks"
+                    } else {
+                        "blocked"
+                    },
+                    probe.first_bytes_hex(),
+                    probe.boot_signature_hex()
+                ))
+            }
+        }
+        Some("tools")
+            if positional.len() == 2 && positional[1] == "check" && destination.is_none() =>
+        {
+            let settings = external_tools::load_settings()?;
+            let audit_path = if project_override.is_some() || discover_project(cwd).is_some() {
+                let root = resolve_project_root(cwd, project_override.as_deref())?;
+                ProjectState::open_without_session(root)?
+                    .logs_dir()
+                    .join("external-tools.jsonl")
+            } else {
+                external_tools::default_audit_path()
+            };
+            let statuses = ToolKind::ALL
+                .map(|kind| external_tools::check_tool(kind, settings.path(kind), &audit_path));
+            for status in &statuses {
+                if let Some(error) = &status.audit_error {
+                    return Err(format!(
+                        "{} health-check audit could not be saved: {error}",
+                        status.kind.display_name()
+                    ));
+                }
+            }
+            needs_attention = statuses
+                .iter()
+                .any(|status| status.health != ToolHealth::Ready);
+            if json_output {
+                Ok(
+                    json!({"audit_log": audit_path, "tools": statuses.iter().map(|status| json!({
+                    "name": status.kind.display_name(),
+                    "health": format!("{:?}", status.health).to_ascii_lowercase(),
+                    "executable": status.executable, "version": status.version,
+                    "detail": status.detail
+                })).collect::<Vec<_>>()})
+                    .to_string(),
+                )
+            } else {
+                Ok(statuses
+                    .iter()
+                    .map(|status| {
+                        format!(
+                            "{}: {:?} | {} | {}",
+                            status.kind.display_name(),
+                            status.health,
+                            status
+                                .executable
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|| "not found".to_owned()),
+                            status.version.as_deref().unwrap_or(&status.detail)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        Some("recovery")
+            if destination.is_none()
+                && positional.len() == 3
+                && (positional[1] == "compare" || positional[1] == "backup") =>
+        {
+            let disk_number = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or("recovery compare/backup requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
+            if positional[1] == "compare" {
+                let comparison = imaging::compare_latest_attempts(&attempts)
+                    .ok_or("Two compatible saved attempts are required for comparison")?;
+                needs_attention = !comparison.still_bad_sectors.is_empty();
+                if json_output {
+                    Ok(json!({
+                        "disk": disk_number,
+                        "older_attempt": comparison.older_attempt,
+                        "newer_attempt": comparison.newer_attempt,
+                        "older_bad": comparison.older_bad_count,
+                        "newer_bad": comparison.newer_bad_count,
+                        "recovered_sectors": comparison.recovered_sectors,
+                        "newly_bad_sectors": comparison.newly_bad_sectors,
+                        "still_bad_sectors": comparison.still_bad_sectors
+                    })
+                    .to_string())
+                } else {
+                    Ok(format!(
+                        "Disk {disk_number:03}: attempts #{:03} -> #{:03}\nEarlier bad: {} | newer bad: {}\nRecovered: {:?}\nNewly bad: {:?}\nStill bad: {:?}",
+                        comparison.older_attempt,
+                        comparison.newer_attempt,
+                        comparison.older_bad_count,
+                        comparison.newer_bad_count,
+                        comparison.recovered_sectors,
+                        comparison.newly_bad_sectors,
+                        comparison.still_bad_sectors
+                    ))
+                }
+            } else {
+                let attempt = attempts
+                    .last()
+                    .ok_or_else(|| format!("No saved disk {disk_number:03} in this project"))?;
+                if !attempt.attention_required {
+                    return Err(
+                        "A clean acquisition does not need a pass-1 recovery backup".to_owned()
+                    );
+                }
+                let result = recovery_backup::ensure_first_backup(
+                    &RecoveryBackupRequest {
+                        recovery_root: project.recovery_dir(),
+                        disk_number,
+                        attempt_number: attempt.attempt_number,
+                        image_path: recovery_plan::resolve_image_path(
+                            &project.images_dir(),
+                            &attempt.image_file,
+                        )?,
+                        log_path: (!attempt.log_file.is_empty())
+                            .then(|| PathBuf::from(&attempt.log_file)),
+                        reason: format!(
+                            "{}; {} bad sectors",
+                            attempt.status,
+                            attempt.bad_sectors.len()
+                        ),
+                    },
+                    &|stage| eprintln!("{stage}"),
+                )?;
+                needs_attention = true;
+                if json_output {
+                    Ok(json!({
+                        "disk": disk_number, "attempt": attempt.attempt_number,
+                        "backup": result.directory, "created": result.created,
+                        "image": result.image_backup, "log": result.log_backup,
+                        "manifest": result.manifest_path
+                    })
+                    .to_string())
+                } else {
+                    Ok(format!(
+                        "Disk {disk_number:03} pass-1 backup {}: {}",
+                        if result.created { "created" } else { "reused" },
+                        result.directory.display()
+                    ))
+                }
+            }
+        }
         Some("recovery")
             if destination.is_none()
                 && (positional.len() == 2 || positional.len() == 3)
@@ -377,6 +645,131 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     result.attention_disks,
                     result.csv_path.display()
                 ))
+            }
+        }
+        Some("extract")
+            if positional.len() == 2 && positional[1] == "all" && destination.is_none() =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let settings = external_tools::load_settings()?;
+            let command_audit_path = project.logs_dir().join("external-tools.jsonl");
+            let seven_zip_executable = external_tools::find_ready_tool(
+                ToolKind::SevenZip,
+                settings.path(ToolKind::SevenZip),
+                &command_audit_path,
+            )?;
+            let result = batch_extraction::run_batch_extraction(
+                &BatchExtractionRequest {
+                    seven_zip_executable,
+                    images_directory: project.images_dir(),
+                    logs_directory: project.logs_dir(),
+                    extracted_root: project.extracted_dir(),
+                    recovery_root: project.recovery_dir(),
+                    reports_directory: project.reports_dir(),
+                    command_audit_path,
+                },
+                &|stage| eprintln!("{stage}"),
+                &|completed, total| eprintln!("Extracted {completed}/{total} disks"),
+            )?;
+            needs_attention = result.recovery_disks > 0 || result.in_progress_disks > 0;
+            if json_output {
+                Ok(json!({
+                    "disks": result.total_disks,
+                    "extracted": result.extracted_disks,
+                    "reused": result.reused_disks,
+                    "manual": result.manual_disks,
+                    "recovery_queue": result.recovery_disks,
+                    "in_progress": result.in_progress_disks,
+                    "zero_file": result.zero_file_disks,
+                    "summary": result.summary_path,
+                    "manifest": result.manifest.path
+                })
+                .to_string())
+            } else {
+                Ok(format!(
+                    "Extraction: {} disks, {} extracted ({} reused), {} manual, {} need recovery, {} in progress.\nSummary: {}\nManifest: {}",
+                    result.total_disks,
+                    result.extracted_disks,
+                    result.reused_disks,
+                    result.manual_disks,
+                    result.recovery_disks,
+                    result.in_progress_disks,
+                    result.summary_path.display(),
+                    result.manifest.path.display()
+                ))
+            }
+        }
+        Some("extract")
+            if positional.len() == 3 && positional[1] == "disk" && destination.is_none() =>
+        {
+            let disk_number = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or("extract disk requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let settings = external_tools::load_settings()?;
+            let command_audit_path = project.logs_dir().join("external-tools.jsonl");
+            let seven_zip_executable = external_tools::find_ready_tool(
+                ToolKind::SevenZip,
+                settings.path(ToolKind::SevenZip),
+                &command_audit_path,
+            )?;
+            let result = batch_extraction::run_single_disk_extraction(
+                &BatchExtractionRequest {
+                    seven_zip_executable,
+                    images_directory: project.images_dir(),
+                    logs_directory: project.logs_dir(),
+                    extracted_root: project.extracted_dir(),
+                    recovery_root: project.recovery_dir(),
+                    reports_directory: project.reports_dir(),
+                    command_audit_path,
+                },
+                disk_number,
+                &|stage| eprintln!("{stage}"),
+            )?;
+            needs_attention = matches!(result.status, "recovery" | "in_progress");
+            if json_output {
+                Ok(json!({
+                    "disk": result.disk_number,
+                    "status": result.status,
+                    "reason": result.reason,
+                    "files": result.file_count,
+                    "reused": result.reused,
+                    "manifest": result.manifest_path
+                })
+                .to_string())
+            } else {
+                Ok(format!(
+                    "Disk {:03}: {} | {} | {} files\nManifest: {}",
+                    result.disk_number,
+                    result.status,
+                    result.reason,
+                    result.file_count,
+                    result.manifest_path.display()
+                ))
+            }
+        }
+        Some("report")
+            if positional.len() == 2 && positional[1] == "export" && destination.is_none() =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let statistics = imaging::load_project_statistics(&project.images_dir())?;
+            let workbook = report::export_hungarian_report(
+                project.name(),
+                &project.reports_dir(),
+                &project.images_dir(),
+                &statistics,
+            )?;
+            if json_output {
+                Ok(json!({"project": project.root(), "workbook": workbook,
+                    "disks": statistics.disk_count})
+                .to_string())
+            } else {
+                Ok(format!("Workbook exported: {}", workbook.display()))
             }
         }
         Some("process") if positional.len() == 1 && destination.is_none() => {
@@ -499,6 +892,20 @@ fn status_next_actions(disk_count: usize, partial_disks: usize) -> Vec<&'static 
     actions
 }
 
+fn select_removable_drive(drives: &[FloppyDrive], requested: &str) -> Result<FloppyDrive, String> {
+    let bytes = requested.as_bytes();
+    if !matches!(bytes, [letter, b':'] | [letter, b':', b'\\'] if letter.is_ascii_alphabetic()) {
+        return Err("--drive requires a single drive letter such as A:".to_owned());
+    }
+    let letter = bytes[0].to_ascii_uppercase() as char;
+    let root = format!("{letter}:\\");
+    drives
+        .iter()
+        .find(|drive| drive.root.eq_ignore_ascii_case(&root))
+        .cloned()
+        .ok_or_else(|| format!("{root} is not a currently enumerated removable drive"))
+}
+
 fn resolve_project_root(cwd: &Path, project_override: Option<&Path>) -> Result<PathBuf, String> {
     match project_override {
         Some(path) if path.is_absolute() => Ok(path.to_path_buf()),
@@ -520,6 +927,91 @@ fn discover_project(start: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drive_probe_rejects_arbitrary_paths_and_unlisted_drives() {
+        let drives = vec![FloppyDrive {
+            root: "A:\\".to_owned(),
+            device_path: r"\\.\A:".to_owned(),
+        }];
+        assert_eq!(select_removable_drive(&drives, "a:").unwrap(), drives[0]);
+        assert_eq!(select_removable_drive(&drives, "A:\\").unwrap(), drives[0]);
+        for unsafe_path in [r"\\.\PhysicalDrive0", "C:/", "A:/", "A:foo", "AA:"] {
+            assert!(select_removable_drive(&drives, unsafe_path).is_err());
+        }
+        assert!(select_removable_drive(&drives, "B:").is_err());
+        assert!(run(&["drive".to_owned(), "probe".to_owned()], Path::new(".")).is_err());
+        assert!(
+            run(
+                &["status".to_owned(), "--drive".to_owned(), "A:".to_owned()],
+                Path::new(".")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn report_export_uses_project_without_hardware_or_external_tools() {
+        let root = env::temp_dir().join(format!(
+            "fluxvault-cli-report-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        ProjectState::create_without_session(root.clone()).unwrap();
+        let response = run(
+            &[
+                "report".to_owned(),
+                "export".to_owned(),
+                "--json".to_owned(),
+            ],
+            &root,
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&response.output).unwrap();
+        assert_eq!(response.exit_code, 0);
+        assert_eq!(json["disks"], 0);
+        assert!(Path::new(json["workbook"].as_str().unwrap()).is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_backup_cli_is_idempotent_for_unlogged_legacy_image() {
+        let root = env::temp_dir().join(format!(
+            "fluxvault-cli-backup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        std::fs::write(project.images_dir().join("001.img"), [0x33; 512]).unwrap();
+        let args = vec![
+            "recovery".to_owned(),
+            "backup".to_owned(),
+            "1".to_owned(),
+            "--json".to_owned(),
+        ];
+        let first = run(&args, &root).unwrap();
+        let first_json: serde_json::Value = serde_json::from_str(&first.output).unwrap();
+        assert_eq!(first.exit_code, 3);
+        assert_eq!(first_json["created"], true);
+        let second = run(&args, &root).unwrap();
+        let second_json: serde_json::Value = serde_json::from_str(&second.output).unwrap();
+        assert_eq!(second_json["created"], false);
+        assert_eq!(second_json["backup"], first_json["backup"]);
+        assert!(
+            run(
+                &["recovery".to_owned(), "compare".to_owned(), "1".to_owned()],
+                &root
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn discovers_project_from_nested_directory() {

@@ -360,11 +360,15 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [x] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
 - [x] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
   - [x] Read-only `disk list` and `disk show N` with human/JSON output and no physical drive access.
-- [ ] Read-only drive commands: `drive list` and `drive probe --drive A:`.
+- [x] Read-only drive commands: `drive list` and `drive probe --drive A:`. Probe only accepts an enumerated removable drive, performs no write, and reports whether software guards pass; the current USB adapter still needs independent hardware write-protection validation before customer use.
 - [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` plus a production `scan` workflow where the only interaction is media-change confirmation.
-- [ ] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
+- [x] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
+  - [x] `extract all` reuses the GUI batch service, recovery backups, manual-recovery detection, and manifest generation without requiring LibreOffice.
+  - [x] `extract disk N` uses the same eligibility rules, preserves operator recovery, makes/reuses the immutable pass-1 backup when needed, and refreshes the file manifest.
 - [ ] Recovery commands for queue/status, attempt comparison, composite creation, and DMDE result import.
+  - [x] `recovery plan`, `recovery compare N`, and idempotent `recovery backup N` operate on saved evidence without physical-drive access.
 - [ ] Conversion, audit/report, and validated customer-package commands matching the GUI workflow.
+  - [x] `report export` reuses the GUI's Hungarian XLSX exporter; `tools check` reuses version checks and the audited external-command runner.
 - [ ] Human-readable output by default plus stable `--json` output for scripts; progress goes to stderr so JSON/stdout remains machine-readable.
 - [ ] Stable documented exit codes for success, partial recovery, operator action required, invalid project/input, missing tool, and fatal failure.
   - [x] Initial CLI contract: 0 complete, 3 attention/partial, 2 invalid input/operation error; `audit` and `process` return 3 when recovery or conversion attention remains.

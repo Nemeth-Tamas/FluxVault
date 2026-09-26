@@ -50,6 +50,16 @@ pub struct BatchExtractionResult {
     pub manifest: ManifestResult,
 }
 
+#[derive(Debug, Clone)]
+pub struct SingleDiskExtractionResult {
+    pub disk_number: u32,
+    pub status: &'static str,
+    pub reason: String,
+    pub file_count: usize,
+    pub reused: bool,
+    pub manifest_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BatchDisposition {
     Extract,
@@ -86,6 +96,119 @@ pub fn spawn_batch_extraction(request: BatchExtractionRequest) -> Receiver<Batch
     });
 
     receiver
+}
+
+pub(crate) fn run_single_disk_extraction(
+    request: &BatchExtractionRequest,
+    disk_number: u32,
+    send_stage: &impl Fn(&str),
+) -> Result<SingleDiskExtractionResult, String> {
+    if disk_number == 0 {
+        return Err("Disk number must be positive".to_owned());
+    }
+    if !request.seven_zip_executable.is_file() {
+        return Err(format!(
+            "7-Zip executable not found: {}",
+            request.seven_zip_executable.display()
+        ));
+    }
+    let statistics = imaging::load_project_statistics(&request.images_directory)?;
+    let disk = statistics
+        .disks
+        .iter()
+        .find(|disk| disk.disk_number == disk_number)
+        .ok_or_else(|| format!("No saved disk {disk_number:03} in this project"))?;
+    let attempts = imaging::load_attempts_for_disk(&request.images_directory, disk_number)?;
+    let attempt = select_best_attempt(&attempts, disk.best_attempt_number)
+        .ok_or_else(|| format!("Best attempt for disk {disk_number:03} is missing"))?;
+    let presence = extraction::inspect_extraction_presence(
+        &request.extracted_root,
+        disk_number,
+        attempt.attempt_number,
+    )?;
+    let disposition = classify_attempt(attempt, &presence);
+    let backup = |reason: &str| {
+        recovery_backup::ensure_first_backup(
+            &RecoveryBackupRequest {
+                recovery_root: request.recovery_root.clone(),
+                disk_number,
+                attempt_number: attempt.attempt_number,
+                image_path: request.images_directory.join(&attempt.image_file),
+                log_path: (!attempt.log_file.is_empty()).then(|| PathBuf::from(&attempt.log_file)),
+                reason: reason.to_owned(),
+            },
+            send_stage,
+        )
+    };
+    let (status, reason, file_count, reused) = match disposition {
+        BatchDisposition::ManualRecovered => {
+            let ExtractionPresence::ManualRecovery { file_count, .. } = presence else {
+                unreachable!("manual disposition requires manual presence")
+            };
+            (
+                "manual",
+                "Operator recovery preserved".to_owned(),
+                file_count,
+                false,
+            )
+        }
+        BatchDisposition::InProgress => (
+            "in_progress",
+            "Acquisition or log is still in progress".to_owned(),
+            0,
+            false,
+        ),
+        BatchDisposition::Recovery => {
+            let reason = recovery_reason(attempt, &presence);
+            backup(&reason)?;
+            ("recovery", reason, 0, false)
+        }
+        BatchDisposition::Extract => {
+            let extraction_request = ExtractionRequest {
+                seven_zip_executable: request.seven_zip_executable.clone(),
+                image_path: request.images_directory.join(&attempt.image_file),
+                disk_number,
+                attempt_number: attempt.attempt_number,
+                extracted_root: request.extracted_root.clone(),
+                logs_directory: request.logs_directory.clone(),
+                command_audit_path: request.command_audit_path.clone(),
+            };
+            match extraction::run_extraction(&extraction_request, send_stage) {
+                Ok(result) if result.file_count > 0 => (
+                    if result.reused { "reused" } else { "extracted" },
+                    "Managed extraction verified".to_owned(),
+                    result.file_count,
+                    result.reused,
+                ),
+                Ok(_) => {
+                    let reason = "Readable image produced zero recovered files".to_owned();
+                    backup(&reason)?;
+                    ("recovery", reason, 0, false)
+                }
+                Err(error) => {
+                    let reason = format!("FAT listing/extraction failed: {error}");
+                    backup(&reason)?;
+                    ("recovery", reason, 0, false)
+                }
+            }
+        }
+    };
+    let manifest = manifest::build_manifest(
+        &ManifestRequest {
+            extracted_root: request.extracted_root.clone(),
+            images_directory: request.images_directory.clone(),
+            reports_directory: request.reports_directory.clone(),
+        },
+        send_stage,
+    )?;
+    Ok(SingleDiskExtractionResult {
+        disk_number,
+        status,
+        reason,
+        file_count,
+        reused,
+        manifest_path: manifest.path,
+    })
 }
 
 pub(crate) fn run_batch_extraction(
@@ -460,6 +583,54 @@ fn csv(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::ProjectState;
+
+    #[test]
+    fn single_disk_cli_service_preserves_backup_and_operator_recovery() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxvault-single-extract-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        fs::write(project.images_dir().join("001.img"), [0x42; 512]).unwrap();
+        let fake_tool = root.join("unused-7z.exe");
+        fs::write(&fake_tool, []).unwrap();
+        let request = BatchExtractionRequest {
+            seven_zip_executable: fake_tool,
+            images_directory: project.images_dir(),
+            logs_directory: project.logs_dir(),
+            extracted_root: project.extracted_dir(),
+            recovery_root: project.recovery_dir(),
+            reports_directory: project.reports_dir(),
+            command_audit_path: project.logs_dir().join("tools.jsonl"),
+        };
+        let first = run_single_disk_extraction(&request, 1, &|_| {}).unwrap();
+        assert_eq!(first.status, "recovery");
+        let backup = project.recovery_dir().join("001").join("pass1");
+        assert!(backup.is_dir());
+        let backup_entries = fs::read_dir(&backup).unwrap().count();
+        let second = run_single_disk_extraction(&request, 1, &|_| {}).unwrap();
+        assert_eq!(second.status, "recovery");
+        assert_eq!(fs::read_dir(&backup).unwrap().count(), backup_entries);
+        assert!(!request.command_audit_path.exists());
+
+        let manual = project.extracted_dir().join("001");
+        fs::create_dir_all(&manual).unwrap();
+        fs::write(manual.join("recovered.txt"), b"operator evidence").unwrap();
+        let third = run_single_disk_extraction(&request, 1, &|_| {}).unwrap();
+        assert_eq!(third.status, "manual");
+        assert_eq!(third.file_count, 1);
+        assert_eq!(
+            fs::read(manual.join("recovered.txt")).unwrap(),
+            b"operator evidence"
+        );
+        assert!(third.manifest_path.is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn attempt() -> AttemptSummary {
         AttemptSummary {

@@ -278,7 +278,11 @@ pub fn run_audited_command(
     AuditedCommandResult { audit, audit_error }
 }
 
-fn check_tool(kind: ToolKind, configured: Option<&Path>, audit_path: &Path) -> ToolStatus {
+pub(crate) fn check_tool(
+    kind: ToolKind,
+    configured: Option<&Path>,
+    audit_path: &Path,
+) -> ToolStatus {
     let candidates = candidate_paths(kind, configured);
     let Some(executable) = candidates.into_iter().find(|path| path.is_file()) else {
         let detail = if let Some(path) = configured {
