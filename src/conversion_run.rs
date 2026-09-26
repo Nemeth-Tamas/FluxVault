@@ -321,21 +321,27 @@ fn convert_output(
             .spawn()
             .map_err(|error| format!("LibreOffice indítási hiba: {error}"))?;
         let mut timed_out = false;
+        let mut termination_issue = None;
         let exit_status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) if started.elapsed() >= Duration::from_secs(request.timeout_seconds) => {
                     timed_out = true;
-                    terminate_process_tree(&mut child);
+                    termination_issue = terminate_process_tree(&mut child).err();
                     break child.wait().map_err(|error| {
                         format!("LibreOffice timeout utáni wait hiba: {error}")
                     })?;
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(100)),
                 Err(error) => {
-                    terminate_process_tree(&mut child);
+                    let termination_issue = terminate_process_tree(&mut child).err();
                     let _ = child.wait();
-                    return Err(format!("LibreOffice wait hiba: {error}"));
+                    return Err(format!(
+                        "LibreOffice wait hiba: {error}{}",
+                        termination_issue
+                            .map(|issue| format!("; process-tree termination unverified: {issue}"))
+                            .unwrap_or_default()
+                    ));
                 }
             }
         };
@@ -354,16 +360,27 @@ fn convert_output(
             success: exit_status.success() && !timed_out,
             exit_code: exit_status.code(),
             stdout: stdout_text.clone(),
-            stderr: stderr_text.clone(),
+            stderr: match &termination_issue {
+                Some(issue) => {
+                    format!("{stderr_text}\nProcess-tree termination unverified: {issue}")
+                }
+                None => stderr_text.clone(),
+            },
         };
         external_tools::append_audit(&request.command_audit_path, &audit)?;
         if timed_out {
             return Ok(OutputResult {
                 state: OutputState::Timeout,
-                detail: format!(
-                    "LibreOffice exceeded {} seconds; process tree stopped",
-                    request.timeout_seconds
-                ),
+                detail: match termination_issue {
+                    Some(issue) => format!(
+                        "LibreOffice exceeded {} seconds; process-tree termination unverified: {issue}",
+                        request.timeout_seconds
+                    ),
+                    None => format!(
+                        "LibreOffice exceeded {} seconds; process tree stopped",
+                        request.timeout_seconds
+                    ),
+                },
             });
         }
         if !exit_status.success() {
@@ -429,18 +446,37 @@ fn failure(detail: String) -> OutputResult {
 }
 
 #[cfg(windows)]
-fn terminate_process_tree(child: &mut std::process::Child) {
-    let _ = Command::new("taskkill")
-        .args(["/PID", &child.id().to_string(), "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
+    let taskkill = std::env::var_os("SystemRoot")
+        .map(|root| PathBuf::from(root).join("System32").join("taskkill.exe"))
+        .ok_or_else(|| "SystemRoot is unavailable; taskkill cannot be located".to_owned());
+    let outcome = taskkill.and_then(|taskkill| {
+        Command::new(&taskkill)
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .output()
+            .map_err(|error| format!("{} failed: {error}", taskkill.display()))
+            .and_then(|output| {
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "taskkill /T /F exited {:?}: {}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ))
+                }
+            })
+    });
+    // Always make a best effort to stop the direct process, even if taskkill fails.
     let _ = child.kill();
+    outcome
 }
 
 #[cfg(not(windows))]
-fn terminate_process_tree(child: &mut std::process::Child) {
+fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
     let _ = child.kill();
+    Err("full process-tree termination is not available on this platform".to_owned())
 }
 
 fn file_uri(path: &Path) -> Result<String, String> {
@@ -611,6 +647,74 @@ fn unix_ms() -> u64 {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires permission to terminate a disposable Windows process tree"]
+    fn timeout_terminates_a_spawned_child_process_too() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxvault-tree-test-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let parent_script = root.join("parent.ps1");
+        let child_script = root.join("child.ps1");
+        let ready = root.join("ready.txt");
+        let child_started = root.join("child-started.txt");
+        let orphan_marker = root.join("orphan.txt");
+        let quote = |path: &Path| path.to_string_lossy().replace('\'', "''");
+        fs::write(
+            &child_script,
+            format!(
+                "[IO.File]::WriteAllText('{}', 'started')\nStart-Sleep -Seconds 3\n[IO.File]::WriteAllText('{}', 'orphan')\n",
+                quote(&child_started),
+                quote(&orphan_marker)
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &parent_script,
+            format!(
+                "$child = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList '-NoProfile -NonInteractive -File \"{}\"' -PassThru\n[IO.File]::WriteAllText('{}', $child.Id.ToString())\nStart-Sleep -Seconds 30\n",
+                quote(&child_script),
+                quote(&ready)
+            ),
+        )
+        .unwrap();
+        let mut parent = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-File"])
+            .arg(&parent_script)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !(ready.exists() && child_started.exists()) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        if !(ready.exists() && child_started.exists()) {
+            let _ = terminate_process_tree(&mut parent);
+            let _ = parent.wait();
+            let _ = fs::remove_dir_all(&root);
+            panic!("the disposable test process or its child did not start");
+        }
+        let child_pid = fs::read_to_string(&ready).unwrap();
+        let termination = terminate_process_tree(&mut parent);
+        let _ = parent.wait().unwrap();
+        thread::sleep(Duration::from_millis(3500));
+        let survived = orphan_marker.exists();
+        if survived {
+            let _ = Command::new("taskkill")
+                .args(["/PID", child_pid.trim(), "/T", "/F"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        fs::remove_dir_all(root).unwrap();
+        assert!(termination.is_ok(), "{termination:?}");
+        assert!(!survived, "a child process survived the tree kill");
+    }
 
     #[test]
     fn bounded_workers_preserve_plan_order_and_report_completion() {

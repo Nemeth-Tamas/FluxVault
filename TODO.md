@@ -82,7 +82,7 @@
 - [x] Show detected version and health check for each tool.
 - [x] Provide a “Test tools” action.
 - [x] Capture stdout/stderr and exit code for every external process.
-- [ ] Kill a full conversion process tree on timeout, matching current converter behavior.
+- [x] Kill the full LibreOffice process tree on Windows timeout; verify with a disposable parent/child process test and report a termination failure instead of falsely claiming success.
 
 ## 5. USB floppy acquisition MVP — **first working milestone**
 
