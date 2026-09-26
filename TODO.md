@@ -318,6 +318,7 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the GUI.
 - [x] Verify ZIP inventory/count/total bytes against staging before declaring success.
 - [ ] Optional “keep staging folder” setting.
 - [ ] One **Finalize project** action automatically refreshes recovery/extraction/conversion/audit state, builds the package, verifies it, and reports only unresolved exceptions.
+  - [x] Add CLI `finalize --destination PATH` for existing images: run the shared processing pipeline, stop packaging when attention remains, and build/verify an archival ZIP only after a clean run. GUI one-click action and production policy remain open.
 - [ ] Optional production policy automatically builds the final package when the last physical disk and all background queues are complete.
 
 ## 16. Current dataset regression targets

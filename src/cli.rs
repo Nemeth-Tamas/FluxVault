@@ -1,6 +1,7 @@
 //! Command-line entry points over the same guarded workflow services as the GUI.
 
 mod acquire;
+mod finalize;
 mod office;
 mod recovery;
 mod scan;
@@ -86,6 +87,8 @@ Usage:
                                     Export the Hungarian XLSX workbook
   fluxvault process [--project PATH] [--conversion-workers N]
                                     Extract, convert, audit, and report
+  fluxvault finalize --destination PATH [--project PATH]
+                                    Process saved images, then package only if clean
   fluxvault package build --destination PATH [--project PATH]
                                     Create and verify an archival ZIP
   fluxvault --help                  Show this help
@@ -242,6 +245,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
 
     if conversion_workers.is_some()
         && positional.first().map(String::as_str) != Some("process")
+        && positional.first().map(String::as_str) != Some("finalize")
         && !(positional.len() >= 2
             && positional[0] == "conversion"
             && matches!(positional[1].as_str(), "run" | "retry"))
@@ -1112,6 +1116,17 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     conversion_state.display()
                 ))
             }
+        }
+        Some("finalize") if positional.len() == 1 => {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let destination = destination.ok_or("finalize requires --destination PATH")?;
+            return finalize::run(
+                cwd,
+                root,
+                destination,
+                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                json_output,
+            );
         }
         Some("package") if positional.len() == 2 && positional[1] == "build" => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;

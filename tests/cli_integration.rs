@@ -75,6 +75,25 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
     assert_eq!(quit_json["next_disk"], 1);
     assert_eq!(quit_json["source_media_access"], "read_only");
     assert!(String::from_utf8_lossy(&quit.stderr).contains("Type READ"));
+    let finalize = invoke(
+        &nested,
+        &[
+            "finalize",
+            "--destination",
+            root.to_str().unwrap(),
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(finalize.status.code(), Some(2));
+    let finalize_json: serde_json::Value = serde_json::from_slice(&finalize.stdout).unwrap();
+    assert!(
+        finalize_json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("No saved disk images")
+    );
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
     fs::remove_dir_all(root).unwrap();
 }
 

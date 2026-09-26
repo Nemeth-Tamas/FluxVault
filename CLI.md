@@ -26,6 +26,7 @@ fluxvault conversion retry C:\path\to\Extracted\001\problem.rtf
 fluxvault report export
 fluxvault audit
 fluxvault package build --destination C:\CustomerPackages
+fluxvault finalize --destination C:\CustomerPackages
 ```
 
 Use `--project C:\path\to\project` to select a project explicitly. Add `--json` to a command for machine-readable stdout (including structured errors); long-running progress goes to stderr. Exit code 0 means complete, 3 means attention/partial, and 2 means invalid input or an operation error. These codes will be refined as production automation is added.
@@ -37,5 +38,7 @@ Use `--project C:\path\to\project` to select a project explicitly. Add `--json` 
 `fluxvault tools check` uses the same 7-Zip, LibreOffice, and Greaseweazle version checks as the GUI, and records executed commands in the project tool audit log (or the application audit log when no project is selected). `tools show`, `tools set NAME PATH`, and `tools clear NAME` manage the same per-user tool paths as the GUI. `recovery queue` shows unfinished cases; `recovery compare N`, `recovery backup N`, `recovery composite N`, and `recovery fat N` use the GUI's saved-evidence services. `recovery import N --source DIR --dmde-log FILE` copies external DMDE results into guarded project recovery locations without overwriting an earlier import. `extract all` and `extract disk N` use the GUI's extraction rules and need 7-Zip, not LibreOffice. `files manifest` refreshes the recovered-file inventory. `conversion plan` builds delivery paths without LibreOffice; `conversion run` executes the same bounded, audited Office conversion as the GUI. `conversion issues` reads saved exceptions. `conversion retry [SOURCE]` reloads the project-scoped conversion state after a restart, retries all saved issues or the selected source, and rejects changed source hashes or paths. `process` runs the existing-image recovery, extraction, conversion, audit, and workbook pipeline. Except for gated `acquire`, these commands operate on saved project evidence, not a physical drive.
 
 Office/PDF reuse requires both a matching saved source hash and a matching saved output hash, even after a restart. An older valid-looking output with no saved binding is preserved and reported as an issue rather than silently claimed as current conversion evidence. The GUI now reloads saved conversion issues when a project is reopened.
+
+`finalize --destination PATH` combines saved-image processing and package verification in one command. It requires at least one image and an existing destination outside the project. If recovery, conversion, or audit still needs attention, it reports that status and does **not** create a package. A successfully verified archival ZIP is still not a certification that every original customer byte was recovered.
 
 The CLI now has a guided one-drive disk-change loop, but still lacks full zero-touch recovery policy, crash-safe production scheduling, and the two-drive workflow. Live USB acquisition remains blocked in practice until the write-protection discrepancy is resolved. Track these in [TODO.md](TODO.md).
