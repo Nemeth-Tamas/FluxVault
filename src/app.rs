@@ -1450,13 +1450,13 @@ impl FluxVaultApp {
                 Ok(ConversionEvent::Finished(result)) => {
                     finished = true;
                     self.conversion_running = false;
-                    match result {
+                    match *result {
                         Ok(result) => {
                             self.conversion_stage = "Office konverziós sor elkészült.".to_owned();
                             self.status = self.conversion_stage.clone();
                             self.log(format!(
-                                "Office konverzió: {} OK, {} részleges, {} sikertelen, {} timeout.",
-                                result.ok, result.partial, result.failed, result.timed_out
+                                "Office konverzió: {} OK, {} részleges, {} sikertelen, {} timeout, {} output újrapróbálva.",
+                                result.ok, result.partial, result.failed, result.timed_out, result.retried_outputs
                             ));
                             self.conversion_planning_result = Some(result.planning.clone());
                             self.conversion_result = Some(result);

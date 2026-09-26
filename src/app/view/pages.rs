@@ -1860,7 +1860,7 @@ impl FluxVaultApp {
 
         ui_theme::section(ui, "LibreOffice átalakítás", |ui| {
             ui.label(
-                "A recovered eredetiket tükrözi, majd a támogatott régi Office fájlokból modern dokumentumot és PDF-et készít. A meglévő érvényes outputokat újra felhasználja; fájlonként 45 másodperces időkorlátot alkalmaz.",
+                "A recovered eredetiket tükrözi, majd a támogatott régi Office fájlokból modern dokumentumot és PDF-et készít. A meglévő érvényes outputokat újra felhasználja; fájlonként 45 másodperces időkorlátot és átmeneti hiba esetén egy automatikus újrapróbálkozást alkalmaz.",
             );
             let libreoffice_ready = self.ready_tool_path(ToolKind::LibreOffice).is_some();
             if ui
@@ -1871,6 +1871,12 @@ impl FluxVaultApp {
                         && !self.conversion_planning_running,
                     egui::Button::new(if self.conversion_running {
                         "Office konverzió folyamatban..."
+                    } else if self
+                        .conversion_result
+                        .as_ref()
+                        .is_some_and(|result| result.partial + result.failed > 0)
+                    {
+                        "Hibásak újrapróbálása"
                     } else {
                         "Teljes Office konverziós sor futtatása"
                     }),
@@ -1908,12 +1914,13 @@ impl FluxVaultApp {
                     "[OFFICE KONVERZIO KESZ]",
                 );
                 ui.label(format!(
-                    "{} OK | {} részleges | {} sikertelen | {} timeout | {} újrahasznált output",
+                    "{} OK | {} részleges | {} sikertelen | {} timeout | {} újrahasznált | {} újrapróbált output",
                     result.ok,
                     result.partial,
                     result.failed,
                     result.timed_out,
-                    result.reused_outputs
+                    result.reused_outputs,
+                    result.retried_outputs
                 ));
                 ui.monospace(format!("Összesítő: {}", result.summary_path.display()));
                 ui.monospace(format!("Kivételek: {}", result.failures_path.display()));

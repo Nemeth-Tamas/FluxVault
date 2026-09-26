@@ -271,7 +271,7 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
 - [x] Record `OK`, `PARTIAL`, `FAILED`, `TIMEOUT`, and `REUSED` results plus details/duration.
 - [x] Preserve source stems containing extra dots when locating LibreOffice output (regression-tested with `Dr. Anka.doc`).
 - [ ] Conversion issues page with retry selected / retry failed actions.
-- [ ] Production mode automatically converts all eligible files, retries transient failures within policy, and records permanent failures without asking the operator file-by-file.
+- [ ] Production mode automatically converts all eligible files, retries transient failures within policy, and records permanent failures without asking the operator file-by-file. The current offline/GUI conversion runner now performs one bounded retry for confirmed-clean timeouts, nonzero LibreOffice exits, and missing/invalid newly generated output; wiring this into the continuous production scheduler remains open.
 
 ## 14. Audit/report engine
 

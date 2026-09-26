@@ -29,13 +29,14 @@ pub struct ConversionRequest {
 }
 
 pub const DEFAULT_CONVERSION_WORKERS: usize = 4;
+const CONVERSION_RETRY_DELAY: Duration = Duration::from_millis(250);
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub enum ConversionEvent {
     Stage(String),
     Progress { completed: usize, total: usize },
-    Finished(Result<ConversionResult, String>),
+    Finished(Box<Result<ConversionResult, String>>),
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,7 @@ pub struct ConversionResult {
     pub failed: usize,
     pub timed_out: usize,
     pub reused_outputs: usize,
+    pub retried_outputs: usize,
     pub summary_path: PathBuf,
     pub failures_path: PathBuf,
 }
@@ -77,6 +79,8 @@ impl OutputState {
 struct OutputResult {
     state: OutputState,
     detail: String,
+    retryable: bool,
+    retry_count: u8,
 }
 
 #[derive(Debug)]
@@ -121,7 +125,7 @@ pub fn spawn_conversion(request: ConversionRequest) -> Receiver<ConversionEvent>
                 let _ = sender.send(ConversionEvent::Progress { completed, total });
             },
         );
-        let _ = sender.send(ConversionEvent::Finished(result));
+        let _ = sender.send(ConversionEvent::Finished(Box::new(result)));
     });
     receiver
 }
@@ -156,14 +160,18 @@ pub(crate) fn run_conversion(
         request.workers,
         |job| {
             let started = Instant::now();
-            let modern = convert_output(
-                request,
-                job,
-                &job.modern_path,
-                &job.modern_format.to_ascii_lowercase(),
-                &job.modern_filter,
-            );
-            let pdf = convert_output(request, job, &job.pdf_path, "pdf", &job.pdf_filter);
+            let modern = retry_transient_failure(|| {
+                convert_output(
+                    request,
+                    job,
+                    &job.modern_path,
+                    &job.modern_format.to_ascii_lowercase(),
+                    &job.modern_filter,
+                )
+            });
+            let pdf = retry_transient_failure(|| {
+                convert_output(request, job, &job.pdf_path, "pdf", &job.pdf_filter)
+            });
             JobResult {
                 job: job.clone(),
                 modern,
@@ -202,10 +210,27 @@ pub(crate) fn run_conversion(
                     + usize::from(row.pdf.state == OutputState::Reused)
             })
             .sum(),
+        retried_outputs: rows
+            .iter()
+            .map(|row| usize::from(row.modern.retry_count + row.pdf.retry_count))
+            .sum(),
         planning,
         summary_path,
         failures_path,
     })
+}
+
+fn retry_transient_failure(mut attempt: impl FnMut() -> OutputResult) -> OutputResult {
+    let first = attempt();
+    if !first.retryable {
+        return first;
+    }
+    thread::sleep(CONVERSION_RETRY_DELAY);
+    let mut second = attempt();
+    second.detail = format!("Attempt 1: {}; attempt 2: {}", first.detail, second.detail);
+    second.retryable = false;
+    second.retry_count = 1;
+    second
 }
 
 // Results arrive in completion order, but reports must retain the plan's stable order.
@@ -264,6 +289,8 @@ fn convert_output(
             return OutputResult {
                 state: OutputState::Reused,
                 detail: "Existing output passed integrity validation".to_owned(),
+                retryable: false,
+                retry_count: 0,
             };
         }
         Ok(false) if target.exists() => {
@@ -372,7 +399,7 @@ fn convert_output(
             return Ok(OutputResult {
                 state: OutputState::Timeout,
                 detail: match termination_issue {
-                    Some(issue) => format!(
+                    Some(ref issue) => format!(
                         "LibreOffice exceeded {} seconds; process-tree termination unverified: {issue}",
                         request.timeout_seconds
                     ),
@@ -381,10 +408,12 @@ fn convert_output(
                         request.timeout_seconds
                     ),
                 },
+                retryable: termination_issue.is_none(),
+                retry_count: 0,
             });
         }
         if !exit_status.success() {
-            return Ok(failure(format!(
+            return Ok(retryable_failure(format!(
                 "LibreOffice exit {:?}: {} {}",
                 exit_status.code(),
                 stdout_text,
@@ -393,7 +422,7 @@ fn convert_output(
         }
         let made = libreoffice_output_path(&output_directory, &job.source_path, extension)?;
         if !validate_output(&made, extension)? {
-            return Ok(failure(format!(
+            return Ok(retryable_failure(format!(
                 "LibreOffice output missing or invalid: {} | {} {}",
                 made.display(),
                 stdout_text,
@@ -415,6 +444,8 @@ fn convert_output(
         Ok(OutputResult {
             state: OutputState::Ok,
             detail: "Integrity validation passed".to_owned(),
+            retryable: false,
+            retry_count: 0,
         })
     })();
     let _ = fs::remove_dir_all(&root);
@@ -442,6 +473,17 @@ fn failure(detail: String) -> OutputResult {
     OutputResult {
         state: OutputState::Failed,
         detail,
+        retryable: false,
+        retry_count: 0,
+    }
+}
+
+fn retryable_failure(detail: String) -> OutputResult {
+    OutputResult {
+        state: OutputState::Failed,
+        detail,
+        retryable: true,
+        retry_count: 0,
     }
 }
 
@@ -561,7 +603,7 @@ fn write_summary(path: &Path, rows: &[JobResult], converted_root: &Path) -> Resu
         .map_err(|error| format!("ConversionSummary nem írható {}: {error}", path.display()))?;
     file.write_all(b"\xEF\xBB\xBF")
         .map_err(|error| format!("ConversionSummary BOM hiba: {error}"))?;
-    writeln!(file, "\"Floppy\",\"OriginalForensicPath\",\"DeliveryOriginalPath\",\"RecoveryMethod\",\"SourceType\",\"SourceSHA256\",\"ModernFormat\",\"ModernOK\",\"ModernResult\",\"ModernDetail\",\"ModernPath\",\"PDFOK\",\"PDFResult\",\"PDFDetail\",\"PDFPath\",\"Status\",\"PartialReason\",\"DurationSec\"")
+    writeln!(file, "\"Floppy\",\"OriginalForensicPath\",\"DeliveryOriginalPath\",\"RecoveryMethod\",\"SourceType\",\"SourceSHA256\",\"ModernFormat\",\"ModernOK\",\"ModernResult\",\"ModernDetail\",\"ModernPath\",\"PDFOK\",\"PDFResult\",\"PDFDetail\",\"PDFPath\",\"Status\",\"PartialReason\",\"DurationSec\",\"ModernRetries\",\"PDFRetries\"")
         .map_err(|error| format!("ConversionSummary fejléc hiba: {error}"))?;
     for row in rows {
         let modern_path = if row.modern.state.successful() {
@@ -593,6 +635,8 @@ fn write_summary(path: &Path, rows: &[JobResult], converted_root: &Path) -> Resu
             row.status().to_owned(),
             row.reason(),
             format!("{:.2}", row.duration_seconds),
+            row.modern.retry_count.to_string(),
+            row.pdf.retry_count.to_string(),
         ];
         writeln!(
             file,
@@ -647,6 +691,78 @@ fn unix_ms() -> u64 {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn transient_failure_is_retried_once_and_both_attempts_are_recorded() {
+        let mut calls = 0;
+        let result = retry_transient_failure(|| {
+            calls += 1;
+            if calls == 1 {
+                retryable_failure("LibreOffice exit 1".to_owned())
+            } else {
+                OutputResult {
+                    state: OutputState::Ok,
+                    detail: "Integrity validation passed".to_owned(),
+                    retryable: false,
+                    retry_count: 0,
+                }
+            }
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(result.state, OutputState::Ok);
+        assert_eq!(result.retry_count, 1);
+        assert!(result.detail.contains("Attempt 1: LibreOffice exit 1"));
+        assert!(
+            result
+                .detail
+                .contains("attempt 2: Integrity validation passed")
+        );
+    }
+
+    #[test]
+    fn unsafe_timeout_and_permanent_failure_are_not_retried() {
+        for first in [
+            OutputResult {
+                state: OutputState::Timeout,
+                detail: "process-tree termination unverified".to_owned(),
+                retryable: false,
+                retry_count: 0,
+            },
+            failure("Existing invalid output was preserved".to_owned()),
+        ] {
+            let mut calls = 0;
+            let result = retry_transient_failure(|| {
+                calls += 1;
+                if calls == 1 {
+                    OutputResult {
+                        state: first.state,
+                        detail: first.detail.clone(),
+                        retryable: first.retryable,
+                        retry_count: first.retry_count,
+                    }
+                } else {
+                    panic!("a permanent failure must not be retried")
+                }
+            });
+            assert_eq!(calls, 1);
+            assert_eq!(result.state, first.state);
+        }
+    }
+
+    #[test]
+    fn a_second_transient_failure_stops_after_two_attempts() {
+        let mut calls = 0;
+        let result = retry_transient_failure(|| {
+            calls += 1;
+            retryable_failure(format!("LibreOffice exit {calls}"))
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(result.state, OutputState::Failed);
+        assert!(!result.retryable);
+        assert_eq!(result.retry_count, 1);
+        assert!(result.detail.contains("Attempt 1: LibreOffice exit 1"));
+        assert!(result.detail.contains("attempt 2: LibreOffice exit 2"));
+    }
 
     #[cfg(windows)]
     #[test]
@@ -806,6 +922,9 @@ mod tests {
             assert!(job.pdf_path.is_file());
         }
         assert!(first.summary_path.is_file());
+        let summary = fs::read_to_string(&first.summary_path).unwrap();
+        assert!(summary.lines().next().unwrap().contains("ModernRetries"));
+        assert!(summary.lines().next().unwrap().contains("PDFRetries"));
         let audit = fs::read_to_string(&request.command_audit_path).unwrap();
         assert_eq!(audit.lines().count(), 8);
         for line in audit.lines() {

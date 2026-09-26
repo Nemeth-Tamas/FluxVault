@@ -358,6 +358,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     "converted_ok": result.conversion.ok,
                     "converted_partial": result.conversion.partial,
                     "converted_failed": result.conversion.failed,
+                    "converted_retried_outputs": result.conversion.retried_outputs,
                     "evidence_verified": result.audit.verified_disks,
                     "evidence_attention": result.audit.attention_disks,
                     "workbook": result.workbook_path,
@@ -365,7 +366,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .to_string())
             } else {
                 Ok(format!(
-                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed.\nRecovery decisions: {}\nWorkbook: {}",
+                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}",
                     result.extraction.total_disks,
                     result.audit.verified_disks,
                     result.audit.attention_disks,
@@ -377,6 +378,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     result.conversion.ok,
                     result.conversion.partial,
                     result.conversion.failed,
+                    result.conversion.retried_outputs,
                     result.recovery_decisions_path.display(),
                     result.workbook_path.display()
                 ))
