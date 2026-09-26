@@ -24,9 +24,14 @@ Usage:\n\
   fluxvault                         Open the GUI\n\
   fluxvault init [path]             Create a project\n\
   fluxvault status [--project PATH] Show project status\n\
+  fluxvault project show [--project PATH]\n\
+                                    Show saved project metadata\n\
   fluxvault disk list [--project PATH]\n\
   fluxvault disk show N [--project PATH]\n\
                                     Inspect saved disk attempts\n\
+  fluxvault disk select N [--project PATH]\n\
+  fluxvault disk next [--project PATH]\n\
+                                    Select the current/next disk number (no drive access)\n\
   fluxvault recovery plan [N] [--project PATH]\n\
                                     Inspect evidence-ranked offline next steps\n\
   fluxvault audit [--project PATH]  Verify image/extraction evidence\n\
@@ -146,6 +151,8 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let stats = imaging::load_project_statistics(&project.images_dir())?;
+            let next_actions = status_next_actions(stats.disk_count, stats.partial_disks);
+            needs_attention = stats.partial_disks > 0;
             if json_output {
                 Ok(json!({
                     "project": project.root(),
@@ -156,11 +163,12 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     "ok_disks": stats.ok_disks,
                     "partial_disks": stats.partial_disks,
                     "best_known_bad_sectors": stats.best_known_bad_sectors,
+                    "next_actions": next_actions,
                 })
                 .to_string())
             } else {
                 Ok(format!(
-                    "{} ({})\nCurrent disk: {:03}\nDisks: {} ({} OK, {} partial)\nAttempts: {}\nBest known bad sectors: {}",
+                    "{} ({})\nCurrent disk: {:03}\nDisks: {} ({} OK, {} partial)\nAttempts: {}\nBest known bad sectors: {}\nNext actions:\n{}",
                     project.name(),
                     project.root().display(),
                     project.current_disk_number(),
@@ -168,7 +176,63 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     stats.ok_disks,
                     stats.partial_disks,
                     stats.total_attempts,
-                    stats.best_known_bad_sectors
+                    stats.best_known_bad_sectors,
+                    next_actions
+                        .iter()
+                        .map(|action| format!("  - {action}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ))
+            }
+        }
+        Some("project")
+            if destination.is_none() && positional.len() == 2 && positional[1] == "show" =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            if json_output {
+                Ok(json!({"project": project.root(), "name": project.name(),
+                    "current_disk": project.current_disk_number(),
+                    "images": project.images_dir(), "logs": project.logs_dir(),
+                    "reports": project.reports_dir()})
+                .to_string())
+            } else {
+                Ok(format!(
+                    "{} ({})\nCurrent disk: {:03}\nImages: {}\nLogs: {}\nReports: {}",
+                    project.name(),
+                    project.root().display(),
+                    project.current_disk_number(),
+                    project.images_dir().display(),
+                    project.logs_dir().display(),
+                    project.reports_dir().display()
+                ))
+            }
+        }
+        Some("disk")
+            if destination.is_none()
+                && ((positional.len() == 3 && positional[1] == "select")
+                    || (positional.len() == 2 && positional[1] == "next")) =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let mut project = ProjectState::open_without_session(root)?;
+            let number = if positional[1] == "select" {
+                positional[2]
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|number| *number > 0)
+                    .ok_or("disk select requires a positive disk number")?
+            } else {
+                project
+                    .current_disk_number()
+                    .checked_add(1)
+                    .ok_or("Cannot advance beyond the maximum disk number")?
+            };
+            project.set_current_disk_number_without_session(number)?;
+            if json_output {
+                Ok(json!({"project": project.root(), "current_disk": number}).to_string())
+            } else {
+                Ok(format!(
+                    "Selected disk {number:03} (no physical drive accessed)."
                 ))
             }
         }
@@ -423,6 +487,18 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     })
 }
 
+fn status_next_actions(disk_count: usize, partial_disks: usize) -> Vec<&'static str> {
+    if disk_count == 0 {
+        return vec!["No saved images. Verify physical write protection before any acquisition."];
+    }
+    let mut actions = Vec::new();
+    if partial_disks > 0 {
+        actions.push("Review incomplete disks with `fluxvault recovery plan`.");
+    }
+    actions.push("Run `fluxvault process` to refresh extraction, conversion, audit, and reports.");
+    actions
+}
+
 fn resolve_project_root(cwd: &Path, project_override: Option<&Path>) -> Result<PathBuf, String> {
     match project_override {
         Some(path) if path.is_absolute() => Ok(path.to_path_buf()),
@@ -521,6 +597,66 @@ mod tests {
         .unwrap();
         let json: serde_json::Value = serde_json::from_str(&list.output).unwrap();
         assert_eq!(json["disks"].as_array().unwrap().len(), 0);
+        let status = run(
+            &[
+                "status".to_owned(),
+                "--json".to_owned(),
+                "--project".to_owned(),
+                root.display().to_string(),
+            ],
+            Path::new("."),
+        )
+        .unwrap();
+        let status_json: serde_json::Value = serde_json::from_str(&status.output).unwrap();
+        assert_eq!(status.exit_code, 0);
+        assert_eq!(status_json["disks"], 0);
+        assert_eq!(status_json["current_disk"], 1);
+        assert!(
+            status_json["next_actions"][0]
+                .as_str()
+                .unwrap()
+                .contains("write protection")
+        );
+        let show = run(
+            &["project".to_owned(), "show".to_owned(), "--json".to_owned()],
+            &root,
+        )
+        .unwrap();
+        let show_json: serde_json::Value = serde_json::from_str(&show.output).unwrap();
+        assert_eq!(
+            show_json["name"],
+            root.file_name().unwrap().to_str().unwrap()
+        );
+        assert_eq!(show_json["current_disk"], 1);
+        assert!(
+            run(
+                &["disk".to_owned(), "select".to_owned(), "0".to_owned()],
+                &root
+            )
+            .is_err()
+        );
+        let selected = run(
+            &[
+                "disk".to_owned(),
+                "select".to_owned(),
+                "7".to_owned(),
+                "--json".to_owned(),
+            ],
+            &root,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&selected.output).unwrap()["current_disk"],
+            7
+        );
+        let advanced = run(&["disk".to_owned(), "next".to_owned()], &root).unwrap();
+        assert!(advanced.output.contains("008"));
+        assert_eq!(
+            ProjectState::open_without_session(root.clone())
+                .unwrap()
+                .current_disk_number(),
+            8
+        );
         assert!(
             run(
                 &[
@@ -533,6 +669,40 @@ mod tests {
                 Path::new(".")
             )
             .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn status_recommends_recovery_before_processing_partial_disks() {
+        let actions = status_next_actions(2, 1);
+        assert_eq!(actions.len(), 2);
+        assert!(actions[0].contains("recovery plan"));
+        assert!(actions[1].contains("process"));
+    }
+
+    #[test]
+    fn status_json_marks_unlogged_fixture_image_as_attention() {
+        let root = env::temp_dir().join(format!(
+            "fluxvault-cli-status-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        std::fs::write(project.images_dir().join("007.img"), [0_u8; 512]).unwrap();
+        let response = run(&["status".to_owned(), "--json".to_owned()], &root).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&response.output).unwrap();
+        assert_eq!(response.exit_code, 3);
+        assert_eq!(json["disks"], 1);
+        assert_eq!(json["partial_disks"], 1);
+        assert!(
+            json["next_actions"][0]
+                .as_str()
+                .unwrap()
+                .contains("recovery plan")
         );
         std::fs::remove_dir_all(root).unwrap();
     }

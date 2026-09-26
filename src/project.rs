@@ -168,6 +168,18 @@ impl ProjectState {
         self.save()
     }
 
+    /// CLI selection does not change the GUI's remembered last-opened project.
+    pub fn set_current_disk_number_without_session(
+        &mut self,
+        disk_number: u32,
+    ) -> Result<(), String> {
+        if disk_number == 0 {
+            return Err("Disk number must be positive".to_owned());
+        }
+        self.metadata.current_disk_number = disk_number;
+        self.save_metadata()
+    }
+
     pub fn name(&self) -> &str {
         &self.metadata.project_name
     }

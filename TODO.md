@@ -298,7 +298,7 @@ Replace the current updater/audit script chain with one in-app source of truth w
 - [x] Detailed per-floppy worksheet/table with filtering, frozen headers, sensible column widths, status highlighting, and consistent formatting.
 - [ ] Separate recovered-file, conversion, issue, and integrity tables where useful.
 - [x] Reports should be presentable to a customer without requiring manual cleanup in Excel.
-- [ ] Audit must be re-runnable/idempotent and never alter source floppy media.
+- [x] Audit must be re-runnable/idempotent and never alter source floppy media.
 - [ ] Audit runs automatically after every material state change and at batch completion; no manual spreadsheet update step remains.
 
 ## 15. Customer package builder
@@ -335,14 +335,14 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 
 ## 17. Testing
 
-- [ ] Unit tests for floppy-number parsing and zero-padding.
+- [x] Unit tests for floppy-number parsing and zero-padding.
 - [x] Unit tests for legacy archiver-log parsing.
 - [x] Unit tests for DMDE multi-pass map replay (later successful `C` replaces earlier `E`).
 - [x] Unit tests for path cleanup / delivery naming / collision handling.
 - [x] Unit tests for Greaseweazle command construction, especially raw-flux safety flags.
 - [ ] Unit tests for project persistence and migrations.
-- [ ] Unit tests for SHA/integrity helpers.
-- [ ] Fixture-based tests using scrubbed/sample logs and tiny synthetic images; never require a customer floppy for automated tests.
+- [x] Unit tests for SHA/integrity helpers.
+- [x] Fixture-based tests using scrubbed/sample logs and tiny synthetic images; never require a customer floppy for automated tests.
 - [x] Integration test for 7-Zip adapter.
 - [x] Integration test for LibreOffice adapter when installed.
 - [x] Greaseweazle hardware tests marked/isolated so normal `cargo test` works without hardware.
@@ -357,8 +357,8 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 
 - [ ] Install a `fluxvault` executable that can be added to `PATH` and run from PowerShell, CMD, or another automation process.
 - [x] Discover a project by walking upward from the current directory, like Git, with an explicit `--project <path>` override for the first CLI status command.
-- [ ] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
-- [ ] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
+- [x] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
+- [x] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
   - [x] Read-only `disk list` and `disk show N` with human/JSON output and no physical drive access.
 - [ ] Read-only drive commands: `drive list` and `drive probe --drive A:`.
 - [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` plus a production `scan` workflow where the only interaction is media-change confirmation.

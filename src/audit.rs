@@ -495,6 +495,67 @@ fn hash_file(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn synthetic_image_audit_is_repeatable_and_detects_hash_tampering() {
+        let root = std::env::temp_dir().join(format!(
+            "fluxvault-audit-fixture-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        let image = project.images_dir().join("001_attempt_001.img");
+        let source_bytes = vec![0x5a; 512];
+        fs::write(&image, &source_bytes).unwrap();
+        let source_hash = hash_file(&image).unwrap();
+        assert_eq!(source_hash, format!("{:x}", Sha256::digest(&source_bytes)));
+        let metadata = serde_json::json!({
+            "fluxvault_version": "0.1.0", "status": "OK",
+            "disk_number": 1, "attempt_number": 1,
+            "source_backend": "synthetic-test", "source_device": "none",
+            "image_file": "001_attempt_001.img", "log_file": "",
+            "timestamp_unix_ms": 1,
+            "geometry": {"cylinders": 1, "heads": 1, "sectors_per_track": 1,
+                "bytes_per_sector": 512, "total_bytes": 512, "format_guess": "fixture"},
+            "sector_retries": 0, "total_sectors": 1, "bytes_written": 512,
+            "retry_recovered_sectors": 0, "bad_sector_count": 0,
+            "bad_sectors": [], "sha256": source_hash,
+        });
+        fs::write(
+            project.images_dir().join("001_attempt_001.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        let first = run_audit(&project, &|_| {}).unwrap();
+        let first_json = fs::read(&first.json_path).unwrap();
+        let first_csv = fs::read(&first.csv_path).unwrap();
+        let record: serde_json::Value = serde_json::from_slice(&first_json).unwrap();
+        assert_eq!(record["disks"][0]["image_hash_verified"], true);
+        assert_eq!(record["disks"][0]["image_sha256"], source_hash);
+        let second = run_audit(&project, &|_| {}).unwrap();
+        assert_eq!(fs::read(second.json_path).unwrap(), first_json);
+        assert_eq!(fs::read(second.csv_path).unwrap(), first_csv);
+        assert_eq!(fs::read(&image).unwrap(), source_bytes);
+
+        fs::write(&image, vec![0xa5; 512]).unwrap();
+        let tampered = run_audit(&project, &|_| {}).unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(tampered.json_path).unwrap()).unwrap();
+        assert_eq!(record["disks"][0]["image_hash_verified"], false);
+        assert!(
+            record["disks"][0]["issue"]
+                .as_str()
+                .unwrap()
+                .contains("differs from acquisition metadata")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn csv_escapes_issue_text() {
         let report = AuditDocument {

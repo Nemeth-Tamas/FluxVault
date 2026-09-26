@@ -1262,6 +1262,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn numbered_legacy_images_use_three_digit_padding_without_cross_matching() {
+        let directory = std::env::temp_dir().join(format!(
+            "fluxvault-numbering-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        for number in [1, 10, 100, 1000] {
+            fs::write(directory.join(format!("{number:03}.img")), [number as u8]).unwrap();
+        }
+        for number in [1, 10, 100, 1000] {
+            let attempts = load_attempts_for_disk(&directory, number).unwrap();
+            assert_eq!(attempts.len(), 1);
+            assert_eq!(attempts[0].image_file, format!("{number:03}.img"));
+        }
+        assert!(load_attempts_for_disk(&directory, 2).unwrap().is_empty());
+        let statistics = load_project_statistics(&directory).unwrap();
+        assert_eq!(
+            statistics
+                .disks
+                .iter()
+                .map(|disk| disk.disk_number)
+                .collect::<Vec<_>>(),
+            vec![1, 10, 100, 1000]
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn first_retry_pass_reads_bad_sectors_backward() {
         assert_eq!(retry_direction(1), "backward");
         assert_eq!(retry_lba_order(vec![16, 24, 3], 1), vec![24, 16, 3]);
