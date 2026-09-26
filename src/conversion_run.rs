@@ -100,6 +100,8 @@ struct OutputResult {
     detail: String,
     retryable: bool,
     retry_count: u8,
+    #[serde(default)]
+    output_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,9 +244,20 @@ pub(crate) fn run_conversion(
             return Err("Egy kiválasztott fájl már nincs a friss konverziós tervben; futtassa újra a teljes sort.".to_owned());
         }
     }
+    let project_root = request
+        .planning
+        .reports_directory
+        .parent()
+        .ok_or("Conversion reports directory has no project parent")?;
+    let saved_result = if request.previous_result.is_none() {
+        load_snapshot(&request.planning.reports_directory, project_root).ok()
+    } else {
+        None
+    };
     let previous_rows: HashMap<&PathBuf, &JobResult> = request
         .previous_result
-        .as_ref()
+        .as_deref()
+        .or(saved_result.as_ref())
         .map(|previous| {
             previous
                 .rows
@@ -292,10 +305,18 @@ pub(crate) fn run_conversion(
                             &job.modern_path,
                             &job.modern_format.to_ascii_lowercase(),
                             &job.modern_filter,
+                            previous.map(|row| &row.modern),
                         )
                     }),
                     retry_transient_failure(|| {
-                        convert_output(request, job, &job.pdf_path, "pdf", &job.pdf_filter)
+                        convert_output(
+                            request,
+                            job,
+                            &job.pdf_path,
+                            "pdf",
+                            &job.pdf_filter,
+                            previous.map(|row| &row.pdf),
+                        )
                     }),
                 )
             } else {
@@ -344,7 +365,7 @@ pub(crate) fn run_conversion(
         })
         .collect();
 
-    Ok(ConversionResult {
+    let result = ConversionResult {
         ok: rows.iter().filter(|row| row.status() == "OK").count(),
         partial: rows.iter().filter(|row| row.status() == "PARTIAL").count(),
         failed: rows.iter().filter(|row| row.status() == "FAILED").count(),
@@ -370,7 +391,9 @@ pub(crate) fn run_conversion(
         summary_path,
         failures_path,
         rows,
-    })
+    };
+    save_snapshot(&request.planning.reports_directory, project_root, &result)?;
+    Ok(result)
 }
 
 fn inspect_without_conversion(
@@ -379,16 +402,7 @@ fn inspect_without_conversion(
     extension: &str,
 ) -> OutputResult {
     match validate_output(target, extension) {
-        Ok(true) if previous.is_some() => OutputResult {
-            state: OutputState::Reused,
-            detail: "Existing output passed integrity validation".to_owned(),
-            retryable: false,
-            retry_count: 0,
-        },
-        Ok(true) => failure(
-            "Not selected; the valid-looking output cannot be attributed to the current source evidence"
-                .to_owned(),
-        ),
+        Ok(true) => reuse_if_bound(previous, target),
         Ok(false) if target.exists() => failure(format!(
             "Existing output failed integrity validation; preserved without overwrite: {}",
             target.display()
@@ -402,6 +416,32 @@ fn inspect_without_conversion(
             }
             _ => failure("Not selected for this run; output is missing".to_owned()),
         },
+        Err(error) => failure(error),
+    }
+}
+
+fn reuse_if_bound(previous: Option<&OutputResult>, target: &Path) -> OutputResult {
+    let Some(expected_hash) = previous
+        .filter(|result| result.state.successful())
+        .and_then(|result| result.output_sha256.as_deref())
+    else {
+        return failure(format!(
+            "Valid-looking output has no saved source/output hash binding; preserved without reuse: {}",
+            target.display()
+        ));
+    };
+    match conversion::sha256_file(target) {
+        Ok(actual_hash) if actual_hash == expected_hash => OutputResult {
+            state: OutputState::Reused,
+            detail: "Existing output matched saved source and output hashes".to_owned(),
+            retryable: false,
+            retry_count: 0,
+            output_sha256: Some(actual_hash),
+        },
+        Ok(_) => failure(format!(
+            "Existing output hash changed; preserved without reuse: {}",
+            target.display()
+        )),
         Err(error) => failure(error),
     }
 }
@@ -469,16 +509,10 @@ fn convert_output(
     target: &Path,
     extension: &str,
     filter: &str,
+    previous: Option<&OutputResult>,
 ) -> OutputResult {
     match validate_output(target, extension) {
-        Ok(true) => {
-            return OutputResult {
-                state: OutputState::Reused,
-                detail: "Existing output passed integrity validation".to_owned(),
-                retryable: false,
-                retry_count: 0,
-            };
-        }
+        Ok(true) => return reuse_if_bound(previous, target),
         Ok(false) if target.exists() => {
             return failure(format!(
                 "Existing output failed integrity validation; preserved without overwrite: {}",
@@ -596,6 +630,7 @@ fn convert_output(
                 },
                 retryable: termination_issue.is_none(),
                 retry_count: 0,
+                output_sha256: None,
             });
         }
         if !exit_status.success() {
@@ -621,6 +656,7 @@ fn convert_output(
                 target.display()
             )));
         }
+        let output_sha256 = conversion::sha256_file(&made)?;
         fs::rename(&made, target).map_err(|error| {
             format!(
                 "Érvényes konverziós output előléptetési hiba {}: {error}",
@@ -632,6 +668,7 @@ fn convert_output(
             detail: "Integrity validation passed".to_owned(),
             retryable: false,
             retry_count: 0,
+            output_sha256: Some(output_sha256),
         })
     })();
     let _ = fs::remove_dir_all(&root);
@@ -661,6 +698,7 @@ fn failure(detail: String) -> OutputResult {
         detail,
         retryable: false,
         retry_count: 0,
+        output_sha256: None,
     }
 }
 
@@ -670,6 +708,7 @@ fn retryable_failure(detail: String) -> OutputResult {
         detail,
         retryable: true,
         retry_count: 0,
+        output_sha256: None,
     }
 }
 
@@ -931,6 +970,7 @@ mod tests {
                     detail: "Integrity validation passed".to_owned(),
                     retryable: false,
                     retry_count: 0,
+                    output_sha256: None,
                 }
             }
         });
@@ -953,6 +993,7 @@ mod tests {
                 detail: "process-tree termination unverified".to_owned(),
                 retryable: false,
                 retry_count: 0,
+                output_sha256: None,
             },
             failure("Existing invalid output was preserved".to_owned()),
         ] {
@@ -965,6 +1006,7 @@ mod tests {
                         detail: first.detail.clone(),
                         retryable: first.retryable,
                         retry_count: first.retry_count,
+                        output_sha256: first.output_sha256.clone(),
                     }
                 } else {
                     panic!("a permanent failure must not be retried")
@@ -1002,6 +1044,7 @@ mod tests {
             detail: "Previously valid".to_owned(),
             retryable: false,
             retry_count: 0,
+            output_sha256: None,
         };
         let result = inspect_without_conversion(Some(&previous_ok), &missing, "pdf");
         assert_eq!(result.state, OutputState::Failed);
@@ -1012,6 +1055,7 @@ mod tests {
             detail: "Previous timeout".to_owned(),
             retryable: false,
             retry_count: 1,
+            output_sha256: None,
         };
         let result = inspect_without_conversion(Some(&previous_timeout), &missing, "pdf");
         assert_eq!(result.state, OutputState::Timeout);
@@ -1029,7 +1073,37 @@ mod tests {
         fs::write(&path, b"%PDF-1.7\nbody\n%%EOF\n").unwrap();
         let result = inspect_without_conversion(None, &path, "pdf");
         assert_eq!(result.state, OutputState::Failed);
-        assert!(result.detail.contains("cannot be attributed"));
+        assert!(
+            result
+                .detail
+                .contains("no saved source/output hash binding")
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn structurally_valid_output_cannot_be_reused_after_its_hash_changes() {
+        let path = std::env::temp_dir().join(format!(
+            "fluxvault-changed-output-{}-{}.pdf",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, b"%PDF-1.7\noriginal\n%%EOF\n").unwrap();
+        let previous = OutputResult {
+            state: OutputState::Ok,
+            detail: "Previously valid".to_owned(),
+            retryable: false,
+            retry_count: 0,
+            output_sha256: Some(conversion::sha256_file(&path).unwrap()),
+        };
+        assert_eq!(
+            inspect_without_conversion(Some(&previous), &path, "pdf").state,
+            OutputState::Reused
+        );
+        fs::write(&path, b"%PDF-1.7\nchanged\n%%EOF\n").unwrap();
+        let changed = inspect_without_conversion(Some(&previous), &path, "pdf");
+        assert_eq!(changed.state, OutputState::Failed);
+        assert!(changed.detail.contains("hash changed"));
         fs::remove_file(path).unwrap();
     }
 

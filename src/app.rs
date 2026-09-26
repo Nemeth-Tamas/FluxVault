@@ -1762,6 +1762,7 @@ impl FluxVaultApp {
                 let root = project.root().display().to_string();
 
                 self.project = Some(project);
+                self.restore_conversion_state();
 
                 self.status = format!("Projekt visszaállítva: {name}");
 
@@ -1792,6 +1793,7 @@ impl FluxVaultApp {
         self.imaging_error = None;
         self.conversion_result = None;
         self.conversion_issue_selection.clear();
+        self.restore_conversion_state();
 
         self.status = format!("Projekt megnyitva: {name}");
 
@@ -1799,6 +1801,25 @@ impl FluxVaultApp {
 
         self.refresh_attempt_history();
         self.refresh_project_statistics();
+    }
+
+    fn restore_conversion_state(&mut self) {
+        let Some(project) = &self.project else { return };
+        if !project.reports_dir().join("ConversionState.json").is_file() {
+            return;
+        }
+        match conversion_run::load_snapshot(&project.reports_dir(), project.root()) {
+            Ok(result) => {
+                let issues = result.issues.len();
+                self.conversion_result = Some(result);
+                self.log(format!(
+                    "Mentett konverziós állapot visszaállítva; {issues} korábbi kivétel."
+                ));
+            }
+            Err(error) => self.log(format!(
+                "Mentett konverziós állapot nem használható: {error}"
+            )),
+        }
     }
 
     fn create_project_interactive(&mut self) {

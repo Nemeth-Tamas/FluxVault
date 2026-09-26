@@ -445,7 +445,7 @@ fn same_file_hash(path: &Path, expected_sha256: &str) -> Result<bool, String> {
     Ok(sha256_file(path)? == expected_sha256)
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = fs::File::open(path)
         .map_err(|error| format!("Nem nyitható meg hash-eléshez {}: {error}", path.display()))?;
     let mut hasher = Sha256::new();
