@@ -34,21 +34,8 @@ pub struct ProjectState {
     metadata: ProjectMetadata,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct SessionState {
-    last_project_root: String,
-}
-
 impl ProjectState {
-    pub fn create(root: PathBuf) -> Result<Self, String> {
-        Self::create_with_session(root, true)
-    }
-
     pub fn create_without_session(root: PathBuf) -> Result<Self, String> {
-        Self::create_with_session(root, false)
-    }
-
-    fn create_with_session(root: PathBuf, remember: bool) -> Result<Self, String> {
         fs::create_dir_all(&root).map_err(|error| {
             format!(
                 "Nem sikerült létrehozni a projektmappát {}: {error}",
@@ -97,20 +84,10 @@ impl ProjectState {
         };
 
         project.save_metadata()?;
-        if remember {
-            remember_last_project(project.root())?;
-        }
-
         Ok(project)
     }
 
-    pub fn open(root: PathBuf) -> Result<Self, String> {
-        let project = Self::open_without_session(root)?;
-        remember_last_project(project.root())?;
-        Ok(project)
-    }
-
-    /// Inspect a project without modifying the GUI's last-opened session.
+    /// Open a project without changing any application-wide state.
     pub fn open_without_session(root: PathBuf) -> Result<Self, String> {
         let project_file = root.join(PROJECT_FILE_NAME);
 
@@ -140,11 +117,6 @@ impl ProjectState {
         Ok(Self { root, metadata })
     }
 
-    pub fn save(&mut self) -> Result<(), String> {
-        self.save_metadata()?;
-        remember_last_project(&self.root)
-    }
-
     fn save_metadata(&mut self) -> Result<(), String> {
         self.metadata.updated_unix_ms = current_unix_ms()?;
 
@@ -163,12 +135,7 @@ impl ProjectState {
         Ok(())
     }
 
-    pub fn set_current_disk_number(&mut self, disk_number: u32) -> Result<(), String> {
-        self.metadata.current_disk_number = disk_number.max(1);
-        self.save()
-    }
-
-    /// CLI selection does not change the GUI's remembered last-opened project.
+    /// Persist the active disk number without touching physical media.
     pub fn set_current_disk_number_without_session(
         &mut self,
         disk_number: u32,
@@ -219,76 +186,6 @@ impl ProjectState {
     pub fn project_file(&self) -> PathBuf {
         self.root.join(PROJECT_FILE_NAME)
     }
-}
-
-pub fn load_last_project() -> Result<Option<ProjectState>, String> {
-    let session_file = session_file_path();
-
-    if !session_file.exists() {
-        return Ok(None);
-    }
-
-    let json = fs::read_to_string(&session_file).map_err(|error| {
-        format!(
-            "Nem sikerült beolvasni a FluxVault munkamenetet {}: {error}",
-            session_file.display()
-        )
-    })?;
-
-    let session: SessionState = serde_json::from_str(&json).map_err(|error| {
-        format!(
-            "Hibás FluxVault munkamenetfájl {}: {error}",
-            session_file.display()
-        )
-    })?;
-
-    let root = PathBuf::from(session.last_project_root);
-
-    if !root.join(PROJECT_FILE_NAME).exists() {
-        return Err(format!(
-            "A legutóbbi projekt már nem található: {}",
-            root.display()
-        ));
-    }
-
-    ProjectState::open(root).map(Some)
-}
-
-fn remember_last_project(root: &Path) -> Result<(), String> {
-    let session_file = session_file_path();
-
-    if let Some(parent) = session_file.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "Nem sikerült létrehozni a FluxVault beállítási mappát {}: {error}",
-                parent.display()
-            )
-        })?;
-    }
-
-    let session = SessionState {
-        last_project_root: root.display().to_string(),
-    };
-
-    let json = serde_json::to_string_pretty(&session)
-        .map_err(|error| format!("Munkamenet JSON generálási hiba: {error}"))?;
-
-    fs::write(&session_file, json).map_err(|error| {
-        format!(
-            "Nem sikerült menteni a FluxVault munkamenetet {}: {error}",
-            session_file.display()
-        )
-    })
-}
-
-fn session_file_path() -> PathBuf {
-    if let Some(app_data) = std::env::var_os("APPDATA") {
-        return PathBuf::from(app_data)
-            .join("FluxVault")
-            .join("session.json");
-    }
-
-    PathBuf::from(".fluxvault-session.json")
 }
 
 fn current_unix_ms() -> Result<u64, String> {

@@ -1,22 +1,20 @@
 # FluxVault — TODO
 
-> Floppy archival, forensic imaging, recovery, conversion, audit, and customer-delivery suite.
+> CLI-first floppy archival, forensic imaging, recovery, conversion, audit, and customer-delivery suite. Work from a project folder in PowerShell using `fluxvault` commands; there is no desktop GUI.
 >
 > **Primary rule:** Source floppy media is read-only. FluxVault may write images, logs, extracted files, reports, and packages to the workstation, but it must never intentionally write to a customer floppy.
 >
-> **Product target:** FluxVault is an automated archival appliance, not a collection of expert-only recovery tools. Except for physically inserting, removing, or moving a floppy between drives, the normal operator workflow should require no recovery decisions, no manual DMDE work, no hand-edited spreadsheets, no manual extraction, and no manual report/package assembly. The intended production loop is: **insert floppy -> press/confirm once -> wait for the swap cue -> repeat**.
+> **Product target:** FluxVault is an automated archival appliance, not a collection of expert-only recovery tools. Except for physically inserting, removing, or moving a floppy between drives, the normal operator workflow should require no recovery decisions, no manual DMDE work, no hand-edited spreadsheets, no manual extraction, and no manual report/package assembly. The intended production loop is: **run `fluxvault production start` in the project folder -> insert floppy -> confirm the swap cue -> repeat**. This production command is planned, not implemented yet.
 >
 > **Throughput target:** With one USB floppy drive and one Greaseweazle-connected drive operating concurrently on different disks, a 136-disk mixed-condition job—including automatic verification, escalation, extraction, conversion, audit, and ordinary recovery passes—should be achievable within one operator afternoon (target: no more than roughly 6 hours of attended wall-clock time, excluding genuinely pathological media that must continue unattended or be reported as unrecoverable).
 
 ## 0. Development contract / project rules
 
 - [x] Rust stable, Windows-first application.
-- [x] GUI: `eframe` / `egui` unless we discover a concrete blocker.
-- [x] Use the same Windows DPI-manifest pattern already proven in BareEye / QuadBench / EagleCast: `embed_manifest` + `DpiAwareness::System` in `build.rs`.
-- [ ] Keep the GUI responsive: floppy reads, hashing, extraction, conversion, packaging, and Greaseweazle processes run on worker threads/processes and report progress/events back to the UI.
-- [x] User edits files locally; assistant does not hand-wave patches.
-- [x] Before every code patch, assistant reads the current file from GitHub and supplies exact FIND and REPLACE blocks with indentation copied from the repository.
-- [x] Intermediate states are pushed even when they do not compile, so the repository is always the source of truth.
+- [x] CLI-only executable; remove the desktop window, file dialogs, GUI session state, and their dependencies without removing the shared workflow services.
+- [ ] Keep long operations observable and interruptible from the terminal; physical reads, hashing, extraction, conversion, packaging, and Greaseweazle processes report progress on stderr and preserve logs.
+- [x] Edit files locally and verify changes before pushing.
+- [x] Keep the GitHub repository as the source of truth with logical, tested checkpoints.
 - [x] Git workflow always uses `git add .`.
 - [x] Do not use selective `git add <file>` instructions.
 - [x] Prefer small modules with explicit responsibilities over a giant `main.rs`.
@@ -24,14 +22,14 @@
 
 ### Automation-first operator contract
 
-- [ ] The default workflow must be a guided production queue, not a page-by-page collection of manual actions.
+- [ ] The default CLI workflow must be a guided production queue, not a chain of expert-only commands.
 - [ ] The operator's only routine responsibilities are placing/removing disks, moving a disk from USB to Greaseweazle when prompted, and optionally entering a physical label or note.
 - [ ] FluxVault automatically chooses retries, read direction, composite inputs, extraction strategy, recovery escalation, conversion, audit, and packaging policy from recorded evidence.
-- [ ] Expert controls remain available under **Advanced**, but normal jobs must not require understanding sectors, FAT, DMDE, flux, profiles, hashes, or conversion filters.
+- [ ] Expert subcommands/flags remain available, but normal jobs must not require understanding sectors, FAT, DMDE, flux, profiles, hashes, or conversion filters.
 - [ ] Every automatic decision records its evidence, confidence, limits, and provenance so automation never hides guessing or fabricates recovered data.
 - [ ] A disk may finish as **verified**, **partially recovered**, or **unrecoverable within policy**; the program must not block the entire batch waiting for manual repair.
 - [ ] All stages are resumable after application restart or workstation failure without repeating completed evidence-preserving work.
-- [ ] No modal question should ask the operator to make a technical choice the program can derive safely.
+- [ ] No CLI prompt should ask the operator to make a technical choice the program can derive safely.
 
 ## 1. Safety invariants — must exist before real media testing
 
@@ -40,14 +38,14 @@
 - [x] No code path may call a filesystem write operation against the floppy drive letter.
 - [x] Greaseweazle integration exposes acquisition/info/convert operations only.
 - [x] Never expose or invoke `gw write`, erase, clean, or another destructive Greaseweazle operation.
-- [x] Show a persistent **SOURCE MEDIA: READ ONLY** indicator whenever a physical drive is selected.
+- [x] Print **READ ONLY** on physical-drive acquisition and report read-only access in machine-readable results.
 - [x] Recommend the physical write-protect tab for customer disks when available.
 - [x] Query Windows disk writability without attempting a write; refuse a full USB image if protection is not positively reported.
 - [ ] Validate the current USB floppy drive's write-protect reporting with a **known-good disposable** floppy only. It reported `writable` with the physical tab open, and Windows-created filesystem metadata appeared between archived and fresh customer-disk images. On damaged disposable 001, a deliberate one-byte marker write to a previously readable sector failed with device I/O error 1117; the immediate read failed, but after eject/reinsert the sector again matched its archived SHA-256 exactly. This confirms no persistent change to that sector, **not** that the adapter enforces write protection. On 2026-09-26, the same drive reported `protected` with customer 007 and completed a read-only CLI image; one sector was unreadable and the other 2,879 matched the earlier clean image exactly. This read validates acquisition, not the adapter's physical write-blocking behavior. Never test writes on customer media; finish independent validation using a known-good disposable floppy or a verified hardware write blocker/GW setup.
 - [x] Keep a command/audit log for every external tool invocation.
 - [x] Never silently overwrite a previous acquisition/recovery attempt.
 
-## 2. Project/session data model
+## 2. Project data model
 
 - [x] Define a FluxVault project root while remaining compatible with the current archive layout during migration.
 - [x] Recognize/use the existing directories where present: `Images`, `Logs`, `Extracted`, `Converted`, `Recovery`, `Reports`.
@@ -59,18 +57,18 @@
 - [ ] Preserve enough provenance to answer: “Which read/pass produced this sector/file?”
 - [ ] Import an existing script-created archive as a project without forcing re-imaging.
 
-## 3. GUI shell
+## 3. CLI operator experience
 
-- [x] Main window with left navigation and central work area.
-- [x] Suggested pages: **Project**, **Acquire**, **Recovery**, **Files**, **Conversions**, **Audit**, **Package**, **Settings / Tools**.
-- [x] Project header: project path, disk count, next number, active source device, current job.
-- [x] Bottom status area: worker status, progress, current operation, last error/warning.
-- [ ] Non-blocking media-change prompt for “Insert floppy #NNN in USB”, “Move floppy #NNN to Greaseweazle”, or “Archive floppy #NNN and insert #NNN+1”.
-- [x] Operator log panel with timestamps and copy button.
-- [ ] Persistent per-job cancel button where cancellation is safe.
-- [ ] Do not fake capabilities: controls for unavailable hardware/tools are disabled with a useful reason.
-- [ ] Add a production-line dashboard showing both drives, current disk in each drive, queued escalation work, throughput, estimated remaining time, and the next physical action in plain language.
-- [ ] Provide a kiosk/large-button mode suitable for repetitive scanning where the primary controls are **Start batch**, **Disk inserted**, **Disk removed**, **Pause**, and **Finish batch**.
+- [x] No-argument `fluxvault` shows help instead of opening a window.
+- [x] Folder-first project discovery plus `init`, `status`, disk, drive, recovery, extraction, conversion, audit, report, package, and tool commands.
+- [x] Saved command logs and stderr progress replace the window's status/operator-log panel.
+- [x] `greaseweazle preview` preserves the former safe-command mock/preview without touching hardware.
+- [x] `greaseweazle info` exposes the audited read-only device/firmware query through the CLI; live hardware behavior remains untested until the board arrives.
+- [ ] Make the default command path much shorter: one production command runs the full safe chain with plain-language status and next physical action.
+- [ ] Print concise station-specific prompts: “Insert floppy #NNN in USB”, “Move floppy #NNN to Greaseweazle”, or “Archive floppy #NNN and insert #NNN+1”.
+- [ ] Add safe pause/resume/cancel semantics and a persisted job queue; a terminal closing must not silently lose completed evidence.
+- [ ] `status` should show both stations, queued escalation, throughput, estimated time, current operation, and the next physical action.
+- [ ] Unavailable hardware/tools must be reported with an actionable reason; never imply a planned capability already works.
 
 ## 4. External-tool discovery
 
@@ -79,8 +77,8 @@
   - [x] LibreOffice (`soffice.com` preferred, `soffice.exe` fallback).
   - [x] Greaseweazle host tools (`gw.exe`) when installed later.
 - [x] Store operator-selected paths in settings.
-- [x] Show detected version and health check for each tool.
-- [x] Provide a “Test tools” action.
+- [x] Show detected version and health check with `tools check`.
+- [x] Provide a `tools check` command.
 - [x] Capture stdout/stderr and exit code for every external process.
 - [x] Kill the full LibreOffice process tree on Windows timeout; verify with a disposable parent/child process test and report a termination failure instead of falsely claiming success.
 
@@ -154,7 +152,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
   - [x] extraction failure;
   - [x] apparently readable image with zero recovered files when operator review is warranted.
 - [ ] Automatically run extraction immediately after an eligible acquisition or newly derived preferred image; no separate Files-page action in production mode.
-  - [x] In the current GUI session, queue image-only extraction after each clean USB acquisition without blocking the next physical read.
+  - [x] The retired GUI queued image-only extraction after each clean USB acquisition; the CLI retains `extract disk N`/`extract all`, but automatic nonblocking post-scan extraction remains a production-scheduler task.
   - [x] Add a one-button offline project pass that batches eligible extraction, conversion, evidence audit, and a Hungarian workbook without touching physical media.
 - [ ] Automatically re-run extraction and file inventory whenever a better composite, decoded flux image, or reconstructed filesystem becomes preferred.
 - [ ] Replace “operator review required” as the normal next step with a bounded automatic recovery plan; operator review is the final exception state only.
@@ -163,7 +161,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 ## 8. Automated recovery engine — pre-Greaseweazle
 
 - [x] Recovery queue ordered by severity/attention state.
-- [ ] Show current image, bad-sector count/list, source log, extraction result, prior attempts, automated decisions, and optional operator notes in one screen.
+- [ ] Add a comprehensive `disk show N --details` view (and JSON equivalent) for current image, bad-sector list, source log, extraction result, prior attempts, automated decisions, and optional operator notes.
 - [x] **Re-read with USB drive** action creates another immutable acquisition attempt.
 - [x] Compare attempts sector-by-sector.
 - [x] Reconstruct readable mirrored-FAT sectors into a separate derived image with per-sector provenance even when the disk has more than two bad sectors; other sectors remain unresolved and are never guessed.
@@ -197,13 +195,13 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [ ] Detect `gw.exe`, run info/version command, and show device status.
 - [x] Build commands as argument arrays, never shell-concatenated strings.
 - [x] Unit-test command generation without hardware.
-- [ ] Parse `gw` stderr/stdout incrementally into GUI progress/events.
+- [ ] Parse `gw` stderr/stdout incrementally into CLI progress/events.
 - [ ] Store full command, version, start/end time, exit status, and captured output for every run.
-- [ ] Add “hardware not connected” UI state rather than error-spamming.
+- [ ] Add a clear “hardware not connected” CLI status rather than error-spamming.
 
 ## 10. Greaseweazle raw-flux acquisition — after board arrives
 
-- [ ] Detect board + connected drive and display device/firmware info.
+- [ ] Detect board + connected drive and print device/firmware info.
 - [ ] **Preservation capture defaults to true raw flux**, e.g. SCP/KryoFlux, not regenerated “perfect” flux.
 - [x] Important guardrail: if `gw read --format=...` is used for a raw-flux file, pair it with `--raw`; otherwise Greaseweazle may regenerate flux and fill undecodable sectors rather than preserving the physical capture.
 - [ ] Default recovery workflow: automatically capture raw flux once when USB triage escalates a disk, then perform as much decoding/re-decoding as possible from that preserved capture instead of repeatedly stressing fragile media.
@@ -214,7 +212,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
   - [x] IBM PC 1.44 MB / HD.
   - [x] IBM PC 720 KB / DD.
 - [ ] Later expose other Greaseweazle disk definitions without hardcoding the whole universe into FluxVault.
-- [ ] Track/head selection and step settings available under **Advanced**, not in the basic happy path.
+- [ ] Track/head selection and step settings available as expert flags, not in the basic happy path.
 - [ ] Apply bounded automatic physical-read policies based on media condition, elapsed time, revolutions, and prior improvement; stop automatically rather than endlessly hammering fragile media.
 - [ ] Automatically infer the first decode profile from USB geometry/image size and flux evidence, then try evidence-ranked alternative profiles without operator selection.
 - [ ] After flux capture, automatically decode, compare against USB attempts, build the best composite, retry extraction/recovery, and update audit state.
@@ -224,7 +222,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 
 The target setup has two different drives working simultaneously on different floppies: the USB drive performs fast first-pass acquisition while the Greaseweazle drive processes disks automatically escalated from the USB queue. A single disk is never placed in both drives simultaneously; the scheduler tracks custody and tells the operator where each numbered disk goes next.
 
-- [ ] Create a central job scheduler shared by GUI and CLI, with independent USB, Greaseweazle, CPU extraction/recovery, conversion, audit, and packaging worker queues.
+- [ ] Create a central CLI job scheduler with independent USB, Greaseweazle, CPU extraction/recovery, conversion, audit, and packaging worker queues.
 - [ ] Run the USB and Greaseweazle physical drives concurrently on different disks without blocking hashing, extraction, conversion, or reporting workers.
 - [ ] Automatically triage every USB result into **USB complete**, **USB re-read**, **move to Greaseweazle**, or **unrecoverable within USB policy**.
 - [ ] Automatically prioritize the Greaseweazle queue by expected recovery value, severity, age, and whether the operator currently has the disk available.
@@ -232,19 +230,19 @@ The target setup has two different drives working simultaneously on different fl
 - [ ] Require a simple physical confirmation when moving a disk between stations, then verify geometry/fingerprint consistency before accepting the new attempt.
 - [ ] Keep both drives busy whenever eligible work exists; CPU-heavy extraction/conversion must not stall physical acquisition.
 - [ ] Allow the operator to continue feeding good disks into USB while Greaseweazle works on an earlier bad disk.
-- [ ] Use audible and large visual cues differentiated by station: **USB swap**, **move to Greaseweazle**, **Greaseweazle swap**, and **attention only if automation is exhausted**.
+- [ ] Use audible cues and unmistakable terminal messages differentiated by station: **USB swap**, **move to Greaseweazle**, **Greaseweazle swap**, and **attention only if automation is exhausted**.
 - [ ] Support pause/resume and clean shutdown while preserving every queue item and in-progress artifact safely.
 - [ ] Estimate throughput and remaining batch time from observed read/retry/conversion durations.
 - [ ] Add a production acceptance benchmark for the 136-disk reference job: complete ordinary dual-drive acquisition/recovery and downstream processing within a target six-hour operator session.
 - [ ] Record operator touches per disk and target the theoretical minimum: initial insertion/removal plus one Greaseweazle transfer only for escalated disks.
 - [ ] Provide an unattended tail mode so flux re-decodes, extraction, conversion, audit, and packaging can continue after the operator finishes feeding physical disks.
 
-## 12. “Mini electron microscope the shit out of it” flux recovery view
+## 12. “Mini electron microscope the shit out of it” flux recovery diagnostics
 
 - [ ] Track/head map for raw-flux capture quality.
 - [ ] Per-track decoded sector summary: present, valid CRC, bad CRC, missing, duplicates/unusual IDs where available.
-- [ ] Compare multiple revolutions/passes visually.
-- [ ] Show weak/problematic regions and which decode attempt recovered each sector.
+- [ ] Compare multiple revolutions/passes through text/JSON diagnostics and exportable data.
+- [ ] Report weak/problematic regions and which decode attempt recovered each sector.
 - [ ] Re-run decode from the same raw flux with alternate Greaseweazle profile/settings without touching the physical disk.
 - [ ] Compare results from USB-sector reads versus Greaseweazle-derived sector images.
 - [ ] Composite/reconstruction tools must retain provenance and never masquerade reconstructed bytes as an untouched original capture.
@@ -271,15 +269,15 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
 - [x] Validate generated PDFs via `%PDF-` header + `%%EOF` tail sanity check.
 - [x] Record `OK`, `PARTIAL`, `FAILED`, `TIMEOUT`, and `REUSED` results plus details/duration.
 - [x] Preserve source stems containing extra dots when locating LibreOffice output (regression-tested with `Dr. Anka.doc`).
-- [x] Conversion issues list in the GUI session with per-file selection, retry selected, and retry failed actions; selected retries preserve a complete project summary and revalidate unselected outputs.
-- [x] Reload the last conversion issue list from project-scoped saved state after reopening a project, so a GUI restart does not require another full conversion run to show prior exceptions.
-- [ ] Production mode automatically converts all eligible files, retries transient failures within policy, and records permanent failures without asking the operator file-by-file. The current offline/GUI conversion runner now performs one bounded retry for confirmed-clean timeouts, nonzero LibreOffice exits, and missing/invalid newly generated output; wiring this into the continuous production scheduler remains open.
+- [x] `conversion issues` and `conversion retry [SOURCE]` provide per-file or all-failed retries; selected retries preserve a complete project summary and revalidate unselected outputs.
+- [x] Reload the last conversion issue list from project-scoped saved state after restarting the CLI process.
+- [ ] Production mode automatically converts all eligible files, retries transient failures within policy, and records permanent failures without asking the operator file-by-file. The offline conversion runner now performs one bounded retry for confirmed-clean timeouts, nonzero LibreOffice exits, and missing/invalid newly generated output; wiring this into the continuous production scheduler remains open.
 
 ## 14. Audit/report engine
 
 Replace the current updater/audit script chain with one in-app source of truth while keeping export compatibility.
 
-- [x] Add a clearly scoped evidence audit in GUI and CLI: re-hash acquisition images, managed recovered files, and conversion source copies; validate recorded Office/PDF outputs; flag missing/changed evidence per disk and export JSON/CSV without claiming customer-delivery certification.
+- [x] Add a clearly scoped CLI evidence audit: re-hash acquisition images, managed recovered files, and conversion source copies; validate recorded Office/PDF outputs; flag missing/changed evidence per disk and export JSON/CSV without claiming customer-delivery certification.
 
 - [ ] Per-floppy audit state combines acquisition, image quality, extraction, recovered-file count, conversion status, and generated-file integrity.
 - [ ] Preserve useful statuses such as `OK`, `PARTIAL: IMAGE READ`, `PARTIAL: CONVERSION`, `CHECK: CONVERSION FAILED`, `CHECK: NO RECOVERED FILES`.
@@ -303,7 +301,7 @@ Replace the current updater/audit script chain with one in-app source of truth w
 
 ## 15. Customer package builder
 
-Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the GUI.
+Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 
 - [x] Choose destination outside project/source tree and enforce that guardrail.
 - [x] Stage only allowed archival/customer folders in the package file list (no source-tree mutation).
@@ -318,7 +316,7 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the GUI.
 - [x] Verify ZIP inventory/count/total bytes against staging before declaring success.
 - [ ] Optional “keep staging folder” setting.
 - [ ] One **Finalize project** action automatically refreshes recovery/extraction/conversion/audit state, builds the package, verifies it, and reports only unresolved exceptions.
-  - [x] Add CLI `finalize --destination PATH` for existing images: run the shared processing pipeline, stop packaging when attention remains, and build/verify an archival ZIP only after a clean run. GUI one-click action and production policy remain open.
+  - [x] Add CLI `finalize --destination PATH` for existing images: run the shared processing pipeline, stop packaging when attention remains, and build/verify an archival ZIP only after a clean run. Automatic production policy remains open.
 - [ ] Optional production policy automatically builds the final package when the last physical disk and all background queues are complete.
 
 ## 16. Current dataset regression targets
@@ -354,7 +352,7 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 
 ## 18. CLI / automation interface
 
-The GUI and CLI must call the same Rust workflow/services so safety, provenance, validation, and output formats cannot drift.
+All CLI commands must call the same guarded Rust workflow services so safety, provenance, validation, and output formats cannot drift.
 
 - [ ] Install a `fluxvault` executable that can be added to `PATH` and run from PowerShell, CMD, or another automation process.
   - [x] Build and smoke-test a release executable in PowerShell and CMD; provide a dry-run-capable installer with opt-in user `PATH` changes. Actual installation is left to the operator.
@@ -362,43 +360,44 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [x] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
 - [x] Project commands: `project show`, `disk list`, `disk show`, `disk select`, and `disk next`.
   - [x] Read-only `disk list` and `disk show N` with human/JSON output and no physical drive access.
+  - [x] `disk show N --details` exposes saved attempt hashes, bad LBAs, retry counts, and evidence paths; JSON includes these fields automatically.
 - [x] Read-only drive commands: `drive list` and `drive probe --drive A:`. Probe only accepts an enumerated removable drive, performs no write, and reports whether software guards pass; the current USB adapter still needs independent hardware write-protection validation before customer use.
 - [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` plus a production `scan` workflow where the only interaction is media-change confirmation.
-  - [x] Add gated CLI `acquire` using the GUI's read-only USB backend, positive write-protection and floppy-geometry checks, and a required operator hardware-protection assertion. Live read-only test on customer 007 completed with one unresolved sector; the other 2,879 sectors exactly matched its earlier clean image. Independent physical write-protection validation remains open above.
+  - [x] Add gated CLI `acquire` using the read-only USB backend, positive write-protection and floppy-geometry checks, and a required operator hardware-protection assertion. Live read-only test on customer 007 completed with one unresolved sector; the other 2,879 sectors exactly matched its earlier clean image. Independent physical write-protection validation remains open above.
   - [x] Add a guarded, guided single-drive `scan` loop that requires an explicit READ confirmation for each disk, advances project numbering only after a completed image, and reports the derived recovery queue. Tested with synthetic acquisition, not live hardware.
   - [ ] Turn guided scanning into the production zero-touch pipeline: automatic post-scan extraction/recovery decisions, crash-safe resume, reliable media-change detection, and independent hardware validation.
 - [x] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
-  - [x] `extract all` reuses the GUI batch service, recovery backups, manual-recovery detection, and manifest generation without requiring LibreOffice.
+  - [x] `extract all` uses the shared batch service, recovery backups, manual-recovery detection, and manifest generation without requiring LibreOffice.
   - [x] `extract disk N` uses the same eligibility rules, preserves operator recovery, makes/reuses the immutable pass-1 backup when needed, and refreshes the file manifest.
 - [x] Recovery commands for queue/status, attempt comparison, composite creation, and DMDE result import.
   - [x] `recovery plan`, `recovery compare N`, and idempotent `recovery backup N` operate on saved evidence without physical-drive access.
-  - [x] `recovery queue`, `recovery composite N`, `recovery fat N`, and guarded `recovery import N --source DIR --dmde-log FILE` reuse the GUI's saved-image and evidence-import services.
-- [ ] Conversion, audit/report, and validated customer-package commands matching the GUI workflow.
-  - [x] `report export` reuses the GUI's Hungarian XLSX exporter; `tools check` reuses version checks and the audited external-command runner.
-  - [x] `conversion plan`, `conversion run`, and `files manifest` reuse the GUI's delivery planning, bounded conversion, and inventory services.
+  - [x] `recovery queue`, `recovery composite N`, `recovery fat N`, and guarded `recovery import N --source DIR --dmde-log FILE` use the saved-image and evidence-import services.
+- [x] Conversion, audit/report, and validated archival-package commands are available from the CLI; full customer-delivery certification remains open.
+  - [x] `report export` uses the Hungarian XLSX exporter; `tools check` uses version checks and the audited external-command runner.
+  - [x] `conversion plan`, `conversion run`, and `files manifest` use delivery planning, bounded conversion, and inventory services.
   - [x] Make selected conversion-issue retry resumable after CLI process restart without weakening source provenance checks. CLI `conversion run`/`process` save project-scoped state; `conversion retry [SOURCE]` reloads it and validates fresh source hashes, delivery paths, and existing outputs.
 - [ ] Human-readable output by default plus stable `--json` output for scripts; progress goes to stderr so JSON/stdout remains machine-readable.
 - [ ] Stable documented exit codes for success, partial recovery, operator action required, invalid project/input, missing tool, and fatal failure.
   - [x] Initial CLI contract: 0 complete, 3 attention/partial, 2 invalid input/operation error; `audit` and `process` return 3 when recovery or conversion attention remains.
 - [ ] Non-interactive/background operations require explicit policy flags; physical-media operations retain read-only safety while confirmations are limited to unavoidable custody/media changes.
-- [x] Every CLI external-tool invocation uses argument arrays and the same command/audit log as the GUI; never expose Greaseweazle write/erase commands.
+- [x] Every CLI external-tool invocation uses argument arrays and the shared command/audit log; never expose Greaseweazle write/erase commands.
 - [ ] Shell completion generation for PowerShell initially, with Bash/Zsh completion when the application becomes cross-platform.
 - [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
   - [x] Exercise the built executable against a disposable nested project: project discovery, JSON output/errors, exact exit codes, and a guided-scan quit path that never enumerates or reads a drive.
   - [x] Cross-process LibreOffice integration test proves hash-bound reuse, tampered-output refusal, persisted issue loading, and retry after restart using only a disposable RTF.
   - [ ] Add interrupted-acquisition resume integration scenarios without requiring physical media.
 - [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.
-- [x] `fluxvault audit` and `fluxvault package build --destination PATH` reuse the same evidence-audit and verified-package services as the GUI, without changing the GUI's remembered project.
+- [x] `fluxvault audit` and `fluxvault package build --destination PATH` use the evidence-audit and verified-package services without application-wide project state.
 - [x] `fluxvault process` runs the existing-image extraction -> Office conversion -> evidence audit -> workbook pipeline with no physical drive access; progress goes to stderr and `--json` output to stdout.
 
 ## 19. Milestones
 
-- [x] **M0 — Skeleton:** eframe window, DPI fix, module layout, settings, project open/create, worker/event plumbing.
+- [x] **M0 — CLI foundation:** module layout, settings, project create/open, guarded workflow services, and folder-first commands. The earlier desktop shell was retired.
 - [x] **M1 — WORKING USB ARCHIVER:** safely image a real floppy, retry/fallback, bad-sector map, SHA-256, persistent project record.
 - [ ] **M2 — SCRIPT REPLACEMENT CORE:** import legacy archives/logs, auto extraction, recovery queue, manifests.
 - [ ] **M3 — AUTOMATED RECOVERY CORE:** multiple USB attempts, policy-driven compare/composite, FAT12 reconstruction, carving, provenance, and legacy DMDE import compatibility.
 - [ ] **M4 — GREASEWEAZLE READY WITHOUT HARDWARE:** tool detection, mocked backend, safe command construction, raw/derived artifact model.
-- [ ] **M5 — GREASEWEAZLE LIVE:** raw-flux capture + decode/redecode + flux microscope after hardware arrives.
+- [ ] **M5 — GREASEWEAZLE LIVE:** raw-flux capture + decode/redecode + detailed flux diagnostics after hardware arrives.
 - [ ] **M6 — COMPLETE SUITE:** Office conversion, integrity, audit workbook/report exports, customer ZIP packaging.
 - [ ] **M7 — HARDENING:** recovery regression tests, crash/cancel behavior, settings polish, release build.
 - [ ] **M8 — ZERO-TOUCH PRODUCTION:** concurrent USB + Greaseweazle scheduler, automatic escalation, one-button downstream pipeline, 136-disk afternoon benchmark, and near-minimum operator touches.
@@ -406,10 +405,10 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 ## 20. First implementation session after repository is created
 
 - [x] Read the new GitHub repository exactly as pushed.
-- [x] Read BareEye / QuadBench / EagleCast reference files needed for eframe setup and DPI behavior.
-- [x] Add dependencies/build-dependencies and Windows manifest support.
+- [x] Earlier GUI/DPI groundwork completed historically; retired when FluxVault became CLI-only.
+- [x] Add the initial dependencies; later remove GUI-only dependencies and the DPI manifest.
 - [x] Split the hello-world project into the initial module skeleton.
-- [x] Create the first real GUI shell.
+- [x] Create the original GUI shell; later retire it in favor of the CLI.
 - [x] Add project create/open and settings/tool-health structures.
 - [x] Push the first checkpoint even if some planned pieces are still stubbed.
 - [x] Then start the Windows read-only floppy backend immediately; do not spend three days making pretty cards before we can read a disk. :D

@@ -24,6 +24,28 @@ fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
 }
 
 #[test]
+fn cli_only_entry_point_and_greaseweazle_preview_need_no_hardware() {
+    let cwd = std::env::temp_dir();
+    let help = invoke(&cwd, &[], None);
+    assert_eq!(help.status.code(), Some(0));
+    let help_text = String::from_utf8(help.stdout).unwrap();
+    assert!(help_text.contains("fluxvault init [path]"));
+    assert!(!help_text.contains("Open the GUI"));
+
+    let preview = invoke(&cwd, &["greaseweazle", "preview", "--json"], None);
+    assert_eq!(preview.status.code(), Some(0));
+    let preview_json: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview_json["executed"], false);
+    assert_eq!(preview_json["source_media_access"], "read_only");
+    for example in preview_json["examples"].as_array().unwrap() {
+        let arguments = example["raw_capture"].as_array().unwrap();
+        assert!(arguments.iter().any(|arg| arg == "--raw"));
+        assert!(arguments.iter().any(|arg| arg == "--no-clobber"));
+        assert!(!arguments.iter().any(|arg| arg == "write"));
+    }
+}
+
+#[test]
 fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
     let root = std::env::temp_dir().join(format!(
         "fluxvault-cli-e2e-{}-{}",

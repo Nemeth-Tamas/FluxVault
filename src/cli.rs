@@ -1,4 +1,4 @@
-//! Command-line entry points over the same guarded workflow services as the GUI.
+//! Command-line entry points over the guarded workflow services.
 
 mod acquire;
 mod finalize;
@@ -19,6 +19,9 @@ use crate::{
     conversion_run::{self, DEFAULT_CONVERSION_WORKERS},
     external_tools::{self, ToolHealth, ToolKind},
     floppy::{self, FloppyDrive, WriteProtectionStatus},
+    greaseweazle::{
+        GreaseweazleBackend, GreaseweazleCommand, GreaseweazleProfile, ProcessGreaseweazleBackend,
+    },
     imaging,
     manifest::{self, ManifestRequest},
     package::{self, PackageRequest},
@@ -32,14 +35,14 @@ use crate::{
 
 const HELP: &str = r#"FluxVault — floppy archiving
 Usage:
-  fluxvault                         Open the GUI
+  fluxvault                         Show command help
   fluxvault init [path]             Create a project
   fluxvault status [--project PATH] Show project status
   fluxvault project show [--project PATH]
                                     Show saved project metadata
   fluxvault disk list [--project PATH]
-  fluxvault disk show N [--project PATH]
-                                    Inspect saved disk attempts
+  fluxvault disk show N [--details] [--project PATH]
+                                    Inspect saved disk attempts and evidence paths
   fluxvault disk select N [--project PATH]
   fluxvault disk next [--project PATH]
                                     Select the current/next disk number (no drive access)
@@ -54,8 +57,11 @@ Usage:
   fluxvault tools show              Show configured tool paths
   fluxvault tools set NAME PATH     Configure sevenzip/libreoffice/greaseweazle
   fluxvault tools clear NAME        Return a tool to auto-discovery
+  fluxvault greaseweazle preview    Show safe raw-capture and decode command examples
+  fluxvault greaseweazle info [--project PATH]
+                                    Query device/firmware with audited read-only gw info
   fluxvault extract all [--project PATH]
-                                    Process saved images with the GUI's extraction service
+                                    Process saved images with the extraction service
   fluxvault extract disk N [--project PATH]
                                     Extract one saved disk or preserve recovery evidence
   fluxvault recovery plan [N] [--project PATH]
@@ -104,6 +110,7 @@ Options:
   --source DIR                      External recovered-files folder for DMDE import
   --dmde-log FILE                   Matching DMDE log for recovery import
   --conversion-workers N            Parallel Office files during process (1-16; default 4)
+  --details                        Include bad-sector LBAs and evidence paths in disk show
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
 
 #[derive(Debug)]
@@ -112,31 +119,30 @@ struct CliResponse {
     exit_code: i32,
 }
 
-pub fn run_from_env() -> Option<i32> {
+pub fn run_from_env() -> i32 {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        return None;
+        println!("{HELP}");
+        return 0;
     }
     let json_output = args.iter().any(|argument| argument == "--json");
-    Some(
-        match run(
-            &args,
-            &env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        ) {
-            Ok(response) => {
-                println!("{}", response.output);
-                response.exit_code
+    match run(
+        &args,
+        &env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    ) {
+        Ok(response) => {
+            println!("{}", response.output);
+            response.exit_code
+        }
+        Err(message) => {
+            if json_output {
+                println!("{}", json_error(&message));
+            } else {
+                eprintln!("FluxVault: {message}");
             }
-            Err(message) => {
-                if json_output {
-                    println!("{}", json_error(&message));
-                } else {
-                    eprintln!("FluxVault: {message}");
-                }
-                2
-            }
-        },
-    )
+            2
+        }
+    }
 }
 
 fn json_error(message: &str) -> String {
@@ -155,11 +161,13 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut import_source: Option<PathBuf> = None;
     let mut import_log: Option<PathBuf> = None;
     let mut conversion_workers: Option<usize> = None;
+    let mut details = false;
     let mut positional = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" => json_output = true,
+            "--details" => details = true,
             "--project" => {
                 index += 1;
                 let value = args.get(index).ok_or("--project requires a path")?;
@@ -254,6 +262,9 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             "--conversion-workers is only valid with process or conversion run/retry".to_owned(),
         );
     }
+    if details && !(positional.len() == 3 && positional[0] == "disk" && positional[1] == "show") {
+        return Err("--details is only valid with disk show N".to_owned());
+    }
     if drive_override.is_some()
         && !(positional.len() == 2 && positional[0] == "drive" && positional[1] == "probe")
         && !(positional.len() == 1 && positional[0] == "acquire")
@@ -283,6 +294,57 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut needs_attention = false;
     let output = match positional.first().map(String::as_str) {
         Some("help") if positional.len() == 1 => Ok(HELP.to_owned()),
+        Some("greaseweazle")
+            if positional.len() == 2
+                && positional[1] == "preview"
+                && project_override.is_none()
+                && destination.is_none() =>
+        {
+            greaseweazle_preview(json_output)
+        }
+        Some("greaseweazle")
+            if positional.len() == 2 && positional[1] == "info" && destination.is_none() =>
+        {
+            let settings = external_tools::load_settings()?;
+            let audit_path = if project_override.is_some() || discover_project(cwd).is_some() {
+                let root = resolve_project_root(cwd, project_override.as_deref())?;
+                ProjectState::open_without_session(root)?
+                    .logs_dir()
+                    .join("external-tools.jsonl")
+            } else {
+                external_tools::default_audit_path()
+            };
+            let executable = external_tools::find_ready_tool(
+                ToolKind::Greaseweazle,
+                settings.path(ToolKind::Greaseweazle),
+                &audit_path,
+            )?;
+            let mut backend = ProcessGreaseweazleBackend::new(executable, audit_path)?;
+            let execution = backend.execute(&GreaseweazleCommand::info())?;
+            needs_attention = !execution.success;
+            if json_output {
+                Ok(json!({
+                    "success": execution.success,
+                    "exit_code": execution.exit_code,
+                    "stdout": execution.stdout,
+                    "stderr": execution.stderr,
+                    "source_media_access": "read_only"
+                })
+                .to_string())
+            } else {
+                Ok(format!(
+                    "Greaseweazle info: {} (exit {:?})\n{}{}",
+                    if execution.success {
+                        "ready"
+                    } else {
+                        "attention required"
+                    },
+                    execution.exit_code,
+                    execution.stdout,
+                    execution.stderr
+                ))
+            }
+        }
         Some("init") if positional.len() <= 2 && project_override.is_none() => {
             let root = positional
                 .get(1)
@@ -474,6 +536,10 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 Ok(json!({"project": project.root(), "disk": disk_number, "attempts": attempts.iter().map(|attempt| json!({
                     "number": attempt.attempt_number, "status": attempt.status,
                     "image": attempt.image_file, "sha256": attempt.sha256,
+                    "metadata": attempt.metadata_path, "log": attempt.log_file,
+                    "timestamp_unix_ms": attempt.timestamp_unix_ms,
+                    "total_sectors": attempt.total_sectors,
+                    "retry_recovered_sectors": attempt.retry_recovered_sectors,
                     "bad_sectors": attempt.bad_sectors, "attention_required": attempt.attention_required
                 })).collect::<Vec<_>>()}).to_string())
             } else {
@@ -481,13 +547,28 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     "Disk {disk_number:03}\n{}",
                     attempts
                         .iter()
-                        .map(|attempt| format!(
-                            "  #{:03} | {} | {} bad sectors | {}",
-                            attempt.attempt_number,
-                            attempt.status,
-                            attempt.bad_sectors.len(),
-                            attempt.image_file
-                        ))
+                        .map(|attempt| {
+                            let summary = format!(
+                                "  #{:03} | {} | {} bad sectors | {}",
+                                attempt.attempt_number,
+                                attempt.status,
+                                attempt.bad_sectors.len(),
+                                attempt.image_file
+                            );
+                            if details {
+                                format!(
+                                    "{summary}\n    SHA-256: {}\n    Sectors: {} | retry-recovered: {}\n    Bad LBAs: {:?}\n    Metadata: {}\n    Log: {}",
+                                    attempt.sha256,
+                                    attempt.total_sectors,
+                                    attempt.retry_recovered_sectors,
+                                    attempt.bad_sectors,
+                                    attempt.metadata_path.display(),
+                                    attempt.log_file,
+                                )
+                            } else {
+                                summary
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join("\n")
                 ))
@@ -1179,6 +1260,63 @@ fn status_next_actions(disk_count: usize, partial_disks: usize) -> Vec<&'static 
     actions
 }
 
+fn greaseweazle_preview(json_output: bool) -> Result<String, String> {
+    let profiles = [GreaseweazleProfile::Ibm1440, GreaseweazleProfile::Ibm720];
+    let examples = profiles
+        .into_iter()
+        .map(|profile| {
+            let raw = GreaseweazleCommand::raw_flux_read(
+                profile,
+                'A',
+                3,
+                Path::new("Flux/NNN_attempt_001.scp"),
+            )?;
+            let decode = GreaseweazleCommand::convert_flux_to_sector_image(
+                profile,
+                Path::new("Flux/NNN_attempt_001.scp"),
+                Path::new("Images/NNN_flux_decode_001.img"),
+            )?;
+            Ok(json!({
+                "profile": profile.argument(),
+                "raw_capture": raw.arguments(),
+                "sector_decode": decode.arguments(),
+            }))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if json_output {
+        Ok(
+            json!({"examples": examples, "executed": false, "source_media_access": "read_only"})
+                .to_string(),
+        )
+    } else {
+        Ok(format!(
+            "Greaseweazle command preview (nothing executed):\n{}\nOnly info, raw read, and file-to-file convert are allowed; source-media write/erase commands are forbidden.",
+            examples
+                .iter()
+                .map(|example| format!(
+                    "{}:\n  gw {}\n  gw {}",
+                    example["profile"].as_str().unwrap_or("unknown"),
+                    example["raw_capture"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    example["sector_decode"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ))
+    }
+}
+
 fn select_removable_drive(drives: &[FloppyDrive], requested: &str) -> Result<FloppyDrive, String> {
     let bytes = requested.as_bytes();
     if !matches!(bytes, [letter, b':'] | [letter, b':', b'\\'] if letter.is_ascii_alphabetic()) {
@@ -1384,8 +1522,48 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_commands_without_opening_gui() {
+    fn rejects_unknown_commands_without_starting_another_interface() {
         assert!(run(&["acquire".to_owned()], Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn disk_details_expose_saved_evidence_without_physical_media() {
+        let root = env::temp_dir().join(format!(
+            "fluxvault-cli-details-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        std::fs::write(project.images_dir().join("001.img"), [0x33; 512]).unwrap();
+        let detail = run(
+            &[
+                "disk".to_owned(),
+                "show".to_owned(),
+                "1".to_owned(),
+                "--details".to_owned(),
+            ],
+            &root,
+        )
+        .unwrap();
+        assert!(detail.output.contains("Bad LBAs:"));
+        assert!(detail.output.contains("Metadata:"));
+        let json_response = run(
+            &[
+                "disk".to_owned(),
+                "show".to_owned(),
+                "1".to_owned(),
+                "--json".to_owned(),
+            ],
+            &root,
+        )
+        .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_response.output).unwrap();
+        assert!(json["attempts"][0]["total_sectors"].is_number());
+        assert!(run(&["status".to_owned(), "--details".to_owned()], &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1417,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn init_creates_a_project_without_gui_session_state() {
+    fn init_creates_a_project_without_application_wide_session_state() {
         let root = env::temp_dir().join(format!(
             "fluxvault-cli-init-{}-{}",
             std::process::id(),
