@@ -364,7 +364,8 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [x] Read-only drive commands: `drive list` and `drive probe --drive A:`. Probe only accepts an enumerated removable drive, performs no write, and reports whether software guards pass; the current USB adapter still needs independent hardware write-protection validation before customer use.
 - [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` plus a production `scan` workflow where the only interaction is media-change confirmation.
   - [x] Add gated CLI `acquire` using the GUI's read-only USB backend, positive write-protection and floppy-geometry checks, and a required independently verified hardware protection assertion. Hardware execution remains untested; the current adapter is not approved for customer media.
-  - [ ] Add guided `scan` media-change loop and downstream automatic queueing.
+  - [x] Add a guarded, guided single-drive `scan` loop that requires an explicit READ confirmation for each disk, advances project numbering only after a completed image, and reports the derived recovery queue. Tested with synthetic acquisition, not live hardware.
+  - [ ] Turn guided scanning into the production zero-touch pipeline: automatic post-scan extraction/recovery decisions, crash-safe resume, reliable media-change detection, and independent hardware validation.
 - [x] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
   - [x] `extract all` reuses the GUI batch service, recovery backups, manual-recovery detection, and manifest generation without requiring LibreOffice.
   - [x] `extract disk N` uses the same eligibility rules, preserves operator recovery, makes/reuses the immutable pass-1 backup when needed, and refreshes the file manifest.
@@ -382,6 +383,8 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [x] Every CLI external-tool invocation uses argument arrays and the same command/audit log as the GUI; never expose Greaseweazle write/erase commands.
 - [ ] Shell completion generation for PowerShell initially, with Bash/Zsh completion when the application becomes cross-platform.
 - [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
+  - [x] Exercise the built executable against a disposable nested project: project discovery, JSON output/errors, exact exit codes, and a guided-scan quit path that never enumerates or reads a drive.
+  - [ ] Add full cross-process conversion-retry and interrupted-acquisition resume integration scenarios without requiring physical media.
 - [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.
 - [x] `fluxvault audit` and `fluxvault package build --destination PATH` reuse the same evidence-audit and verified-package services as the GUI, without changing the GUI's remembered project.
 - [x] `fluxvault process` runs the existing-image extraction -> Office conversion -> evidence audit -> workbook pipeline with no physical drive access; progress goes to stderr and `--json` output to stdout.

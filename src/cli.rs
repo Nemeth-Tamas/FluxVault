@@ -3,6 +3,7 @@
 mod acquire;
 mod office;
 mod recovery;
+mod scan;
 
 use std::{
     env,
@@ -45,6 +46,8 @@ Usage:
   fluxvault drive probe --drive A:  Read-only 512-byte media and protection probe
   fluxvault acquire --drive A: --disk N [--retries N] --write-blocker-verified
                                     Read-only image; requires independently verified hardware
+  fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
+                                    Guided read-only multi-disk loop; type READ for each disk
   fluxvault tools check [--project PATH]
                                     Check external tool versions and record audit
   fluxvault tools show              Show configured tool paths
@@ -93,6 +96,7 @@ Options:
   --drive LETTER:                   Enumerated removable drive for read-only probe
   --disk N                          Disk number for acquisition
   --retries N                       Bad-sector retry passes for acquisition (0-10; default 2)
+  --count N                         Stop guided scan after N disks (default: until QUIT)
   --write-blocker-verified          Operator asserts separate hardware protection test
   --source DIR                      External recovered-files folder for DMDE import
   --dmde-log FILE                   Matching DMDE log for recovery import
@@ -143,6 +147,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut drive_override: Option<String> = None;
     let mut acquisition_disk: Option<u32> = None;
     let mut acquisition_retries: Option<usize> = None;
+    let mut scan_count: Option<usize> = None;
     let mut write_blocker_verified = false;
     let mut import_source: Option<PathBuf> = None;
     let mut import_log: Option<PathBuf> = None;
@@ -187,6 +192,17 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                         .ok()
                         .filter(|number| *number <= 10)
                         .ok_or("--retries must be from 0 to 10")?,
+                );
+            }
+            "--count" => {
+                index += 1;
+                scan_count = Some(
+                    args.get(index)
+                        .ok_or("--count requires a number")?
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|number| *number > 0)
+                        .ok_or("--count requires a positive number")?,
                 );
             }
             "--write-blocker-verified" => write_blocker_verified = true,
@@ -237,15 +253,22 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if drive_override.is_some()
         && !(positional.len() == 2 && positional[0] == "drive" && positional[1] == "probe")
         && !(positional.len() == 1 && positional[0] == "acquire")
+        && !(positional.len() == 1 && positional[0] == "scan")
     {
-        return Err("--drive is only valid with drive probe or acquire".to_owned());
+        return Err("--drive is only valid with drive probe, acquire, or scan".to_owned());
     }
-    if (acquisition_disk.is_some() || acquisition_retries.is_some() || write_blocker_verified)
-        && !(positional.len() == 1 && positional[0] == "acquire")
+    if acquisition_disk.is_some() && !(positional.len() == 1 && positional[0] == "acquire") {
+        return Err("--disk is only valid with acquire".to_owned());
+    }
+    if (acquisition_retries.is_some() || write_blocker_verified)
+        && !(positional.len() == 1 && matches!(positional[0].as_str(), "acquire" | "scan"))
     {
         return Err(
-            "--disk, --retries and --write-blocker-verified are only valid with acquire".to_owned(),
+            "--retries and --write-blocker-verified are only valid with acquire or scan".to_owned(),
         );
+    }
+    if scan_count.is_some() && !(positional.len() == 1 && positional[0] == "scan") {
+        return Err("--count is only valid with scan".to_owned());
     }
     if (import_source.is_some() || import_log.is_some())
         && !(positional.len() == 3 && positional[0] == "recovery" && positional[1] == "import")
@@ -289,6 +312,18 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 drive_override.as_deref(),
                 acquisition_disk,
                 acquisition_retries.unwrap_or(2),
+                write_blocker_verified,
+            );
+        }
+        Some("scan") if positional.len() == 1 && destination.is_none() => {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let mut project = ProjectState::open_without_session(root)?;
+            return scan::run(
+                &mut project,
+                json_output,
+                drive_override.as_deref(),
+                acquisition_retries.unwrap_or(2),
+                scan_count,
                 write_blocker_verified,
             );
         }
