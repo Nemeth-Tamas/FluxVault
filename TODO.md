@@ -266,6 +266,7 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
 - [x] Per-output timeout (default 45 s to match current workflow).
 - [x] Process-tree kill on timeout.
 - [x] Skip/reuse already-valid outputs; forced reconversion remains an advanced future option.
+- [ ] Bind reused Office/PDF outputs to saved source and output hashes across full runs and app restarts; structural ZIP/PDF validity alone does not prove an output belongs to the current recovered source.
 - [x] Validate generated Office OOXML as ZIP containers with required internal files.
 - [x] Validate generated PDFs via `%PDF-` header + `%%EOF` tail sanity check.
 - [x] Record `OK`, `PARTIAL`, `FAILED`, `TIMEOUT`, and `REUSED` results plus details/duration.

@@ -326,12 +326,16 @@ fn inspect_without_conversion(
     extension: &str,
 ) -> OutputResult {
     match validate_output(target, extension) {
-        Ok(true) => OutputResult {
+        Ok(true) if previous.is_some() => OutputResult {
             state: OutputState::Reused,
             detail: "Existing output passed integrity validation".to_owned(),
             retryable: false,
             retry_count: 0,
         },
+        Ok(true) => failure(
+            "Not selected; the valid-looking output cannot be attributed to the current source evidence"
+                .to_owned(),
+        ),
         Ok(false) if target.exists() => failure(format!(
             "Existing output failed integrity validation; preserved without overwrite: {}",
             target.display()
@@ -920,6 +924,20 @@ mod tests {
         assert_eq!(result.state, OutputState::Timeout);
         assert_eq!(result.detail, "Previous timeout");
         assert_eq!(result.retry_count, 0);
+    }
+
+    #[test]
+    fn unselected_valid_output_requires_matching_prior_source_evidence() {
+        let path = std::env::temp_dir().join(format!(
+            "fluxvault-unattributed-output-{}-{}.pdf",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, b"%PDF-1.7\nbody\n%%EOF\n").unwrap();
+        let result = inspect_without_conversion(None, &path, "pdf");
+        assert_eq!(result.state, OutputState::Failed);
+        assert!(result.detail.contains("cannot be attributed"));
+        fs::remove_file(path).unwrap();
     }
 
     #[cfg(windows)]
