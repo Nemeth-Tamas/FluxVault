@@ -1043,7 +1043,6 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("process") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
-            let project_root = project.root().to_path_buf();
             let reports_directory = project.reports_dir();
             let settings = external_tools::load_settings()?;
             let command_audit_path = project.logs_dir().join("external-tools.jsonl");
@@ -1067,11 +1066,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 },
                 &|stage| eprintln!("{stage}"),
             )?;
-            let conversion_state = conversion_run::save_snapshot(
-                &reports_directory,
-                &project_root,
-                &result.conversion,
-            )?;
+            let conversion_state = conversion_run::snapshot_path(&reports_directory);
             needs_attention = result.audit.attention_disks > 0
                 || result.extraction.recovery_disks > 0
                 || result.declined_composites > 0

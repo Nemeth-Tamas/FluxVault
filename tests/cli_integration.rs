@@ -77,3 +77,64 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
     assert!(String::from_utf8_lossy(&quit.stderr).contains("Type READ"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+#[ignore = "requires installed LibreOffice; uses only a disposable synthetic RTF"]
+fn conversion_state_reuses_only_bound_outputs_across_cli_processes() {
+    let root = std::env::temp_dir().join(format!(
+        "fluxvault-cli-conversion-e2e-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let project = root.join("project");
+    assert_eq!(
+        invoke(&root, &["init", project.to_str().unwrap()], None)
+            .status
+            .code(),
+        Some(0)
+    );
+    let source = project.join("Extracted").join("001").join("sample.rtf");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let source_bytes = b"{\\rtf1\\ansi Disposable cross-process test}";
+    fs::write(&source, source_bytes).unwrap();
+
+    let first = invoke(&project, &["conversion", "run", "--json"], None);
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let second = invoke(&project, &["conversion", "run", "--json"], None);
+    assert_eq!(second.status.code(), Some(0));
+    let second_json: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_json["reused_outputs"], 2);
+
+    let pdf = project
+        .join("Converted")
+        .join("001")
+        .join("sample [from RTF].pdf");
+    assert!(pdf.is_file());
+    fs::write(&pdf, b"%PDF-1.7\nvalid-looking but altered\n%%EOF\n").unwrap();
+    let altered = invoke(&project, &["conversion", "run", "--json"], None);
+    assert_eq!(altered.status.code(), Some(3));
+    let altered_json: serde_json::Value = serde_json::from_slice(&altered.stdout).unwrap();
+    assert_eq!(altered_json["issues"].as_array().unwrap().len(), 1);
+    assert!(String::from_utf8_lossy(&fs::read(&pdf).unwrap()).contains("altered"));
+
+    fs::remove_file(&pdf).unwrap();
+    let retry = invoke(&project, &["conversion", "retry", "--json"], None);
+    assert_eq!(
+        retry.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&retry.stderr)
+    );
+    assert!(pdf.is_file());
+    assert_eq!(fs::read(&source).unwrap(), source_bytes);
+    fs::remove_dir_all(root).unwrap();
+}

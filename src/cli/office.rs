@@ -140,7 +140,7 @@ pub(super) fn run(
         &|stage| eprintln!("{stage}"),
         &|completed, total| eprintln!("Converted {completed}/{total} files"),
     )?;
-    let snapshot = conversion_run::save_snapshot(&project.reports_dir(), project.root(), &result)?;
+    let snapshot = conversion_run::snapshot_path(&project.reports_dir());
     let needs_attention = result.partial > 0 || result.failed > 0 || result.timed_out > 0;
     Ok(CliResponse {
         output: if json_output {

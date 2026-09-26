@@ -34,6 +34,10 @@ pub struct ConversionRequest {
 
 pub const DEFAULT_CONVERSION_WORKERS: usize = 4;
 const CONVERSION_SNAPSHOT_FILE: &str = "ConversionState.json";
+
+pub(crate) fn snapshot_path(reports_directory: &Path) -> PathBuf {
+    reports_directory.join(CONVERSION_SNAPSHOT_FILE)
+}
 const CONVERSION_RETRY_DELAY: Duration = Duration::from_millis(250);
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -124,7 +128,7 @@ pub(crate) fn save_snapshot(
     project_root: &Path,
     result: &ConversionResult,
 ) -> Result<PathBuf, String> {
-    let path = reports_directory.join(CONVERSION_SNAPSHOT_FILE);
+    let path = snapshot_path(reports_directory);
     let snapshot = ConversionSnapshot {
         schema_version: 1,
         project_root: project_root
@@ -143,7 +147,7 @@ pub(crate) fn load_snapshot(
     reports_directory: &Path,
     project_root: &Path,
 ) -> Result<ConversionResult, String> {
-    let path = reports_directory.join(CONVERSION_SNAPSHOT_FILE);
+    let path = snapshot_path(reports_directory);
     let bytes = fs::read(&path).map_err(|error| {
         format!(
             "No saved conversion state {}: {error}; run conversion run first",

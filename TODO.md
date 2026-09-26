@@ -384,7 +384,8 @@ The GUI and CLI must call the same Rust workflow/services so safety, provenance,
 - [ ] Shell completion generation for PowerShell initially, with Bash/Zsh completion when the application becomes cross-platform.
 - [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
   - [x] Exercise the built executable against a disposable nested project: project discovery, JSON output/errors, exact exit codes, and a guided-scan quit path that never enumerates or reads a drive.
-  - [ ] Add full cross-process conversion-retry and interrupted-acquisition resume integration scenarios without requiring physical media.
+  - [x] Cross-process LibreOffice integration test proves hash-bound reuse, tampered-output refusal, persisted issue loading, and retry after restart using only a disposable RTF.
+  - [ ] Add interrupted-acquisition resume integration scenarios without requiring physical media.
 - [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.
 - [x] `fluxvault audit` and `fluxvault package build --destination PATH` reuse the same evidence-audit and verified-package services as the GUI, without changing the GUI's remembered project.
 - [x] `fluxvault process` runs the existing-image extraction -> Office conversion -> evidence audit -> workbook pipeline with no physical drive access; progress goes to stderr and `--json` output to stdout.

@@ -1805,7 +1805,7 @@ impl FluxVaultApp {
 
     fn restore_conversion_state(&mut self) {
         let Some(project) = &self.project else { return };
-        if !project.reports_dir().join("ConversionState.json").is_file() {
+        if !conversion_run::snapshot_path(&project.reports_dir()).is_file() {
             return;
         }
         match conversion_run::load_snapshot(&project.reports_dir(), project.root()) {
