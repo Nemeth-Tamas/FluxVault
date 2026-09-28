@@ -442,7 +442,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
 
     let mut decodes = Vec::new();
     let derived_dir = flux_dir.join("Derived");
-    if derived_dir.exists() {
+    if path_occupied(&derived_dir)? {
         let derived_dir = resolve_derived_dir(&flux_dir, false)?;
         for entry in fs::read_dir(&derived_dir)
             .map_err(|error| format!("Cannot list decoded images: {error}"))?
@@ -626,9 +626,12 @@ pub fn capture(
             record.detail.as_deref().unwrap_or("unknown error")
         ));
     }
-    let bytes = fs::metadata(&partial_flux)
-        .map_err(|error| format!("Successful gw run produced no SCP file: {error}"))?
-        .len();
+    let raw_info = fs::symlink_metadata(&partial_flux)
+        .map_err(|error| format!("Successful gw run produced no SCP file: {error}"))?;
+    if !raw_info.file_type().is_file() {
+        return Err("Greaseweazle output is not a regular SCP file".to_owned());
+    }
+    let bytes = raw_info.len();
     if bytes == 0 {
         return Err(format!(
             "Greaseweazle produced an empty SCP file: {}",
@@ -636,7 +639,7 @@ pub fn capture(
         ));
     }
     let sha256 = hash_file(&partial_flux)?;
-    if final_flux.exists() || final_metadata.exists() {
+    if path_occupied(&final_flux)? || path_occupied(&final_metadata)? {
         return Err("Capture destination already exists; refusing to overwrite".to_owned());
     }
     fs::rename(&partial_flux, &final_flux)
@@ -724,10 +727,10 @@ pub fn decode(
     let partial_metadata = derived_dir.join(format!("{derived_stem}.partial.json"));
     let command =
         GreaseweazleCommand::convert_flux_to_sector_image(profile, &input, &partial_image)?;
-    if final_image.exists()
-        || final_metadata.exists()
-        || partial_image.exists()
-        || partial_metadata.exists()
+    if path_occupied(&final_image)?
+        || path_occupied(&final_metadata)?
+        || path_occupied(&partial_image)?
+        || path_occupied(&partial_metadata)?
     {
         return Err("Decode destination already exists; refusing to overwrite".to_owned());
     }
@@ -778,8 +781,15 @@ pub fn decode(
             execution.stderr
         ));
     }
-    let bytes = match fs::metadata(&partial_image) {
-        Ok(info) => info.len(),
+    let bytes = match fs::symlink_metadata(&partial_image) {
+        Ok(info) if info.file_type().is_file() => info.len(),
+        Ok(_) => {
+            decode_record.status = "failed".to_owned();
+            decode_record.detail =
+                Some("Greaseweazle output is not a regular image file".to_owned());
+            save_decode_record(&partial_metadata, &decode_record)?;
+            return Err(decode_record.detail.unwrap());
+        }
         Err(error) => {
             decode_record.status = "failed".to_owned();
             decode_record.detail =
@@ -948,10 +958,14 @@ fn resolve_derived_dir(flux_dir: &Path, create: bool) -> Result<PathBuf, String>
 fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, String> {
     for attempt in 1..=999_999u32 {
         let stem = format!("{disk_number:03}_attempt_{attempt:03}");
-        if [".scp", ".partial.scp", ".json", ".partial.json"]
-            .iter()
-            .all(|suffix| !directory.join(format!("{stem}{suffix}")).exists())
-        {
+        let mut available = true;
+        for suffix in [".scp", ".partial.scp", ".json", ".partial.json"] {
+            if path_occupied(&directory.join(format!("{stem}{suffix}")))? {
+                available = false;
+                break;
+            }
+        }
+        if available {
             return Ok(attempt);
         }
     }
@@ -961,14 +975,29 @@ fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, Strin
 fn next_decode_attempt(directory: &Path, prefix: &str) -> Result<u32, String> {
     for attempt in 1..=999_999u32 {
         let stem = format!("{prefix}_decode_{attempt:03}");
-        if [".img", ".partial.img", ".json", ".partial.json"]
-            .iter()
-            .all(|suffix| !directory.join(format!("{stem}{suffix}")).exists())
-        {
+        let mut available = true;
+        for suffix in [".img", ".partial.img", ".json", ".partial.json"] {
+            if path_occupied(&directory.join(format!("{stem}{suffix}")))? {
+                available = false;
+                break;
+            }
+        }
+        if available {
             return Ok(attempt);
         }
     }
     Err("Too many decodes for this capture/profile".to_owned())
+}
+
+fn path_occupied(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "Cannot inspect output slot {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 fn reserve_record(path: &Path, record: &CaptureRecord) -> Result<(), String> {
@@ -1235,6 +1264,34 @@ mod tests {
         let success = decode(&project, 3, captured.attempt_number, None, &mut backend).unwrap();
         assert_eq!(success.decode_attempt, 2);
         assert!(status.decodes[0].metadata.is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dangling_windows_links_still_occupy_capture_and_decode_slots() {
+        let (project, root) = fixture();
+        let flux_dir = project.root().join("Flux");
+        let link = flux_dir.join("011_attempt_001.partial.scp");
+        let target = root.join("nonexistent-capture-target.scp");
+        if let Err(error) = std::os::windows::fs::symlink_file(&target, &link) {
+            eprintln!("Skipping symlink assertions; Windows denied symlink creation: {error}");
+            fs::remove_dir_all(root).unwrap();
+            return;
+        }
+        assert!(!link.exists());
+        assert!(path_occupied(&link).unwrap());
+        assert_eq!(next_capture_attempt(&flux_dir, 11).unwrap(), 2);
+
+        let derived_dir = flux_dir.join("Derived");
+        fs::create_dir_all(&derived_dir).unwrap();
+        let decode_link = derived_dir.join("011_flux_001_ibm_1440_decode_001.partial.img");
+        std::os::windows::fs::symlink_file(root.join("nonexistent-image-target.img"), &decode_link)
+            .unwrap();
+        assert_eq!(
+            next_decode_attempt(&derived_dir, "011_flux_001_ibm_1440").unwrap(),
+            2
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
