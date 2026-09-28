@@ -4,7 +4,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         Mutex,
         mpsc::{self, Receiver},
@@ -62,7 +62,7 @@ pub enum ToolHealth {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandAudit {
     pub tool: String,
     pub executable: PathBuf,
@@ -73,6 +73,8 @@ pub struct CommandAudit {
     pub exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -244,6 +246,16 @@ pub fn run_audited_command(
     arguments: &[String],
     audit_path: &Path,
 ) -> AuditedCommandResult {
+    run_audited_command_with_version(tool_name, executable, arguments, audit_path, None)
+}
+
+pub fn run_audited_command_with_version(
+    tool_name: &str,
+    executable: &Path,
+    arguments: &[String],
+    audit_path: &Path,
+    version: Option<String>,
+) -> AuditedCommandResult {
     let started_unix_ms = current_unix_ms();
     let started = Instant::now();
     let output = Command::new(executable).args(arguments).output();
@@ -260,6 +272,7 @@ pub fn run_audited_command(
             exit_code: output.status.code(),
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            version,
         },
         Err(error) => CommandAudit {
             tool: tool_name.to_owned(),
@@ -271,11 +284,45 @@ pub fn run_audited_command(
             exit_code: None,
             stdout: String::new(),
             stderr: error.to_string(),
+            version,
         },
     };
     let audit_error = append_audit(audit_path, &audit).err();
 
     AuditedCommandResult { audit, audit_error }
+}
+
+#[cfg(windows)]
+pub fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
+    let taskkill = std::env::var_os("SystemRoot")
+        .map(|root| PathBuf::from(root).join("System32").join("taskkill.exe"))
+        .ok_or_else(|| "SystemRoot is unavailable; taskkill cannot be located".to_owned());
+    let outcome = taskkill.and_then(|taskkill| {
+        Command::new(&taskkill)
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .output()
+            .map_err(|error| format!("{} failed: {error}", taskkill.display()))
+            .and_then(|output| {
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "taskkill /T /F exited {:?}: {}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ))
+                }
+            })
+    });
+    let _ = child.kill();
+    outcome
+}
+
+#[cfg(not(windows))]
+pub fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
+    let _ = child.kill();
+    Err("full process-tree termination is not available on this platform".to_owned())
 }
 
 pub(crate) fn check_tool(
@@ -443,7 +490,7 @@ fn app_data_directory() -> PathBuf {
         .join("FluxVault")
 }
 
-fn current_unix_ms() -> u64 {
+pub(crate) fn current_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -451,7 +498,7 @@ fn current_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn first_non_empty_line(value: &str) -> Option<&str> {
+pub(crate) fn first_non_empty_line(value: &str) -> Option<&str> {
     value.lines().map(str::trim).find(|line| !line.is_empty())
 }
 

@@ -22,7 +22,7 @@ use crate::{
     floppy::{self, FloppyDrive, WriteProtectionStatus},
     greaseweazle::{
         GreaseweazleBackend, GreaseweazleCommand, GreaseweazleDeviceStatus, GreaseweazleProfile,
-        ProcessGreaseweazleBackend, classify_info_output,
+        ProcessGreaseweazleBackend, parse_info_output,
     },
     imaging,
     manifest::{self, ManifestRequest},
@@ -393,14 +393,18 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             )?;
             let mut backend = ProcessGreaseweazleBackend::new(executable, audit_path)?;
             let execution = backend.execute(&GreaseweazleCommand::info())?;
-            let device_status = classify_info_output(&execution.stdout);
+            let info = parse_info_output(&execution.stdout);
             needs_attention =
-                !execution.success || device_status != GreaseweazleDeviceStatus::Connected;
+                !execution.success || info.status != GreaseweazleDeviceStatus::Connected;
             if json_output {
                 Ok(json!({
                     "success": execution.success,
                     "ready": !needs_attention,
-                    "device_status": device_status.as_str(),
+                    "device_status": info.status.as_str(),
+                    "host_tools_version": info.host_tools_version,
+                    "port": info.port,
+                    "model": info.model,
+                    "firmware": info.firmware,
                     "exit_code": execution.exit_code,
                     "stdout": execution.stdout,
                     "stderr": execution.stderr,
@@ -408,20 +412,31 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 })
                 .to_string())
             } else {
-                Ok(format!(
-                    "Greaseweazle info: {} (exit {:?})\n{}{}",
-                    if execution.success {
-                        if needs_attention {
-                            "device not found/unverified"
-                        } else {
-                            "ready"
+                let status_label = if execution.success {
+                    if needs_attention {
+                        match info.status {
+                            GreaseweazleDeviceStatus::NotFound => "device not found",
+                            GreaseweazleDeviceStatus::Bootloader => "device in bootloader mode",
+                            _ => "device not found/unverified",
                         }
                     } else {
-                        "attention required"
-                    },
-                    execution.exit_code,
-                    execution.stdout,
-                    execution.stderr
+                        "ready"
+                    }
+                } else {
+                    "attention required"
+                };
+                let summary_detail = match (
+                    info.model.as_deref(),
+                    info.firmware.as_deref(),
+                    info.port.as_deref(),
+                ) {
+                    (Some(m), Some(fw), Some(p)) => format!(" ({m}, fw {fw}, port {p})"),
+                    (Some(m), Some(fw), None) => format!(" ({m}, fw {fw})"),
+                    _ => String::new(),
+                };
+                Ok(format!(
+                    "Greaseweazle info: {status_label}{summary_detail} (exit {:?})\n{}{}",
+                    execution.exit_code, execution.stdout, execution.stderr
                 ))
             }
         }

@@ -42,6 +42,8 @@ struct CaptureRecord {
     sha256: Option<String>,
     command: Vec<String>,
     detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_version: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +54,7 @@ pub struct CaptureResult {
     pub metadata_path: PathBuf,
     pub bytes: u64,
     pub sha256: String,
+    pub host_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +79,8 @@ struct DecodeRecord {
     reported_total_sectors: Option<usize>,
     #[serde(default)]
     gw_bad_lbas: Option<Vec<u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_version: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +94,7 @@ pub struct DecodeResult {
     pub sha256: String,
     pub reported_sectors: Option<(usize, usize)>,
     pub gw_bad_lbas: Option<Vec<u64>>,
+    pub host_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +107,7 @@ pub struct CaptureInspection {
     pub bytes: Option<u64>,
     pub sha256: Option<String>,
     pub hash_matches: bool,
+    pub host_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,6 +125,7 @@ pub struct DecodeInspection {
     pub gw_bad_lbas: Option<Vec<u64>>,
     pub sector_quality: String,
     pub detail: Option<String>,
+    pub host_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -436,6 +444,9 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
             bytes: record.as_ref().and_then(|record| record.bytes),
             sha256: record.as_ref().and_then(|record| record.sha256.clone()),
             hash_matches,
+            host_version: record
+                .as_ref()
+                .and_then(|record| record.host_version.clone()),
         });
     }
     captures.sort_by_key(|capture| capture.attempt);
@@ -518,6 +529,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 gw_bad_lbas: record.gw_bad_lbas,
                 sector_quality: record.status,
                 detail: record.detail,
+                host_version: record.host_version,
             });
         }
     }
@@ -598,6 +610,7 @@ pub fn capture(
         sha256: None,
         command: command.arguments().to_vec(),
         detail: None,
+        host_version: None,
     };
     reserve_record(&partial_metadata, &record)?;
 
@@ -613,12 +626,18 @@ pub fn capture(
             ));
         }
     };
+    record.host_version = execution.host_version.clone();
     if !execution.success {
         record.status = "failed".to_owned();
-        record.detail = Some(format!(
-            "gw exited {:?}: {} {}",
-            execution.exit_code, execution.stdout, execution.stderr
-        ));
+        let reason = if execution.timed_out {
+            format!("gw timed out: {}", execution.stderr)
+        } else {
+            format!(
+                "gw exited {:?}: {} {}",
+                execution.exit_code, execution.stdout, execution.stderr
+            )
+        };
+        record.detail = Some(reason);
         save_record(&partial_metadata, &record)?;
         return Err(format!(
             "Raw capture failed; attempt evidence remains at {}: {}",
@@ -658,6 +677,7 @@ pub fn capture(
         metadata_path: final_metadata,
         bytes,
         sha256,
+        host_version: execution.host_version,
     })
 }
 
@@ -751,6 +771,7 @@ pub fn decode(
         reported_found_sectors: None,
         reported_total_sectors: None,
         gw_bad_lbas: None,
+        host_version: None,
     };
     reserve_decode_record(&partial_metadata, &decode_record)?;
     let execution = match backend.execute(&command) {
@@ -765,12 +786,18 @@ pub fn decode(
             ));
         }
     };
+    decode_record.host_version = execution.host_version.clone();
     if !execution.success {
         decode_record.status = "failed".to_owned();
-        decode_record.detail = Some(format!(
-            "gw exited {:?}: {} {}",
-            execution.exit_code, execution.stdout, execution.stderr
-        ));
+        let reason = if execution.timed_out {
+            format!("gw timed out: {}", execution.stderr)
+        } else {
+            format!(
+                "gw exited {:?}: {} {}",
+                execution.exit_code, execution.stdout, execution.stderr
+            )
+        };
+        decode_record.detail = Some(reason);
         save_decode_record(&partial_metadata, &decode_record)?;
         return Err(format!(
             "Greaseweazle decode failed (exit {:?}); partial evidence remains at {} and {}: {} {}",
@@ -834,6 +861,7 @@ pub fn decode(
         sha256: output_hash,
         reported_sectors,
         gw_bad_lbas,
+        host_version: execution.host_version,
     })
 }
 
@@ -1100,6 +1128,10 @@ mod tests {
                 } else {
                     String::new()
                 },
+                timed_out: false,
+                host_version: Some("1.23-mock".to_owned()),
+                started_unix_ms: 0,
+                duration_ms: 0,
             })
         }
     }

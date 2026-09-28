@@ -12,7 +12,7 @@
 
 - [x] Rust stable, Windows-first application.
 - [x] CLI-only executable; remove the desktop window, file dialogs, GUI session state, and their dependencies without removing the shared workflow services.
-- [ ] Keep long operations observable and interruptible from the terminal; physical reads, hashing, extraction, conversion, packaging, and Greaseweazle processes report progress on stderr and preserve logs.
+- [x] Keep long operations observable and interruptible from the terminal; physical reads, hashing, extraction, conversion, packaging, and Greaseweazle processes report progress on stderr and preserve logs.
 - [x] Edit files locally and verify changes before pushing.
 - [x] Keep the GitHub repository as the source of truth with logical, tested checkpoints.
 - [x] Git workflow always uses `git add .`.
@@ -192,7 +192,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 Greaseweazle host tools are intentionally wrapped rather than reimplemented initially. Current upstream supports Windows `gw.exe`, raw-flux formats including SCP/KryoFlux, and a separate `gw convert` path, so we can build/test command generation and output parsing before the board arrives.
 
 - [x] Create `GreaseweazleBackend` abstraction with a mock/no-hardware mode.
-- [ ] Detect `gw.exe`, run info/version command, and show device status.
+- [x] Detect `gw.exe`, run info/version command, and show device status.
 - [x] Build commands as argument arrays, never shell-concatenated strings.
 - [x] Unit-test command generation without hardware.
 - [x] Add CLI raw-SCP capture and offline decode routes with mock-backed artifact tests, immutable attempt numbering, SHA-256 provenance, and source-hash refusal; do not call them live-validated before the board arrives.
@@ -202,8 +202,8 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [x] Cross-check decodes from two distinct raw capture attempts offline, requiring intact hashes and complete sector maps and reporting exact byte conflicts without merging images.
 - [x] Retain failed/interrupted decode metadata and partial images as numbered evidence; never reuse their attempt number, and surface them in offline status.
 - [ ] Validate Greaseweazle donor-sector bytes independently (including repeated flux decodes/captures where needed), then create an immutable provenance-tracked composite only when good-sector conflicts are resolved; never claim vendor-reported dots alone prove clean bytes.
-- [ ] Parse `gw` stderr/stdout incrementally into CLI progress/events.
-- [ ] Store full command, version, start/end time, exit status, and captured output for every run.
+- [x] Parse `gw` stderr/stdout incrementally into CLI progress/events.
+- [x] Store full command, version, start/end time, exit status, and captured output for every run.
 - [x] Parse `gw info` device details rather than trusting exit code zero (which upstream can return for `Device: Not found`); surface not-found/unknown/bootloader states and block capture before reserving an attempt.
 
 ## 10. Greaseweazle raw-flux acquisition — after board arrives

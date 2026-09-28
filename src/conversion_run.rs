@@ -617,6 +617,7 @@ fn convert_output(
                 }
                 None => stderr_text.clone(),
             },
+            version: None,
         };
         external_tools::append_audit(&request.command_audit_path, &audit)?;
         if timed_out {
@@ -716,38 +717,8 @@ fn retryable_failure(detail: String) -> OutputResult {
     }
 }
 
-#[cfg(windows)]
 fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
-    let taskkill = std::env::var_os("SystemRoot")
-        .map(|root| PathBuf::from(root).join("System32").join("taskkill.exe"))
-        .ok_or_else(|| "SystemRoot is unavailable; taskkill cannot be located".to_owned());
-    let outcome = taskkill.and_then(|taskkill| {
-        Command::new(&taskkill)
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .output()
-            .map_err(|error| format!("{} failed: {error}", taskkill.display()))
-            .and_then(|output| {
-                if output.status.success() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "taskkill /T /F exited {:?}: {}",
-                        output.status.code(),
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    ))
-                }
-            })
-    });
-    // Always make a best effort to stop the direct process, even if taskkill fails.
-    let _ = child.kill();
-    outcome
-}
-
-#[cfg(not(windows))]
-fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
-    let _ = child.kill();
-    Err("full process-tree termination is not available on this platform".to_owned())
+    external_tools::terminate_process_tree(child)
 }
 
 fn file_uri(path: &Path) -> Result<String, String> {
