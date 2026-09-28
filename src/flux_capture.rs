@@ -414,9 +414,11 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 && record.status == "complete"
                 && record.flux_file.as_deref()
                     == expected_raw.file_name().and_then(|name| name.to_str())
-                && fs::metadata(&expected_raw)
+                && fs::symlink_metadata(&expected_raw)
                     .ok()
-                    .is_some_and(|info| Some(info.len()) == record.bytes)
+                    .is_some_and(|info| {
+                        info.file_type().is_file() && Some(info.len()) == record.bytes
+                    })
                 && record.sha256.as_deref() == hash_file(&expected_raw).ok().as_deref()
         });
         captures.push(CaptureInspection {
@@ -477,13 +479,18 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 ));
             }
             let image = derived_dir.join(&record.output_file);
-            let output_hash_matches = fs::metadata(&image)
+            let output_hash_matches = fs::symlink_metadata(&image)
                 .ok()
-                .is_some_and(|info| info.len() == record.bytes)
+                .is_some_and(|info| info.file_type().is_file() && info.len() == record.bytes)
                 && hash_file(&image).ok().as_deref() == Some(record.output_sha256.as_str());
             let expected_source =
                 format!("{disk_number:03}_attempt_{:03}.scp", record.capture_attempt);
             let source_hash_matches = record.source_flux_file == expected_source
+                && captures.iter().any(|capture| {
+                    capture.attempt == record.capture_attempt
+                        && capture.hash_matches
+                        && capture.sha256.as_deref() == Some(record.source_sha256.as_str())
+                })
                 && hash_file(&flux_dir.join(&expected_source)).ok().as_deref()
                     == Some(record.source_sha256.as_str());
             decodes.push(DecodeInspection {
@@ -676,6 +683,13 @@ pub fn decode(
         return Err("Capture metadata contains an unexpected SCP filename".to_owned());
     }
     let input = flux_dir.join(flux_file);
+    if !fs::symlink_metadata(&input)
+        .map_err(|error| format!("Cannot inspect raw-flux source: {error}"))?
+        .file_type()
+        .is_file()
+    {
+        return Err("Raw-flux source is not a regular file".to_owned());
+    }
     let source_hash = record
         .sha256
         .as_deref()
@@ -1301,6 +1315,20 @@ mod tests {
         .unwrap();
         let conflict = compare_flux_captures(&project, 9).unwrap();
         assert_eq!(conflict.conflicting_reported_good_lbas, vec![3]);
+
+        fs::write(&second.flux_path, b"changed SCP evidence").unwrap();
+        metadata.source_sha256 = hash_file(&second.flux_path).unwrap();
+        fs::write(
+            &second_decode.metadata_path,
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        assert!(!inspect_disk(&project, 9).unwrap().decodes[1].source_hash_matches);
+        assert!(
+            compare_flux_captures(&project, 9)
+                .unwrap_err()
+                .contains("changed")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }
