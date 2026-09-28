@@ -69,6 +69,8 @@ struct DecodeRecord {
     reported_found_sectors: Option<usize>,
     #[serde(default)]
     reported_total_sectors: Option<usize>,
+    #[serde(default)]
+    gw_bad_lbas: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +83,7 @@ pub struct DecodeResult {
     pub bytes: u64,
     pub sha256: String,
     pub reported_sectors: Option<(usize, usize)>,
+    pub gw_bad_lbas: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +109,7 @@ pub struct DecodeInspection {
     pub source_hash_matches: bool,
     pub gw_reported_found_sectors: Option<usize>,
     pub gw_reported_total_sectors: Option<usize>,
+    pub gw_bad_lbas: Option<Vec<u64>>,
     pub sector_quality: String,
 }
 
@@ -231,6 +235,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 source_hash_matches,
                 gw_reported_found_sectors: record.reported_found_sectors,
                 gw_reported_total_sectors: record.reported_total_sectors,
+                gw_bad_lbas: record.gw_bad_lbas,
                 sector_quality: record.status,
             });
         }
@@ -458,6 +463,8 @@ pub fn decode(
     let output_hash = hash_file(&partial_image)?;
     let reported_sectors =
         parse_sector_summary(&execution.stdout).or_else(|| parse_sector_summary(&execution.stderr));
+    let gw_bad_lbas = parse_sector_map(&execution.stdout, profile)
+        .or_else(|| parse_sector_map(&execution.stderr, profile));
     fs::rename(&partial_image, &final_image)
         .map_err(|error| format!("Cannot finalize decoded image: {error}"))?;
     let decode_record = DecodeRecord {
@@ -475,6 +482,7 @@ pub fn decode(
         command: command.arguments().to_vec(),
         reported_found_sectors: reported_sectors.map(|(found, _)| found),
         reported_total_sectors: reported_sectors.map(|(_, total)| total),
+        gw_bad_lbas: gw_bad_lbas.clone(),
     };
     let mut output = OpenOptions::new()
         .write(true)
@@ -493,6 +501,7 @@ pub fn decode(
         bytes,
         sha256: output_hash,
         reported_sectors,
+        gw_bad_lbas,
     })
 }
 
@@ -505,6 +514,74 @@ fn parse_sector_summary(output: &str) -> Option<(usize, usize)> {
         let total = total.parse::<usize>().ok()?;
         (total > 0 && found <= total).then_some((found, total))
     })
+}
+
+/// Parse only a complete IBM 80-cylinder grid matching gw's final sector total.
+/// This is a report from gw, not independent CRC verification of the .img bytes.
+fn parse_sector_map(output: &str, profile: GreaseweazleProfile) -> Option<Vec<u64>> {
+    let sectors_per_track = match profile {
+        GreaseweazleProfile::Ibm1440 => 18usize,
+        GreaseweazleProfile::Ibm720 => 9usize,
+    };
+    let cylinders = 80usize;
+    let heads = 2usize;
+    let expected_total = cylinders * heads * sectors_per_track;
+    let (reported_found, reported_total) = parse_sector_summary(output)?;
+    if reported_total != expected_total {
+        return None;
+    }
+    let lines = output.lines().collect::<Vec<_>>();
+    let header_index = lines.iter().rposition(|line| line.starts_with("H. S: "))?;
+    if header_index == 0 || !lines[header_index - 1].starts_with("Cyl-> ") {
+        return None;
+    }
+    let cylinder_digits = lines[header_index].strip_prefix("H. S: ")?;
+    if cylinder_digits.chars().count() != cylinders
+        || !cylinder_digits
+            .chars()
+            .enumerate()
+            .all(|(cylinder, digit)| digit.to_digit(10) == Some((cylinder % 10) as u32))
+    {
+        return None;
+    }
+    let mut seen_rows = vec![false; heads * sectors_per_track];
+    let mut bad_lbas = Vec::new();
+    let mut found = 0usize;
+    for line in &lines[header_index + 1..] {
+        if line.starts_with("Found ") {
+            break;
+        }
+        let (label, cells) = line.split_once(':')?;
+        let (head, sector) = label.split_once('.')?;
+        let head = head.trim().parse::<usize>().ok()?;
+        let sector = sector.trim().parse::<usize>().ok()?;
+        if head >= heads || sector >= sectors_per_track {
+            return None;
+        }
+        let row = head * sectors_per_track + sector;
+        if seen_rows[row] {
+            return None;
+        }
+        seen_rows[row] = true;
+        let cells = cells.strip_prefix(' ')?;
+        if cells.chars().count() != cylinders {
+            return None;
+        }
+        for (cylinder, cell) in cells.chars().enumerate() {
+            match cell {
+                '.' => found += 1,
+                'X' => {
+                    bad_lbas.push(((cylinder * heads + head) * sectors_per_track + sector) as u64)
+                }
+                _ => return None,
+            }
+        }
+    }
+    if !seen_rows.iter().all(|seen| *seen) || found != reported_found {
+        return None;
+    }
+    bad_lbas.sort_unstable();
+    Some(bad_lbas)
 }
 
 fn project_flux_dir(project: &ProjectState) -> Result<PathBuf, String> {
@@ -629,7 +706,7 @@ mod tests {
                 success: !self.fail,
                 exit_code: Some(if self.fail { 1 } else { 0 }),
                 stdout: if command.arguments()[0] == "convert" {
-                    "Found 1439 sectors of 1440 (99%)".to_owned()
+                    synthetic_gw_grid(GreaseweazleProfile::Ibm720, 711)
                 } else {
                     String::new()
                 },
@@ -689,6 +766,7 @@ mod tests {
         let derived = decode(&project, 7, 1, None, &mut backend).unwrap();
         assert_eq!(derived.bytes, 737_280);
         assert_eq!(derived.reported_sectors, Some((1439, 1440)));
+        assert_eq!(derived.gw_bad_lbas, Some(vec![711]));
         assert!(
             derived
                 .image_path
@@ -700,6 +778,7 @@ mod tests {
         assert_eq!(metadata.status, "unverified_sector_quality");
         assert_eq!(metadata.source_sha256, first.sha256);
         assert_eq!(metadata.reported_found_sectors, Some(1439));
+        assert_eq!(metadata.gw_bad_lbas, Some(vec![711]));
         let decoded_again = decode(&project, 7, 1, None, &mut backend).unwrap();
         assert_eq!(decoded_again.decode_attempt, 2);
         assert_eq!(
@@ -713,6 +792,7 @@ mod tests {
         assert!(status.evidence_healthy);
         assert!(status.attention_required);
         assert_eq!(status.decodes[0].gw_reported_found_sectors, Some(1439));
+        assert_eq!(status.decodes[0].gw_bad_lbas, Some(vec![711]));
 
         fs::write(&first.flux_path, b"changed").unwrap();
         assert!(!inspect_disk(&project, 7).unwrap().evidence_healthy);
@@ -772,5 +852,74 @@ mod tests {
         );
         assert_eq!(parse_sector_summary("Found 10 sectors of zero"), None);
         assert_eq!(parse_sector_summary("No summary"), None);
+    }
+
+    fn synthetic_gw_grid(profile: GreaseweazleProfile, bad_lba: u64) -> String {
+        let sectors = match profile {
+            GreaseweazleProfile::Ibm1440 => 18usize,
+            GreaseweazleProfile::Ibm720 => 9usize,
+        };
+        let total = 80 * 2 * sectors;
+        let tens = (0..80)
+            .map(|cylinder| {
+                if cylinder % 10 == 0 {
+                    char::from_digit((cylinder / 10) as u32, 10).unwrap()
+                } else {
+                    ' '
+                }
+            })
+            .collect::<String>();
+        let units = (0..80)
+            .map(|cylinder| char::from_digit((cylinder % 10) as u32, 10).unwrap())
+            .collect::<String>();
+        let mut output = format!("Cyl-> {tens}\nH. S: {units}\n");
+        for head in 0..2 {
+            for sector in 0..sectors {
+                let cells = (0..80)
+                    .map(|cylinder| {
+                        let lba = ((cylinder * 2 + head) * sectors + sector) as u64;
+                        if lba == bad_lba { 'X' } else { '.' }
+                    })
+                    .collect::<String>();
+                output.push_str(&format!("{head}.{sector:>2}: {cells}\n"));
+            }
+        }
+        output.push_str(&format!("Found {} sectors of {total} (99%)\n", total - 1));
+        output
+    }
+
+    #[test]
+    fn conservative_grid_parser_maps_only_complete_consistent_reports() {
+        let hd = synthetic_gw_grid(GreaseweazleProfile::Ibm1440, 1600);
+        assert_eq!(
+            parse_sector_map(&hd, GreaseweazleProfile::Ibm1440),
+            Some(vec![1600])
+        );
+        assert_eq!(parse_sector_map(&hd, GreaseweazleProfile::Ibm720), None);
+        let dd = synthetic_gw_grid(GreaseweazleProfile::Ibm720, 711);
+        assert_eq!(
+            parse_sector_map(&dd, GreaseweazleProfile::Ibm720),
+            Some(vec![711])
+        );
+
+        let truncated = hd
+            .lines()
+            .filter(|line| !line.starts_with("1.17:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            parse_sector_map(&truncated, GreaseweazleProfile::Ibm1440),
+            None
+        );
+        let inconsistent = hd.replace("Found 2879", "Found 2880");
+        assert_eq!(
+            parse_sector_map(&inconsistent, GreaseweazleProfile::Ibm1440),
+            None
+        );
+        let unknown_cell = hd.replacen("0. 0: .", "0. 0:  ", 1);
+        assert_eq!(
+            parse_sector_map(&unknown_cell, GreaseweazleProfile::Ibm1440),
+            None
+        );
     }
 }

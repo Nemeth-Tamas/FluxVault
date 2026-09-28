@@ -119,13 +119,14 @@ pub(super) fn decode(
                 "sha256": result.sha256,
                 "gw_reported_found_sectors": result.reported_sectors.map(|(found, _)| found),
                 "gw_reported_total_sectors": result.reported_sectors.map(|(_, total)| total),
+                "gw_reported_bad_lbas": result.gw_bad_lbas,
                 "sector_quality": "unverified",
                 "physical_media_access": false
             })
             .to_string()
         } else {
             format!(
-                "Offline decode {:03} capture #{:03}, decode #{:03}: {} bytes\nImage: {}\nSHA-256: {}\nGreaseweazle reported sectors: {}\nSector quality is not yet verified; this image is not automatically promoted for extraction.",
+                "Offline decode {:03} capture #{:03}, decode #{:03}: {} bytes\nImage: {}\nSHA-256: {}\nGreaseweazle reported sectors: {}\nConservative bad-LBA map: {}\nSector quality is not yet verified; this image is not automatically promoted for extraction.",
                 result.disk_number,
                 result.capture_attempt,
                 result.decode_attempt,
@@ -135,7 +136,12 @@ pub(super) fn decode(
                 result
                     .reported_sectors
                     .map(|(found, total)| format!("{found}/{total}"))
-                    .unwrap_or_else(|| "unavailable".to_owned())
+                    .unwrap_or_else(|| "unavailable".to_owned()),
+                result
+                    .gw_bad_lbas
+                    .as_ref()
+                    .map(|bad| format!("{} missing sector(s)", bad.len()))
+                    .unwrap_or_else(|| "unavailable/incomplete grid".to_owned())
             )
         },
         exit_code: 3,
@@ -182,7 +188,7 @@ pub(super) fn status(
         }
         for decode in &status.decodes {
             lines.push(format!(
-                "  Decode of raw #{:03}, pass #{:03} ({}): output hash {}, source hash {}, gw sectors {}",
+                "  Decode of raw #{:03}, pass #{:03} ({}): output hash {}, source hash {}, gw sectors {}, bad-LBA map {}",
                 decode.capture_attempt,
                 decode.decode_attempt,
                 decode.profile,
@@ -191,7 +197,12 @@ pub(super) fn status(
                 match (decode.gw_reported_found_sectors, decode.gw_reported_total_sectors) {
                     (Some(found), Some(total)) => format!("{found}/{total}"),
                     _ => "unavailable".to_owned(),
-                }
+                },
+                decode
+                    .gw_bad_lbas
+                    .as_ref()
+                    .map(|bad| format!("{} missing", bad.len()))
+                    .unwrap_or_else(|| "unknown".to_owned())
             ));
         }
         lines.join("\n")
