@@ -204,7 +204,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [ ] Validate Greaseweazle donor-sector bytes independently (including repeated flux decodes/captures where needed), then create an immutable provenance-tracked composite only when good-sector conflicts are resolved; never claim vendor-reported dots alone prove clean bytes.
 - [ ] Parse `gw` stderr/stdout incrementally into CLI progress/events.
 - [ ] Store full command, version, start/end time, exit status, and captured output for every run.
-- [ ] Add a clear “hardware not connected” CLI status rather than error-spamming.
+- [x] Parse `gw info` device details rather than trusting exit code zero (which upstream can return for `Device: Not found`); surface not-found/unknown/bootloader states and block capture before reserving an attempt.
 
 ## 10. Greaseweazle raw-flux acquisition — after board arrives
 

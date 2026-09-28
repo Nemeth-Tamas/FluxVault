@@ -164,6 +164,59 @@ pub enum BackendMode {
     MockNoHardware,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GreaseweazleDeviceStatus {
+    Connected,
+    NotFound,
+    Bootloader,
+    Unknown,
+}
+
+impl GreaseweazleDeviceStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::NotFound => "not_found",
+            Self::Bootloader => "bootloader",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// `gw info` has historically returned exit code zero with `Device: Not found`.
+/// Require actual device fields before treating an info result as connected.
+pub fn classify_info_output(stdout: &str) -> GreaseweazleDeviceStatus {
+    let mut in_device = false;
+    let mut found_model = false;
+    let mut found_firmware = false;
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line == "Device:" {
+            in_device = true;
+            continue;
+        }
+        if in_device {
+            if line.eq_ignore_ascii_case("Not found") {
+                return GreaseweazleDeviceStatus::NotFound;
+            }
+            if line.starts_with("Model:") {
+                found_model = true;
+            }
+            if line.starts_with("Firmware:") {
+                if line.contains("Bootloader") {
+                    return GreaseweazleDeviceStatus::Bootloader;
+                }
+                found_firmware = true;
+            }
+        }
+    }
+    if found_model && found_firmware {
+        GreaseweazleDeviceStatus::Connected
+    } else {
+        GreaseweazleDeviceStatus::Unknown
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GreaseweazleExecution {
     pub mode: BackendMode,
@@ -269,6 +322,34 @@ fn validate_drive(drive: char) -> Result<char, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn info_parser_does_not_trust_zero_exit_or_host_version_alone() {
+        assert_eq!(
+            classify_info_output("Host Tools: 1.23\nDevice:\n  Not found\n"),
+            GreaseweazleDeviceStatus::NotFound
+        );
+        assert_eq!(
+            classify_info_output(
+                "Host Tools: 1.23\nDevice:\n  Port: COM3\n  Model: Greaseweazle V4\n  Firmware: 1.23\n"
+            ),
+            GreaseweazleDeviceStatus::Connected
+        );
+        assert_eq!(
+            classify_info_output("Host Tools: 1.23\nDevice:\n"),
+            GreaseweazleDeviceStatus::Unknown
+        );
+        assert_eq!(
+            classify_info_output(
+                "Device:\n  Model: Greaseweazle V4\n  Firmware: 1.23 (Bootloader)\n"
+            ),
+            GreaseweazleDeviceStatus::Bootloader
+        );
+        assert_eq!(
+            classify_info_output("Mock/no-hardware command accepted"),
+            GreaseweazleDeviceStatus::Unknown
+        );
+    }
 
     #[test]
     fn raw_flux_read_always_combines_format_with_raw_and_no_clobber() {

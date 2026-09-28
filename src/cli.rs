@@ -21,7 +21,8 @@ use crate::{
     external_tools::{self, ToolHealth, ToolKind},
     floppy::{self, FloppyDrive, WriteProtectionStatus},
     greaseweazle::{
-        GreaseweazleBackend, GreaseweazleCommand, GreaseweazleProfile, ProcessGreaseweazleBackend,
+        GreaseweazleBackend, GreaseweazleCommand, GreaseweazleDeviceStatus, GreaseweazleProfile,
+        ProcessGreaseweazleBackend, classify_info_output,
     },
     imaging,
     manifest::{self, ManifestRequest},
@@ -392,10 +393,14 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             )?;
             let mut backend = ProcessGreaseweazleBackend::new(executable, audit_path)?;
             let execution = backend.execute(&GreaseweazleCommand::info())?;
-            needs_attention = !execution.success;
+            let device_status = classify_info_output(&execution.stdout);
+            needs_attention =
+                !execution.success || device_status != GreaseweazleDeviceStatus::Connected;
             if json_output {
                 Ok(json!({
                     "success": execution.success,
+                    "ready": !needs_attention,
+                    "device_status": device_status.as_str(),
                     "exit_code": execution.exit_code,
                     "stdout": execution.stdout,
                     "stderr": execution.stderr,
@@ -406,7 +411,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 Ok(format!(
                     "Greaseweazle info: {} (exit {:?})\n{}{}",
                     if execution.success {
-                        "ready"
+                        if needs_attention {
+                            "device not found/unverified"
+                        } else {
+                            "ready"
+                        }
                     } else {
                         "attention required"
                     },

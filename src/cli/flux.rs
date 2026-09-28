@@ -5,7 +5,10 @@ use serde_json::json;
 use crate::{
     external_tools::{self, ToolKind},
     flux_capture::{self, CaptureRequest},
-    greaseweazle::{GreaseweazleProfile, ProcessGreaseweazleBackend},
+    greaseweazle::{
+        GreaseweazleBackend, GreaseweazleCommand, GreaseweazleDeviceStatus, GreaseweazleProfile,
+        ProcessGreaseweazleBackend, classify_info_output,
+    },
     imaging,
     project::ProjectState,
 };
@@ -36,6 +39,7 @@ pub(super) fn capture(
         &audit_path,
     )?;
     let mut backend = ProcessGreaseweazleBackend::new(executable, audit_path)?;
+    verify_device_for_capture(&mut backend)?;
     eprintln!(
         "READ ONLY: preserving raw flux for disk {disk_number:03} on Greaseweazle drive {drive} ({}; {revolutions} revolutions)",
         profile.argument()
@@ -76,6 +80,20 @@ pub(super) fn capture(
         },
         exit_code: 0,
     })
+}
+
+fn verify_device_for_capture(backend: &mut impl GreaseweazleBackend) -> Result<(), String> {
+    let info = backend.execute(&GreaseweazleCommand::info())?;
+    match (info.success, classify_info_output(&info.stdout)) {
+        (true, GreaseweazleDeviceStatus::Connected) => Ok(()),
+        (true, GreaseweazleDeviceStatus::NotFound) => {
+            Err("No Greaseweazle board was found; no capture attempt was started".to_owned())
+        }
+        _ => Err(format!(
+            "Greaseweazle board status could not be verified; no capture attempt was started: {} {}",
+            info.stdout, info.stderr
+        )),
+    }
 }
 
 pub(super) fn decode(
@@ -299,6 +317,7 @@ fn infer_profile(project: &ProjectState, disk_number: u32) -> Result<Greaseweazl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::greaseweazle::MockGreaseweazleBackend;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -330,5 +349,17 @@ mod tests {
                 .is_none()
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_board_preflight_never_issues_a_read_command() {
+        let mut backend = MockGreaseweazleBackend::default();
+        assert!(
+            verify_device_for_capture(&mut backend)
+                .unwrap_err()
+                .contains("could not be verified")
+        );
+        assert_eq!(backend.commands().len(), 1);
+        assert_eq!(backend.commands()[0].arguments(), &["info".to_owned()]);
     }
 }
