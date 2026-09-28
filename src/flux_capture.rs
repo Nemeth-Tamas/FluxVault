@@ -1,6 +1,7 @@
 //! Immutable raw-flux captures and separately derived, unverified sector images.
 
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -11,7 +12,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     greaseweazle::{GreaseweazleBackend, GreaseweazleCommand, GreaseweazleProfile},
+    imaging,
     project::ProjectState,
+    recovery_plan,
     safety::MediaSafetyPolicy,
 };
 
@@ -105,6 +108,7 @@ pub struct DecodeInspection {
     pub profile: String,
     pub metadata: PathBuf,
     pub image: PathBuf,
+    pub output_sha256: String,
     pub output_hash_matches: bool,
     pub source_hash_matches: bool,
     pub gw_reported_found_sectors: Option<usize>,
@@ -120,6 +124,163 @@ pub struct FluxDiskStatus {
     pub decodes: Vec<DecodeInspection>,
     pub evidence_healthy: bool,
     pub attention_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FluxComparison {
+    pub disk_number: u32,
+    pub usb_attempt: u32,
+    pub usb_image: PathBuf,
+    pub usb_sha256: String,
+    pub capture_attempt: u32,
+    pub decode_attempt: u32,
+    pub flux_image: PathBuf,
+    pub flux_sha256: String,
+    pub total_sectors: usize,
+    pub usb_bad_lbas: Vec<u64>,
+    pub gw_reported_bad_lbas: Vec<u64>,
+    pub candidate_flux_donor_lbas: Vec<u64>,
+    pub usb_only_good_lbas: Vec<u64>,
+    pub unresolved_lbas: Vec<u64>,
+    pub conflicting_good_lbas: Vec<u64>,
+    pub matching_good_sectors: usize,
+    pub no_reported_good_byte_conflicts: bool,
+    pub physical_media_access: bool,
+}
+
+/// Compare saved USB and Greaseweazle evidence without promoting either image.
+/// A Greaseweazle dot in the complete grid is vendor-reported, not proof of
+/// independently validated bytes; candidates require further validation.
+pub fn compare_with_usb(
+    project: &ProjectState,
+    disk_number: u32,
+) -> Result<FluxComparison, String> {
+    let images_dir = project.images_dir();
+    let attempts = imaging::load_attempts_for_disk(&images_dir, disk_number)?;
+    let usb = attempts
+        .iter()
+        .filter(|attempt| attempt.total_sectors > 0)
+        .min_by_key(|attempt| {
+            (
+                attempt.bad_sectors.len(),
+                std::cmp::Reverse(attempt.attempt_number),
+            )
+        })
+        .ok_or_else(|| format!("No saved USB image for disk {disk_number:03}"))?;
+    let usb_path = recovery_plan::resolve_image_path(&images_dir, &usb.image_file)?;
+    let status = inspect_disk(project, disk_number)?;
+    let flux = status
+        .decodes
+        .last()
+        .ok_or_else(|| format!("No saved Greaseweazle decode for disk {disk_number:03}"))?;
+    if !flux.output_hash_matches || !flux.source_hash_matches {
+        return Err(
+            "Latest Greaseweazle decode or its raw capture changed; comparison refused".to_owned(),
+        );
+    }
+    let gw_bad = flux.gw_bad_lbas.as_ref().ok_or(
+        "Latest Greaseweazle decode lacks a complete, consistent sector map; comparison refused",
+    )?;
+    let expected_sectors = match flux.profile.as_str() {
+        "ibm.1440" => 2880usize,
+        "ibm.720" => 1440usize,
+        _ => return Err("Unsupported Greaseweazle sector profile".to_owned()),
+    };
+    if usb.total_sectors != expected_sectors
+        || flux.gw_reported_total_sectors != Some(expected_sectors)
+        || flux.gw_reported_found_sectors != Some(expected_sectors - gw_bad.len())
+    {
+        return Err("USB and Greaseweazle geometry or sector counts disagree".to_owned());
+    }
+    let flux_dir = project_flux_dir(project)?;
+    let derived_dir = resolve_derived_dir(&flux_dir, false)?;
+    let flux_image = flux
+        .image
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if flux_image.parent() != Some(derived_dir.as_path()) {
+        return Err("Decoded image escapes the project's Flux/Derived directory".to_owned());
+    }
+    let usb_bytes = read_regular_sector_image(&usb_path, expected_sectors)?;
+    let flux_bytes = read_regular_sector_image(&flux_image, expected_sectors)?;
+    let usb_sha256 = sha256_bytes(&usb_bytes);
+    if !usb_sha256.eq_ignore_ascii_case(&usb.sha256) {
+        return Err("Saved USB image changed since acquisition; comparison refused".to_owned());
+    }
+    let flux_sha256 = sha256_bytes(&flux_bytes);
+    if !flux_sha256.eq_ignore_ascii_case(&flux.output_sha256) {
+        return Err("Decoded Greaseweazle image changed during comparison".to_owned());
+    }
+    let usb_bad = validated_bad_set(&usb.bad_sectors, expected_sectors, "USB")?;
+    let gw_bad_set = validated_bad_set(gw_bad, expected_sectors, "Greaseweazle")?;
+    let mut candidate_flux_donor_lbas = Vec::new();
+    let mut usb_only_good_lbas = Vec::new();
+    let mut unresolved_lbas = Vec::new();
+    let mut conflicting_good_lbas = Vec::new();
+    let mut matching_good_sectors = 0;
+    for lba in 0..expected_sectors {
+        let usb_bad_here = usb_bad.contains(&(lba as u64));
+        let gw_bad_here = gw_bad_set.contains(&(lba as u64));
+        match (usb_bad_here, gw_bad_here) {
+            (true, false) => candidate_flux_donor_lbas.push(lba as u64),
+            (false, true) => usb_only_good_lbas.push(lba as u64),
+            (true, true) => unresolved_lbas.push(lba as u64),
+            (false, false) => {
+                let range = lba * 512..(lba + 1) * 512;
+                if usb_bytes[range.clone()] == flux_bytes[range] {
+                    matching_good_sectors += 1;
+                } else {
+                    conflicting_good_lbas.push(lba as u64);
+                }
+            }
+        }
+    }
+    Ok(FluxComparison {
+        disk_number,
+        usb_attempt: usb.attempt_number,
+        usb_image: usb_path,
+        usb_sha256,
+        capture_attempt: flux.capture_attempt,
+        decode_attempt: flux.decode_attempt,
+        flux_image,
+        flux_sha256,
+        total_sectors: expected_sectors,
+        usb_bad_lbas: usb_bad.into_iter().collect(),
+        gw_reported_bad_lbas: gw_bad_set.into_iter().collect(),
+        no_reported_good_byte_conflicts: conflicting_good_lbas.is_empty(),
+        candidate_flux_donor_lbas,
+        usb_only_good_lbas,
+        unresolved_lbas,
+        conflicting_good_lbas,
+        matching_good_sectors,
+        physical_media_access: false,
+    })
+}
+
+fn read_regular_sector_image(path: &Path, sectors: usize) -> Result<Vec<u8>, String> {
+    let info = fs::symlink_metadata(path)
+        .map_err(|error| format!("Cannot inspect image {}: {error}", path.display()))?;
+    if !info.file_type().is_file() || info.len() != (sectors * 512) as u64 {
+        return Err(format!(
+            "Image is not a regular {sectors}-sector file: {}",
+            path.display()
+        ));
+    }
+    fs::read(path).map_err(|error| format!("Cannot read image {}: {error}", path.display()))
+}
+
+fn validated_bad_set(lbas: &[u64], sectors: usize, label: &str) -> Result<BTreeSet<u64>, String> {
+    let set = lbas.iter().copied().collect::<BTreeSet<_>>();
+    if set.len() != lbas.len() || set.iter().any(|lba| *lba >= sectors as u64) {
+        return Err(format!(
+            "{label} bad-sector map has duplicates or out-of-range LBAs"
+        ));
+    }
+    Ok(set)
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDiskStatus, String> {
@@ -177,7 +338,8 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
 
     let mut decodes = Vec::new();
     let derived_dir = flux_dir.join("Derived");
-    if derived_dir.is_dir() {
+    if derived_dir.exists() {
+        let derived_dir = resolve_derived_dir(&flux_dir, false)?;
         for entry in fs::read_dir(&derived_dir)
             .map_err(|error| format!("Cannot list decoded images: {error}"))?
         {
@@ -231,6 +393,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 profile: record.profile,
                 metadata,
                 image,
+                output_sha256: record.output_sha256,
                 output_hash_matches,
                 source_hash_matches,
                 gw_reported_found_sectors: record.reported_found_sectors,
@@ -425,9 +588,7 @@ pub fn decode(
         Some(profile) => profile,
         None => GreaseweazleProfile::parse(&record.profile)?,
     };
-    let derived_dir = flux_dir.join("Derived");
-    fs::create_dir_all(&derived_dir)
-        .map_err(|error| format!("Cannot create derived-image directory: {error}"))?;
+    let derived_dir = resolve_derived_dir(&flux_dir, true)?;
     let profile_slug = profile.argument().replace('.', "_");
     let prefix = format!("{disk_number:03}_flux_{capture_attempt:03}_{profile_slug}");
     let decode_attempt = next_decode_attempt(&derived_dir, &prefix)?;
@@ -606,6 +767,21 @@ fn project_flux_dir(project: &ProjectState) -> Result<PathBuf, String> {
         return Err("Flux directory escapes the project root".to_owned());
     }
     Ok(flux_dir)
+}
+
+fn resolve_derived_dir(flux_dir: &Path, create: bool) -> Result<PathBuf, String> {
+    let derived_dir = flux_dir.join("Derived");
+    if create {
+        fs::create_dir_all(&derived_dir)
+            .map_err(|error| format!("Cannot create derived-image directory: {error}"))?;
+    }
+    let resolved = derived_dir
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve derived-image directory: {error}"))?;
+    if resolved.parent() != Some(flux_dir) {
+        return Err("Derived-image directory escapes the project's Flux directory".to_owned());
+    }
+    Ok(resolved)
 }
 
 fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, String> {
@@ -921,5 +1097,66 @@ mod tests {
             parse_sector_map(&unknown_cell, GreaseweazleProfile::Ibm1440),
             None
         );
+    }
+
+    #[test]
+    fn offline_comparison_keeps_donor_candidates_separate_from_conflicts() {
+        let (project, root) = fixture();
+        let mut backend = ArtifactBackend::default();
+        let captured = capture(
+            &project,
+            CaptureRequest {
+                disk_number: 7,
+                profile: GreaseweazleProfile::Ibm720,
+                drive: 'A',
+                revolutions: 3,
+            },
+            &mut backend,
+        )
+        .unwrap();
+        decode(&project, 7, captured.attempt_number, None, &mut backend).unwrap();
+        let image_name = "007_attempt_001.img";
+        let image_path = project.images_dir().join(image_name);
+        let mut bytes = vec![0x33; 737_280];
+        bytes[2 * 512] = 0;
+        fs::write(&image_path, &bytes).unwrap();
+        let metadata = serde_json::json!({
+            "fluxvault_version": "test", "status": "PARTIAL", "disk_number": 7,
+            "attempt_number": 1, "source_device": "synthetic",
+            "image_file": image_name, "timestamp_unix_ms": 1,
+            "geometry": {"cylinders": 80, "heads": 2, "sectors_per_track": 9,
+                "bytes_per_sector": 512, "total_bytes": 737280, "format_guess": "720KB"},
+            "sector_retries": 2, "total_sectors": 1440, "bytes_written": 737280,
+            "retry_recovered_sectors": 0, "bad_sector_count": 2,
+            "bad_sectors": [
+                {"lba": 2, "cylinder": 0, "head": 0, "sector": 3},
+                {"lba": 711, "cylinder": 39, "head": 1, "sector": 1}
+            ],
+            "sha256": sha256_bytes(&bytes)
+        });
+        let metadata_path = project.images_dir().join("007_attempt_001.json");
+        fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        let comparison = compare_with_usb(&project, 7).unwrap();
+        assert_eq!(comparison.candidate_flux_donor_lbas, vec![2]);
+        assert_eq!(comparison.unresolved_lbas, vec![711]);
+        assert!(comparison.conflicting_good_lbas.is_empty());
+        assert_eq!(comparison.matching_good_sectors, 1438);
+        assert!(comparison.no_reported_good_byte_conflicts);
+
+        bytes[3 * 512] = 0x44;
+        fs::write(&image_path, &bytes).unwrap();
+        assert!(
+            compare_with_usb(&project, 7)
+                .unwrap_err()
+                .contains("changed")
+        );
+        let mut metadata = metadata;
+        metadata["sha256"] = serde_json::json!(sha256_bytes(&bytes));
+        fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        let conflict = compare_with_usb(&project, 7).unwrap();
+        assert_eq!(conflict.conflicting_good_lbas, vec![3]);
+        assert!(!conflict.no_reported_good_byte_conflicts);
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

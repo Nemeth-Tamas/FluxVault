@@ -198,6 +198,8 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [x] Add CLI raw-SCP capture and offline decode routes with mock-backed artifact tests, immutable attempt numbering, SHA-256 provenance, and source-hash refusal; do not call them live-validated before the board arrives.
 - [x] `greaseweazle status N` verifies saved raw/derived hashes without hardware and distinguishes Greaseweazle's reported sector count from independently validated sector quality.
 - [x] Conservatively parse exact missing LBAs from a complete, internally consistent IBM 80-cylinder `gw convert` grid; reject truncated/ambiguous grids and retain the result as vendor-reported evidence only.
+- [x] Compare best hash-verified USB image with latest hash-verified decoded flux image offline, reporting byte conflicts and donor candidates without promoting either source.
+- [ ] Validate Greaseweazle donor-sector bytes independently (including repeated flux decodes/captures where needed), then create an immutable provenance-tracked composite only when good-sector conflicts are resolved; never claim vendor-reported dots alone prove clean bytes.
 - [ ] Parse `gw` stderr/stdout incrementally into CLI progress/events.
 - [ ] Store full command, version, start/end time, exit status, and captured output for every run.
 - [ ] Add a clear “hardware not connected” CLI status rather than error-spamming.

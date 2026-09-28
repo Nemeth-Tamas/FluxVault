@@ -213,6 +213,36 @@ pub(super) fn status(
     })
 }
 
+pub(super) fn compare(
+    project: &ProjectState,
+    disk_number: u32,
+    json_output: bool,
+) -> Result<CliResponse, String> {
+    let comparison = flux_capture::compare_with_usb(project, disk_number)?;
+    let attention = !comparison.unresolved_lbas.is_empty()
+        || !comparison.conflicting_good_lbas.is_empty()
+        || !comparison.candidate_flux_donor_lbas.is_empty();
+    let output = if json_output {
+        serde_json::to_string(&comparison).map_err(|error| error.to_string())?
+    } else {
+        format!(
+            "Disk {disk_number:03}: USB attempt #{:03} vs Greaseweazle capture #{:03}/decode #{:03}\nMatching sectors reported good by both: {}\nUSB-bad, Greaseweazle-reported good (donor candidates only): {:?}\nUSB-good, Greaseweazle-reported bad: {:?}\nBad in both: {:?}\nConflicting bytes in sectors reported good by both: {:?}\nNo files or media changed. Greaseweazle's sector map is vendor-reported evidence; donor bytes are not yet certified or merged.",
+            comparison.usb_attempt,
+            comparison.capture_attempt,
+            comparison.decode_attempt,
+            comparison.matching_good_sectors,
+            comparison.candidate_flux_donor_lbas,
+            comparison.usb_only_good_lbas,
+            comparison.unresolved_lbas,
+            comparison.conflicting_good_lbas
+        )
+    };
+    Ok(CliResponse {
+        output,
+        exit_code: if attention { 3 } else { 0 },
+    })
+}
+
 fn infer_profile(project: &ProjectState, disk_number: u32) -> Result<GreaseweazleProfile, String> {
     let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
     attempts

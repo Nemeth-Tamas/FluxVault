@@ -67,6 +67,7 @@ Usage:
   fluxvault greaseweazle decode N [--capture-attempt N] [--profile ibm.1440|ibm.720]
                                     Decode saved SCP offline; result remains unverified
   fluxvault greaseweazle status N   Verify saved flux/decode evidence without hardware
+  fluxvault greaseweazle compare N  Compare saved USB and flux sectors offline, read-only
   fluxvault extract all [--project PATH]
                                     Process saved images with the extraction service
   fluxvault extract disk N [--project PATH]
@@ -458,6 +459,18 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             return flux::status(&project, disk_number, json_output);
+        }
+        Some("greaseweazle")
+            if positional.len() == 3 && positional[1] == "compare" && destination.is_none() =>
+        {
+            let disk_number = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or("greaseweazle compare requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            return flux::compare(&project, disk_number, json_output);
         }
         Some("init") if positional.len() <= 2 && project_override.is_none() => {
             let root = positional
