@@ -67,6 +67,8 @@ struct DecodeRecord {
     output_sha256: String,
     bytes: u64,
     status: String,
+    #[serde(default)]
+    detail: Option<String>,
     command: Vec<String>,
     #[serde(default)]
     reported_found_sectors: Option<usize>,
@@ -115,6 +117,7 @@ pub struct DecodeInspection {
     pub gw_reported_total_sectors: Option<usize>,
     pub gw_bad_lbas: Option<Vec<u64>>,
     pub sector_quality: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -449,6 +452,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
             if !name.starts_with(&format!("{disk_number:03}_flux_")) || !name.ends_with(".json") {
                 continue;
             }
+            let partial = name.ends_with(".partial.json");
             let metadata = entry.path();
             let record: DecodeRecord =
                 serde_json::from_slice(&fs::read(&metadata).map_err(|error| {
@@ -472,20 +476,27 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 record.profile.replace('.', "_"),
                 record.decode_attempt
             );
-            if record.output_file != expected_name {
+            let expected_metadata_name = format!(
+                "{}{}",
+                expected_name.trim_end_matches(".img"),
+                if partial { ".partial.json" } else { ".json" }
+            );
+            if record.output_file != expected_name || name != expected_metadata_name {
                 return Err(format!(
-                    "Unexpected decoded-image filename in {}",
+                    "Unexpected decode artifact filename in {}",
                     metadata.display()
                 ));
             }
             let image = derived_dir.join(&record.output_file);
-            let output_hash_matches = fs::symlink_metadata(&image)
-                .ok()
-                .is_some_and(|info| info.file_type().is_file() && info.len() == record.bytes)
+            let output_hash_matches = !partial
+                && fs::symlink_metadata(&image)
+                    .ok()
+                    .is_some_and(|info| info.file_type().is_file() && info.len() == record.bytes)
                 && hash_file(&image).ok().as_deref() == Some(record.output_sha256.as_str());
             let expected_source =
                 format!("{disk_number:03}_attempt_{:03}.scp", record.capture_attempt);
-            let source_hash_matches = record.source_flux_file == expected_source
+            let source_hash_matches = !partial
+                && record.source_flux_file == expected_source
                 && captures.iter().any(|capture| {
                     capture.attempt == record.capture_attempt
                         && capture.hash_matches
@@ -506,6 +517,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 gw_reported_total_sectors: record.reported_total_sectors,
                 gw_bad_lbas: record.gw_bad_lbas,
                 sector_quality: record.status,
+                detail: record.detail,
             });
         }
     }
@@ -709,25 +721,77 @@ pub fn decode(
     let partial_image = derived_dir.join(format!("{derived_stem}.partial.img"));
     let final_image = derived_dir.join(format!("{derived_stem}.img"));
     let final_metadata = derived_dir.join(format!("{derived_stem}.json"));
+    let partial_metadata = derived_dir.join(format!("{derived_stem}.partial.json"));
     let command =
         GreaseweazleCommand::convert_flux_to_sector_image(profile, &input, &partial_image)?;
-    if final_image.exists() || final_metadata.exists() || partial_image.exists() {
+    if final_image.exists()
+        || final_metadata.exists()
+        || partial_image.exists()
+        || partial_metadata.exists()
+    {
         return Err("Decode destination already exists; refusing to overwrite".to_owned());
     }
-    let execution = backend.execute(&command)?;
+    let mut decode_record = DecodeRecord {
+        schema_version: SCHEMA_VERSION,
+        disk_number,
+        capture_attempt,
+        decode_attempt,
+        profile: profile.argument().to_owned(),
+        source_flux_file: flux_file.to_owned(),
+        source_sha256: source_hash.to_owned(),
+        output_file: format!("{derived_stem}.img"),
+        output_sha256: String::new(),
+        bytes: 0,
+        status: "started".to_owned(),
+        detail: None,
+        command: command.arguments().to_vec(),
+        reported_found_sectors: None,
+        reported_total_sectors: None,
+        gw_bad_lbas: None,
+    };
+    reserve_decode_record(&partial_metadata, &decode_record)?;
+    let execution = match backend.execute(&command) {
+        Ok(execution) => execution,
+        Err(error) => {
+            decode_record.status = "failed".to_owned();
+            decode_record.detail = Some(error.clone());
+            save_decode_record(&partial_metadata, &decode_record)?;
+            return Err(format!(
+                "Greaseweazle decode failed; partial evidence remains at {}: {error}",
+                partial_metadata.display()
+            ));
+        }
+    };
     if !execution.success {
+        decode_record.status = "failed".to_owned();
+        decode_record.detail = Some(format!(
+            "gw exited {:?}: {} {}",
+            execution.exit_code, execution.stdout, execution.stderr
+        ));
+        save_decode_record(&partial_metadata, &decode_record)?;
         return Err(format!(
-            "Greaseweazle decode failed (exit {:?}); any partial image remains at {}: {} {}",
+            "Greaseweazle decode failed (exit {:?}); partial evidence remains at {} and {}: {} {}",
             execution.exit_code,
             partial_image.display(),
+            partial_metadata.display(),
             execution.stdout,
             execution.stderr
         ));
     }
-    let bytes = fs::metadata(&partial_image)
-        .map_err(|error| format!("Successful gw convert produced no image: {error}"))?
-        .len();
+    let bytes = match fs::metadata(&partial_image) {
+        Ok(info) => info.len(),
+        Err(error) => {
+            decode_record.status = "failed".to_owned();
+            decode_record.detail =
+                Some(format!("Successful gw convert produced no image: {error}"));
+            save_decode_record(&partial_metadata, &decode_record)?;
+            return Err(decode_record.detail.unwrap());
+        }
+    };
     if bytes != profile.expected_sector_image_bytes() {
+        decode_record.status = "failed".to_owned();
+        decode_record.detail = Some(format!("Unexpected decoded image size: {bytes} bytes"));
+        save_decode_record(&partial_metadata, &decode_record)?;
         return Err(format!(
             "Decoded image has {bytes} bytes, expected {}; partial evidence remains at {}",
             profile.expected_sector_image_bytes(),
@@ -741,31 +805,15 @@ pub fn decode(
         .or_else(|| parse_sector_map(&execution.stderr, profile));
     fs::rename(&partial_image, &final_image)
         .map_err(|error| format!("Cannot finalize decoded image: {error}"))?;
-    let decode_record = DecodeRecord {
-        schema_version: SCHEMA_VERSION,
-        disk_number,
-        capture_attempt,
-        decode_attempt,
-        profile: profile.argument().to_owned(),
-        source_flux_file: flux_file.to_owned(),
-        source_sha256: source_hash.to_owned(),
-        output_file: format!("{derived_stem}.img"),
-        output_sha256: output_hash.clone(),
-        bytes,
-        status: "unverified_sector_quality".to_owned(),
-        command: command.arguments().to_vec(),
-        reported_found_sectors: reported_sectors.map(|(found, _)| found),
-        reported_total_sectors: reported_sectors.map(|(_, total)| total),
-        gw_bad_lbas: gw_bad_lbas.clone(),
-    };
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&final_metadata)
-        .map_err(|error| format!("Cannot create decode metadata: {error}"))?;
-    output
-        .write_all(&serde_json::to_vec_pretty(&decode_record).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("Cannot save decode metadata: {error}"))?;
+    decode_record.output_sha256 = output_hash.clone();
+    decode_record.bytes = bytes;
+    decode_record.status = "unverified_sector_quality".to_owned();
+    decode_record.reported_found_sectors = reported_sectors.map(|(found, _)| found);
+    decode_record.reported_total_sectors = reported_sectors.map(|(_, total)| total);
+    decode_record.gw_bad_lbas = gw_bad_lbas.clone();
+    save_decode_record(&partial_metadata, &decode_record)?;
+    fs::rename(&partial_metadata, &final_metadata)
+        .map_err(|error| format!("Cannot finalize decode metadata: {error}"))?;
     Ok(DecodeResult {
         disk_number,
         capture_attempt,
@@ -913,7 +961,7 @@ fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, Strin
 fn next_decode_attempt(directory: &Path, prefix: &str) -> Result<u32, String> {
     for attempt in 1..=999_999u32 {
         let stem = format!("{prefix}_decode_{attempt:03}");
-        if [".img", ".partial.img", ".json"]
+        if [".img", ".partial.img", ".json", ".partial.json"]
             .iter()
             .all(|suffix| !directory.join(format!("{stem}{suffix}")).exists())
         {
@@ -932,6 +980,25 @@ fn reserve_record(path: &Path, record: &CaptureRecord) -> Result<(), String> {
     output
         .write_all(&serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?)
         .map_err(|error| format!("Cannot record capture attempt: {error}"))
+}
+
+fn reserve_decode_record(path: &Path, record: &DecodeRecord) -> Result<(), String> {
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("Cannot reserve decode attempt: {error}"))?;
+    output
+        .write_all(&serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("Cannot record decode attempt: {error}"))
+}
+
+fn save_decode_record(path: &Path, record: &DecodeRecord) -> Result<(), String> {
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("Cannot update decode metadata: {error}"))
 }
 
 fn save_record(path: &Path, record: &CaptureRecord) -> Result<(), String> {
@@ -1131,6 +1198,43 @@ mod tests {
         let status = inspect_disk(&project, 1).unwrap();
         assert!(!status.evidence_healthy);
         assert_eq!(status.captures.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_decode_keeps_metadata_and_uses_a_new_attempt_number() {
+        let (project, root) = fixture();
+        let mut backend = ArtifactBackend::default();
+        let captured = capture(
+            &project,
+            CaptureRequest {
+                disk_number: 3,
+                profile: GreaseweazleProfile::Ibm720,
+                drive: 'A',
+                revolutions: 3,
+            },
+            &mut backend,
+        )
+        .unwrap();
+        backend.fail = true;
+        assert!(
+            decode(&project, 3, captured.attempt_number, None, &mut backend)
+                .unwrap_err()
+                .contains("partial evidence")
+        );
+        let status = inspect_disk(&project, 3).unwrap();
+        assert!(!status.evidence_healthy);
+        assert_eq!(status.decodes.len(), 1);
+        assert_eq!(status.decodes[0].sector_quality, "failed");
+        assert!(
+            status.decodes[0]
+                .metadata
+                .ends_with("003_flux_001_ibm_720_decode_001.partial.json")
+        );
+        backend.fail = false;
+        let success = decode(&project, 3, captured.attempt_number, None, &mut backend).unwrap();
+        assert_eq!(success.decode_attempt, 2);
+        assert!(status.decodes[0].metadata.is_file());
         fs::remove_dir_all(root).unwrap();
     }
 

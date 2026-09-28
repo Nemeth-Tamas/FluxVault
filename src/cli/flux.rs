@@ -188,10 +188,11 @@ pub(super) fn status(
         }
         for decode in &status.decodes {
             lines.push(format!(
-                "  Decode of raw #{:03}, pass #{:03} ({}): output hash {}, source hash {}, gw sectors {}, bad-LBA map {}",
+                "  Decode of raw #{:03}, pass #{:03} ({}): {}, output hash {}, source hash {}, gw sectors {}, bad-LBA map {}{}",
                 decode.capture_attempt,
                 decode.decode_attempt,
                 decode.profile,
+                decode.sector_quality,
                 if decode.output_hash_matches { "OK" } else { "MISSING/CHANGED" },
                 if decode.source_hash_matches { "OK" } else { "MISSING/CHANGED" },
                 match (decode.gw_reported_found_sectors, decode.gw_reported_total_sectors) {
@@ -202,7 +203,12 @@ pub(super) fn status(
                     .gw_bad_lbas
                     .as_ref()
                     .map(|bad| format!("{} missing", bad.len()))
-                    .unwrap_or_else(|| "unknown".to_owned())
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                decode
+                    .detail
+                    .as_ref()
+                    .map(|detail| format!("; {detail}"))
+                    .unwrap_or_default()
             ));
         }
         lines.join("\n")
