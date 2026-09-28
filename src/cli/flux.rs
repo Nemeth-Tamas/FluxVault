@@ -117,21 +117,87 @@ pub(super) fn decode(
                 "metadata": result.metadata_path,
                 "bytes": result.bytes,
                 "sha256": result.sha256,
+                "gw_reported_found_sectors": result.reported_sectors.map(|(found, _)| found),
+                "gw_reported_total_sectors": result.reported_sectors.map(|(_, total)| total),
                 "sector_quality": "unverified",
                 "physical_media_access": false
             })
             .to_string()
         } else {
             format!(
-                "Offline decode {:03} capture #{:03}, decode #{:03}: {} bytes\nImage: {}\nSHA-256: {}\nSector quality is not yet verified; this image is not automatically promoted for extraction.",
+                "Offline decode {:03} capture #{:03}, decode #{:03}: {} bytes\nImage: {}\nSHA-256: {}\nGreaseweazle reported sectors: {}\nSector quality is not yet verified; this image is not automatically promoted for extraction.",
                 result.disk_number,
                 result.capture_attempt,
                 result.decode_attempt,
                 result.bytes,
                 result.image_path.display(),
-                result.sha256
+                result.sha256,
+                result
+                    .reported_sectors
+                    .map(|(found, total)| format!("{found}/{total}"))
+                    .unwrap_or_else(|| "unavailable".to_owned())
             )
         },
+        exit_code: 3,
+    })
+}
+
+pub(super) fn status(
+    project: &ProjectState,
+    disk_number: u32,
+    json_output: bool,
+) -> Result<CliResponse, String> {
+    let status = flux_capture::inspect_disk(project, disk_number)?;
+    let output = if json_output {
+        json!({
+            "disk": status.disk_number,
+            "captures": status.captures,
+            "decodes": status.decodes,
+            "evidence_healthy": status.evidence_healthy,
+            "attention_required": status.attention_required,
+            "physical_media_access": false
+        })
+        .to_string()
+    } else {
+        let mut lines = vec![format!(
+            "Greaseweazle disk {disk_number:03}: evidence {}, sector quality not yet certified",
+            if status.evidence_healthy {
+                "intact"
+            } else {
+                "NEEDS ATTENTION"
+            }
+        )];
+        for capture in &status.captures {
+            lines.push(format!(
+                "  Raw #{:03}: {} | hash {} | {}",
+                capture.attempt,
+                capture.status,
+                if capture.hash_matches {
+                    "OK"
+                } else {
+                    "MISSING/CHANGED"
+                },
+                capture.metadata.display()
+            ));
+        }
+        for decode in &status.decodes {
+            lines.push(format!(
+                "  Decode of raw #{:03}, pass #{:03} ({}): output hash {}, source hash {}, gw sectors {}",
+                decode.capture_attempt,
+                decode.decode_attempt,
+                decode.profile,
+                if decode.output_hash_matches { "OK" } else { "MISSING/CHANGED" },
+                if decode.source_hash_matches { "OK" } else { "MISSING/CHANGED" },
+                match (decode.gw_reported_found_sectors, decode.gw_reported_total_sectors) {
+                    (Some(found), Some(total)) => format!("{found}/{total}"),
+                    _ => "unavailable".to_owned(),
+                }
+            ));
+        }
+        lines.join("\n")
+    };
+    Ok(CliResponse {
+        output,
         exit_code: 3,
     })
 }

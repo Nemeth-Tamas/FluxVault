@@ -65,6 +65,10 @@ struct DecodeRecord {
     bytes: u64,
     status: String,
     command: Vec<String>,
+    #[serde(default)]
+    reported_found_sectors: Option<usize>,
+    #[serde(default)]
+    reported_total_sectors: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +80,178 @@ pub struct DecodeResult {
     pub metadata_path: PathBuf,
     pub bytes: u64,
     pub sha256: String,
+    pub reported_sectors: Option<(usize, usize)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CaptureInspection {
+    pub attempt: u32,
+    pub status: String,
+    pub profile: Option<String>,
+    pub metadata: PathBuf,
+    pub raw_flux: Option<PathBuf>,
+    pub bytes: Option<u64>,
+    pub sha256: Option<String>,
+    pub hash_matches: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DecodeInspection {
+    pub capture_attempt: u32,
+    pub decode_attempt: u32,
+    pub profile: String,
+    pub metadata: PathBuf,
+    pub image: PathBuf,
+    pub output_hash_matches: bool,
+    pub source_hash_matches: bool,
+    pub gw_reported_found_sectors: Option<usize>,
+    pub gw_reported_total_sectors: Option<usize>,
+    pub sector_quality: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FluxDiskStatus {
+    pub disk_number: u32,
+    pub captures: Vec<CaptureInspection>,
+    pub decodes: Vec<DecodeInspection>,
+    pub evidence_healthy: bool,
+    pub attention_required: bool,
+}
+
+pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDiskStatus, String> {
+    if disk_number == 0 {
+        return Err("Greaseweazle status requires a positive disk number".to_owned());
+    }
+    let flux_dir = project_flux_dir(project)?;
+    let prefix = format!("{disk_number:03}_attempt_");
+    let mut captures = Vec::new();
+    for entry in fs::read_dir(&flux_dir)
+        .map_err(|error| format!("Cannot list raw-flux captures: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Cannot inspect raw-flux capture: {error}"))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let partial = name.ends_with(".partial.json");
+        let number_text = name
+            .strip_prefix(&prefix)
+            .and_then(|name| name.strip_suffix(if partial { ".partial.json" } else { ".json" }));
+        let Some(attempt) = number_text.and_then(|number| number.parse::<u32>().ok()) else {
+            continue;
+        };
+        let metadata = entry.path();
+        let record = fs::read(&metadata)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<CaptureRecord>(&bytes).ok());
+        let expected_raw = flux_dir.join(format!("{disk_number:03}_attempt_{attempt:03}.scp"));
+        let hash_matches = record.as_ref().is_some_and(|record| {
+            !partial
+                && record.schema_version == SCHEMA_VERSION
+                && record.disk_number == disk_number
+                && record.attempt_number == attempt
+                && record.status == "complete"
+                && record.flux_file.as_deref()
+                    == expected_raw.file_name().and_then(|name| name.to_str())
+                && fs::metadata(&expected_raw)
+                    .ok()
+                    .is_some_and(|info| Some(info.len()) == record.bytes)
+                && record.sha256.as_deref() == hash_file(&expected_raw).ok().as_deref()
+        });
+        captures.push(CaptureInspection {
+            attempt,
+            status: record
+                .as_ref()
+                .map(|record| record.status.clone())
+                .unwrap_or_else(|| "invalid_metadata".to_owned()),
+            profile: record.as_ref().map(|record| record.profile.clone()),
+            metadata,
+            raw_flux: (!partial).then_some(expected_raw),
+            bytes: record.as_ref().and_then(|record| record.bytes),
+            sha256: record.as_ref().and_then(|record| record.sha256.clone()),
+            hash_matches,
+        });
+    }
+    captures.sort_by_key(|capture| capture.attempt);
+
+    let mut decodes = Vec::new();
+    let derived_dir = flux_dir.join("Derived");
+    if derived_dir.is_dir() {
+        for entry in fs::read_dir(&derived_dir)
+            .map_err(|error| format!("Cannot list decoded images: {error}"))?
+        {
+            let entry = entry.map_err(|error| format!("Cannot inspect decoded image: {error}"))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with(&format!("{disk_number:03}_flux_")) || !name.ends_with(".json") {
+                continue;
+            }
+            let metadata = entry.path();
+            let record: DecodeRecord =
+                serde_json::from_slice(&fs::read(&metadata).map_err(|error| {
+                    format!(
+                        "Cannot read decode metadata {}: {error}",
+                        metadata.display()
+                    )
+                })?)
+                .map_err(|error| {
+                    format!("Invalid decode metadata {}: {error}", metadata.display())
+                })?;
+            if record.disk_number != disk_number || record.schema_version != SCHEMA_VERSION {
+                return Err(format!(
+                    "Mismatched decode metadata: {}",
+                    metadata.display()
+                ));
+            }
+            let expected_name = format!(
+                "{disk_number:03}_flux_{:03}_{}_decode_{:03}.img",
+                record.capture_attempt,
+                record.profile.replace('.', "_"),
+                record.decode_attempt
+            );
+            if record.output_file != expected_name {
+                return Err(format!(
+                    "Unexpected decoded-image filename in {}",
+                    metadata.display()
+                ));
+            }
+            let image = derived_dir.join(&record.output_file);
+            let output_hash_matches = fs::metadata(&image)
+                .ok()
+                .is_some_and(|info| info.len() == record.bytes)
+                && hash_file(&image).ok().as_deref() == Some(record.output_sha256.as_str());
+            let expected_source =
+                format!("{disk_number:03}_attempt_{:03}.scp", record.capture_attempt);
+            let source_hash_matches = record.source_flux_file == expected_source
+                && hash_file(&flux_dir.join(&expected_source)).ok().as_deref()
+                    == Some(record.source_sha256.as_str());
+            decodes.push(DecodeInspection {
+                capture_attempt: record.capture_attempt,
+                decode_attempt: record.decode_attempt,
+                profile: record.profile,
+                metadata,
+                image,
+                output_hash_matches,
+                source_hash_matches,
+                gw_reported_found_sectors: record.reported_found_sectors,
+                gw_reported_total_sectors: record.reported_total_sectors,
+                sector_quality: record.status,
+            });
+        }
+    }
+    decodes.sort_by_key(|decode| (decode.capture_attempt, decode.decode_attempt));
+    if captures.is_empty() && decodes.is_empty() {
+        return Err(format!(
+            "No Greaseweazle artifacts for disk {disk_number:03}"
+        ));
+    }
+    let evidence_healthy = captures.iter().all(|capture| capture.hash_matches)
+        && decodes
+            .iter()
+            .all(|decode| decode.output_hash_matches && decode.source_hash_matches);
+    Ok(FluxDiskStatus {
+        disk_number,
+        captures,
+        decodes,
+        evidence_healthy,
+        attention_required: true, // Sector quality is not yet proven by FluxVault.
+    })
 }
 
 pub fn latest_capture_attempt(project: &ProjectState, disk_number: u32) -> Result<u32, String> {
@@ -280,6 +456,8 @@ pub fn decode(
         ));
     }
     let output_hash = hash_file(&partial_image)?;
+    let reported_sectors =
+        parse_sector_summary(&execution.stdout).or_else(|| parse_sector_summary(&execution.stderr));
     fs::rename(&partial_image, &final_image)
         .map_err(|error| format!("Cannot finalize decoded image: {error}"))?;
     let decode_record = DecodeRecord {
@@ -295,6 +473,8 @@ pub fn decode(
         bytes,
         status: "unverified_sector_quality".to_owned(),
         command: command.arguments().to_vec(),
+        reported_found_sectors: reported_sectors.map(|(found, _)| found),
+        reported_total_sectors: reported_sectors.map(|(_, total)| total),
     };
     let mut output = OpenOptions::new()
         .write(true)
@@ -312,6 +492,18 @@ pub fn decode(
         metadata_path: final_metadata,
         bytes,
         sha256: output_hash,
+        reported_sectors,
+    })
+}
+
+fn parse_sector_summary(output: &str) -> Option<(usize, usize)> {
+    output.lines().rev().find_map(|line| {
+        let line = line.trim();
+        let (found, rest) = line.strip_prefix("Found ")?.split_once(" sectors of ")?;
+        let (total, _) = rest.split_once(' ')?;
+        let found = found.parse::<usize>().ok()?;
+        let total = total.parse::<usize>().ok()?;
+        (total > 0 && found <= total).then_some((found, total))
     })
 }
 
@@ -436,7 +628,11 @@ mod tests {
                 command: command.clone(),
                 success: !self.fail,
                 exit_code: Some(if self.fail { 1 } else { 0 }),
-                stdout: String::new(),
+                stdout: if command.arguments()[0] == "convert" {
+                    "Found 1439 sectors of 1440 (99%)".to_owned()
+                } else {
+                    String::new()
+                },
                 stderr: if self.fail {
                     "synthetic failure".to_owned()
                 } else {
@@ -492,6 +688,7 @@ mod tests {
 
         let derived = decode(&project, 7, 1, None, &mut backend).unwrap();
         assert_eq!(derived.bytes, 737_280);
+        assert_eq!(derived.reported_sectors, Some((1439, 1440)));
         assert!(
             derived
                 .image_path
@@ -502,6 +699,7 @@ mod tests {
             serde_json::from_slice(&fs::read(&derived.metadata_path).unwrap()).unwrap();
         assert_eq!(metadata.status, "unverified_sector_quality");
         assert_eq!(metadata.source_sha256, first.sha256);
+        assert_eq!(metadata.reported_found_sectors, Some(1439));
         let decoded_again = decode(&project, 7, 1, None, &mut backend).unwrap();
         assert_eq!(decoded_again.decode_attempt, 2);
         assert_eq!(
@@ -509,7 +707,15 @@ mod tests {
             fs::read(&decoded_again.image_path).unwrap()
         );
 
+        let status = inspect_disk(&project, 7).unwrap();
+        assert_eq!(status.captures.len(), 2);
+        assert_eq!(status.decodes.len(), 2);
+        assert!(status.evidence_healthy);
+        assert!(status.attention_required);
+        assert_eq!(status.decodes[0].gw_reported_found_sectors, Some(1439));
+
         fs::write(&first.flux_path, b"changed").unwrap();
+        assert!(!inspect_disk(&project, 7).unwrap().evidence_healthy);
         let command_count = backend.commands.len();
         assert!(
             decode(&project, 7, 1, None, &mut backend)
@@ -548,6 +754,23 @@ mod tests {
         let next = capture(&project, request, &mut backend).unwrap();
         assert_eq!(next.attempt_number, 2);
         assert!(partial.is_file());
+        let status = inspect_disk(&project, 1).unwrap();
+        assert!(!status.evidence_healthy);
+        assert_eq!(status.captures.len(), 2);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sector_summary_parser_ignores_ambiguous_or_impossible_counts() {
+        assert_eq!(
+            parse_sector_summary("T0.0: IBM MFM\nFound 2879 sectors of 2880 (99%)\n"),
+            Some((2879, 2880))
+        );
+        assert_eq!(
+            parse_sector_summary("Found 2881 sectors of 2880 (100%)"),
+            None
+        );
+        assert_eq!(parse_sector_summary("Found 10 sectors of zero"), None);
+        assert_eq!(parse_sector_summary("No summary"), None);
     }
 }

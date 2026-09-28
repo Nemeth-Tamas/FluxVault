@@ -8,6 +8,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use sha2::{Digest, Sha256};
+
 fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_fluxvault"))
         .current_dir(cwd)
@@ -43,6 +45,60 @@ fn cli_only_entry_point_and_greaseweazle_preview_need_no_hardware() {
         assert!(arguments.iter().any(|arg| arg == "--no-clobber"));
         assert!(!arguments.iter().any(|arg| arg == "write"));
     }
+}
+
+#[test]
+fn flux_status_verifies_saved_hashes_without_a_drive_or_host_tool() {
+    let root = std::env::temp_dir().join(format!(
+        "fluxvault-cli-flux-status-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let project = root.join("project");
+    assert_eq!(
+        invoke(&root, &["init", project.to_str().unwrap()], None)
+            .status
+            .code(),
+        Some(0)
+    );
+    let flux_file = project.join("Flux").join("007_attempt_001.scp");
+    let contents = b"SCP synthetic fixture";
+    fs::write(&flux_file, contents).unwrap();
+    let sha256 = format!("{:x}", Sha256::digest(contents));
+    let metadata = serde_json::json!({
+        "schema_version": 1,
+        "disk_number": 7,
+        "attempt_number": 1,
+        "profile": "ibm.1440",
+        "drive": "A",
+        "revolutions": 3,
+        "status": "complete",
+        "flux_file": "007_attempt_001.scp",
+        "bytes": contents.len(),
+        "sha256": sha256,
+        "command": ["read", "--raw", "--no-clobber"],
+        "detail": null
+    });
+    fs::write(
+        project.join("Flux").join("007_attempt_001.json"),
+        serde_json::to_vec(&metadata).unwrap(),
+    )
+    .unwrap();
+    let healthy = invoke(&project, &["greaseweazle", "status", "7", "--json"], None);
+    assert_eq!(healthy.status.code(), Some(3));
+    let healthy_json: serde_json::Value = serde_json::from_slice(&healthy.stdout).unwrap();
+    assert_eq!(healthy_json["evidence_healthy"], true);
+    assert_eq!(healthy_json["physical_media_access"], false);
+    fs::write(&flux_file, b"changed").unwrap();
+    let changed = invoke(&project, &["greaseweazle", "status", "7", "--json"], None);
+    assert_eq!(changed.status.code(), Some(3));
+    let changed_json: serde_json::Value = serde_json::from_slice(&changed.stdout).unwrap();
+    assert_eq!(changed_json["evidence_healthy"], false);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
