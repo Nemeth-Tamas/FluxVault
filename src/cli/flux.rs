@@ -243,6 +243,36 @@ pub(super) fn compare(
     })
 }
 
+pub(super) fn consensus(
+    project: &ProjectState,
+    disk_number: u32,
+    json_output: bool,
+) -> Result<CliResponse, String> {
+    let result = flux_capture::compare_flux_captures(project, disk_number)?;
+    let attention = !result.conflicting_reported_good_lbas.is_empty()
+        || !result.both_reported_bad_lbas.is_empty()
+        || !result.older_only_reported_good_lbas.is_empty()
+        || !result.newer_only_reported_good_lbas.is_empty();
+    let output = if json_output {
+        serde_json::to_string(&result).map_err(|error| error.to_string())?
+    } else {
+        format!(
+            "Disk {disk_number:03}: raw captures #{:03} and #{:03} (distinct physical reads)\nMatching bytes in sectors Greaseweazle reported good on both: {}\nConflicting good-sector LBAs: {:?}\nGood only on older capture: {:?}\nGood only on newer capture: {:?}\nBad in both: {:?}\nNo images were merged or certified; no floppy drive was accessed.",
+            result.older_capture_attempt,
+            result.newer_capture_attempt,
+            result.matching_reported_good_lbas.len(),
+            result.conflicting_reported_good_lbas,
+            result.older_only_reported_good_lbas,
+            result.newer_only_reported_good_lbas,
+            result.both_reported_bad_lbas
+        )
+    };
+    Ok(CliResponse {
+        output,
+        exit_code: if attention { 3 } else { 0 },
+    })
+}
+
 fn infer_profile(project: &ProjectState, disk_number: u32) -> Result<GreaseweazleProfile, String> {
     let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
     attempts

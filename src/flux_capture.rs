@@ -148,6 +148,129 @@ pub struct FluxComparison {
     pub physical_media_access: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FluxConsensus {
+    pub disk_number: u32,
+    pub older_capture_attempt: u32,
+    pub newer_capture_attempt: u32,
+    pub older_decode_attempt: u32,
+    pub newer_decode_attempt: u32,
+    pub older_image_sha256: String,
+    pub newer_image_sha256: String,
+    pub total_sectors: usize,
+    pub matching_reported_good_lbas: Vec<u64>,
+    pub conflicting_reported_good_lbas: Vec<u64>,
+    pub older_only_reported_good_lbas: Vec<u64>,
+    pub newer_only_reported_good_lbas: Vec<u64>,
+    pub both_reported_bad_lbas: Vec<u64>,
+    pub physical_media_access: bool,
+}
+
+/// Re-decoding one SCP twice is not independent evidence. This comparison
+/// requires two distinct raw captures and never promotes any image bytes.
+pub fn compare_flux_captures(
+    project: &ProjectState,
+    disk_number: u32,
+) -> Result<FluxConsensus, String> {
+    let status = inspect_disk(project, disk_number)?;
+    let mut chosen = Vec::new();
+    for decode in status.decodes.iter().rev() {
+        if chosen
+            .iter()
+            .all(|prior: &&DecodeInspection| prior.capture_attempt != decode.capture_attempt)
+        {
+            chosen.push(decode);
+            if chosen.len() == 2 {
+                break;
+            }
+        }
+    }
+    if chosen.len() != 2 {
+        return Err("Consensus requires decodes from two distinct raw-flux captures".to_owned());
+    }
+    let newer = chosen[0];
+    let older = chosen[1];
+    if newer.profile != older.profile {
+        return Err("Latest two raw-capture decodes use different sector profiles".to_owned());
+    }
+    let sectors = match newer.profile.as_str() {
+        "ibm.1440" => 2880,
+        "ibm.720" => 1440,
+        _ => return Err("Unsupported Greaseweazle sector profile".to_owned()),
+    };
+    let (newer_bytes, newer_bad) = verified_decode(project, newer, sectors)?;
+    let (older_bytes, older_bad) = verified_decode(project, older, sectors)?;
+    let mut result = FluxConsensus {
+        disk_number,
+        older_capture_attempt: older.capture_attempt,
+        newer_capture_attempt: newer.capture_attempt,
+        older_decode_attempt: older.decode_attempt,
+        newer_decode_attempt: newer.decode_attempt,
+        older_image_sha256: sha256_bytes(&older_bytes),
+        newer_image_sha256: sha256_bytes(&newer_bytes),
+        total_sectors: sectors,
+        matching_reported_good_lbas: Vec::new(),
+        conflicting_reported_good_lbas: Vec::new(),
+        older_only_reported_good_lbas: Vec::new(),
+        newer_only_reported_good_lbas: Vec::new(),
+        both_reported_bad_lbas: Vec::new(),
+        physical_media_access: false,
+    };
+    for lba in 0..sectors {
+        match (
+            older_bad.contains(&(lba as u64)),
+            newer_bad.contains(&(lba as u64)),
+        ) {
+            (false, false) => {
+                let range = lba * 512..(lba + 1) * 512;
+                if older_bytes[range.clone()] == newer_bytes[range] {
+                    result.matching_reported_good_lbas.push(lba as u64);
+                } else {
+                    result.conflicting_reported_good_lbas.push(lba as u64);
+                }
+            }
+            (false, true) => result.older_only_reported_good_lbas.push(lba as u64),
+            (true, false) => result.newer_only_reported_good_lbas.push(lba as u64),
+            (true, true) => result.both_reported_bad_lbas.push(lba as u64),
+        }
+    }
+    Ok(result)
+}
+
+fn verified_decode(
+    project: &ProjectState,
+    decode: &DecodeInspection,
+    sectors: usize,
+) -> Result<(Vec<u8>, BTreeSet<u64>), String> {
+    if !decode.output_hash_matches || !decode.source_hash_matches {
+        return Err("Greaseweazle decode or raw capture changed; comparison refused".to_owned());
+    }
+    let bad = decode
+        .gw_bad_lbas
+        .as_ref()
+        .ok_or("Greaseweazle decode lacks a complete, consistent sector map; comparison refused")?;
+    let bad_set = validated_bad_set(bad, sectors, "Greaseweazle")?;
+    if decode.gw_reported_total_sectors != Some(sectors)
+        || decode.gw_reported_found_sectors != Some(sectors - bad_set.len())
+    {
+        return Err("Greaseweazle sector counts disagree with its map".to_owned());
+    }
+    let flux_dir = project_flux_dir(project)?;
+    let derived_dir = resolve_derived_dir(&flux_dir, false)?;
+    let image = decode
+        .image
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if image.parent() != Some(derived_dir.as_path()) {
+        return Err("Decoded image escapes the project's Flux/Derived directory".to_owned());
+    }
+    let bytes = read_regular_sector_image(&image, sectors)?;
+    if !sha256_bytes(&bytes).eq_ignore_ascii_case(&decode.output_sha256) {
+        return Err("Decoded Greaseweazle image changed during comparison".to_owned());
+    }
+    Ok((bytes, bad_set))
+}
+
 /// Compare saved USB and Greaseweazle evidence without promoting either image.
 /// A Greaseweazle dot in the complete grid is vendor-reported, not proof of
 /// independently validated bytes; candidates require further validation.
@@ -173,46 +296,22 @@ pub fn compare_with_usb(
         .decodes
         .last()
         .ok_or_else(|| format!("No saved Greaseweazle decode for disk {disk_number:03}"))?;
-    if !flux.output_hash_matches || !flux.source_hash_matches {
-        return Err(
-            "Latest Greaseweazle decode or its raw capture changed; comparison refused".to_owned(),
-        );
-    }
-    let gw_bad = flux.gw_bad_lbas.as_ref().ok_or(
-        "Latest Greaseweazle decode lacks a complete, consistent sector map; comparison refused",
-    )?;
     let expected_sectors = match flux.profile.as_str() {
         "ibm.1440" => 2880usize,
         "ibm.720" => 1440usize,
         _ => return Err("Unsupported Greaseweazle sector profile".to_owned()),
     };
-    if usb.total_sectors != expected_sectors
-        || flux.gw_reported_total_sectors != Some(expected_sectors)
-        || flux.gw_reported_found_sectors != Some(expected_sectors - gw_bad.len())
-    {
+    if usb.total_sectors != expected_sectors {
         return Err("USB and Greaseweazle geometry or sector counts disagree".to_owned());
     }
-    let flux_dir = project_flux_dir(project)?;
-    let derived_dir = resolve_derived_dir(&flux_dir, false)?;
-    let flux_image = flux
-        .image
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
-    if flux_image.parent() != Some(derived_dir.as_path()) {
-        return Err("Decoded image escapes the project's Flux/Derived directory".to_owned());
-    }
     let usb_bytes = read_regular_sector_image(&usb_path, expected_sectors)?;
-    let flux_bytes = read_regular_sector_image(&flux_image, expected_sectors)?;
+    let (flux_bytes, gw_bad_set) = verified_decode(project, flux, expected_sectors)?;
     let usb_sha256 = sha256_bytes(&usb_bytes);
     if !usb_sha256.eq_ignore_ascii_case(&usb.sha256) {
         return Err("Saved USB image changed since acquisition; comparison refused".to_owned());
     }
     let flux_sha256 = sha256_bytes(&flux_bytes);
-    if !flux_sha256.eq_ignore_ascii_case(&flux.output_sha256) {
-        return Err("Decoded Greaseweazle image changed during comparison".to_owned());
-    }
     let usb_bad = validated_bad_set(&usb.bad_sectors, expected_sectors, "USB")?;
-    let gw_bad_set = validated_bad_set(gw_bad, expected_sectors, "Greaseweazle")?;
     let mut candidate_flux_donor_lbas = Vec::new();
     let mut usb_only_good_lbas = Vec::new();
     let mut unresolved_lbas = Vec::new();
@@ -242,7 +341,7 @@ pub fn compare_with_usb(
         usb_sha256,
         capture_attempt: flux.capture_attempt,
         decode_attempt: flux.decode_attempt,
-        flux_image,
+        flux_image: flux.image.clone(),
         flux_sha256,
         total_sectors: expected_sectors,
         usb_bad_lbas: usb_bad.into_iter().collect(),
@@ -957,6 +1056,11 @@ mod tests {
         assert_eq!(metadata.gw_bad_lbas, Some(vec![711]));
         let decoded_again = decode(&project, 7, 1, None, &mut backend).unwrap();
         assert_eq!(decoded_again.decode_attempt, 2);
+        assert!(
+            compare_flux_captures(&project, 7)
+                .unwrap_err()
+                .contains("two distinct")
+        );
         assert_eq!(
             fs::read(&derived.image_path).unwrap(),
             fs::read(&decoded_again.image_path).unwrap()
@@ -1157,6 +1261,46 @@ mod tests {
         assert_eq!(conflict.conflicting_good_lbas, vec![3]);
         assert!(!conflict.no_reported_good_byte_conflicts);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn flux_consensus_requires_distinct_capture_hashes_and_detects_byte_conflicts() {
+        let (project, root) = fixture();
+        let mut backend = ArtifactBackend::default();
+        let request = CaptureRequest {
+            disk_number: 9,
+            profile: GreaseweazleProfile::Ibm720,
+            drive: 'A',
+            revolutions: 3,
+        };
+        let first = capture(&project, request, &mut backend).unwrap();
+        decode(&project, 9, first.attempt_number, None, &mut backend).unwrap();
+        let second = capture(&project, request, &mut backend).unwrap();
+        let second_decode = decode(&project, 9, second.attempt_number, None, &mut backend).unwrap();
+        let consensus = compare_flux_captures(&project, 9).unwrap();
+        assert_eq!(consensus.matching_reported_good_lbas.len(), 1439);
+        assert_eq!(consensus.both_reported_bad_lbas, vec![711]);
+        assert!(consensus.conflicting_reported_good_lbas.is_empty());
+
+        let mut changed = fs::read(&second_decode.image_path).unwrap();
+        changed[3 * 512] = 0x44;
+        fs::write(&second_decode.image_path, &changed).unwrap();
+        assert!(
+            compare_flux_captures(&project, 9)
+                .unwrap_err()
+                .contains("changed")
+        );
+        let mut metadata: DecodeRecord =
+            serde_json::from_slice(&fs::read(&second_decode.metadata_path).unwrap()).unwrap();
+        metadata.output_sha256 = sha256_bytes(&changed);
+        fs::write(
+            &second_decode.metadata_path,
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        let conflict = compare_flux_captures(&project, 9).unwrap();
+        assert_eq!(conflict.conflicting_reported_good_lbas, vec![3]);
         fs::remove_dir_all(root).unwrap();
     }
 }

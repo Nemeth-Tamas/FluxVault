@@ -199,6 +199,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [x] `greaseweazle status N` verifies saved raw/derived hashes without hardware and distinguishes Greaseweazle's reported sector count from independently validated sector quality.
 - [x] Conservatively parse exact missing LBAs from a complete, internally consistent IBM 80-cylinder `gw convert` grid; reject truncated/ambiguous grids and retain the result as vendor-reported evidence only.
 - [x] Compare best hash-verified USB image with latest hash-verified decoded flux image offline, reporting byte conflicts and donor candidates without promoting either source.
+- [x] Cross-check decodes from two distinct raw capture attempts offline, requiring intact hashes and complete sector maps and reporting exact byte conflicts without merging images.
 - [ ] Validate Greaseweazle donor-sector bytes independently (including repeated flux decodes/captures where needed), then create an immutable provenance-tracked composite only when good-sector conflicts are resolved; never claim vendor-reported dots alone prove clean bytes.
 - [ ] Parse `gw` stderr/stdout incrementally into CLI progress/events.
 - [ ] Store full command, version, start/end time, exit status, and captured output for every run.
