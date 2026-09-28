@@ -15,6 +15,23 @@ impl GreaseweazleProfile {
             Self::Ibm720 => "ibm.720",
         }
     }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.to_ascii_lowercase().as_str() {
+            "ibm.1440" | "1440" | "1.44" => Ok(Self::Ibm1440),
+            "ibm.720" | "720" => Ok(Self::Ibm720),
+            _ => Err(format!(
+                "Unsupported Greaseweazle profile {value}; choose ibm.1440 or ibm.720"
+            )),
+        }
+    }
+
+    pub fn expected_sector_image_bytes(self) -> u64 {
+        match self {
+            Self::Ibm1440 => 1_474_560,
+            Self::Ibm720 => 737_280,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

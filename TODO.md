@@ -195,6 +195,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [ ] Detect `gw.exe`, run info/version command, and show device status.
 - [x] Build commands as argument arrays, never shell-concatenated strings.
 - [x] Unit-test command generation without hardware.
+- [x] Add CLI raw-SCP capture and offline decode routes with mock-backed artifact tests, immutable attempt numbering, SHA-256 provenance, and source-hash refusal; do not call them live-validated before the board arrives.
 - [ ] Parse `gw` stderr/stdout incrementally into CLI progress/events.
 - [ ] Store full command, version, start/end time, exit status, and captured output for every run.
 - [ ] Add a clear “hardware not connected” CLI status rather than error-spamming.
@@ -208,6 +209,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [ ] Allow configurable revolutions for raw capture where the selected image type supports it.
 - [ ] Preserve every raw acquisition as an immutable attempt with SHA-256.
 - [ ] Derive sector images from raw captures using `gw convert --format=<profile>`; derived images are separate artifacts, never replacements for raw flux.
+  - [x] Hardware-independent implementation stores numbered SCP attempts in `Flux`, hashes them, and stores offline decoded images under `Flux/Derived`; live hardware validation and sector-quality integration remain open.
 - [x] Profiles initially required for this collection:
   - [x] IBM PC 1.44 MB / HD.
   - [x] IBM PC 720 KB / DD.
@@ -215,6 +217,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [ ] Track/head selection and step settings available as expert flags, not in the basic happy path.
 - [ ] Apply bounded automatic physical-read policies based on media condition, elapsed time, revolutions, and prior improvement; stop automatically rather than endlessly hammering fragile media.
 - [ ] Automatically infer the first decode profile from USB geometry/image size and flux evidence, then try evidence-ranked alternative profiles without operator selection.
+  - [x] Initial CLI capture profile defaults from saved 1.44 MB/720 KB USB sector count; other/ambiguous formats require an explicit profile until flux-based inference exists.
 - [ ] After flux capture, automatically decode, compare against USB attempts, build the best composite, retry extraction/recovery, and update audit state.
 - [ ] Tell the operator exactly when to move a USB-problem disk into the Greaseweazle drive and when it can be removed; no flux expertise should be required.
 

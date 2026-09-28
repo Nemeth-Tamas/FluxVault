@@ -8,6 +8,7 @@ mod dmde_logs;
 mod external_tools;
 mod extraction;
 mod floppy;
+mod flux_capture;
 mod greaseweazle;
 mod imaging;
 mod legacy_logs;

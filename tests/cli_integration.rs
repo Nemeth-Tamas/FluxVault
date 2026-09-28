@@ -79,6 +79,38 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
             .contains("independently verified")
     );
 
+    let denied_flux = invoke(
+        &nested,
+        &[
+            "greaseweazle",
+            "capture",
+            "7",
+            "--profile",
+            "ibm.1440",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(denied_flux.status.code(), Some(2));
+    let denied_flux_json: serde_json::Value = serde_json::from_slice(&denied_flux.stdout).unwrap();
+    assert!(
+        denied_flux_json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--source-write-protected")
+    );
+    assert!(fs::read_dir(project.join("Flux")).unwrap().next().is_none());
+
+    let missing_capture = invoke(&nested, &["greaseweazle", "decode", "7", "--json"], None);
+    assert_eq!(missing_capture.status.code(), Some(2));
+    let missing_json: serde_json::Value = serde_json::from_slice(&missing_capture.stdout).unwrap();
+    assert!(
+        missing_json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("No completed raw-flux capture")
+    );
+
     // QUIT exits before enumeration, probing, or reading a physical drive.
     let quit = invoke(
         &nested,

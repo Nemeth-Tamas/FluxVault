@@ -2,6 +2,7 @@
 
 mod acquire;
 mod finalize;
+mod flux;
 mod office;
 mod recovery;
 mod scan;
@@ -60,6 +61,11 @@ Usage:
   fluxvault greaseweazle preview    Show safe raw-capture and decode command examples
   fluxvault greaseweazle info [--project PATH]
                                     Query device/firmware with audited read-only gw info
+  fluxvault greaseweazle capture N [--gw-drive A|B] [--profile ibm.1440|ibm.720]
+      [--revs 1..10] --source-write-protected [--project PATH]
+                                    Preserve immutable raw SCP flux; never write the floppy
+  fluxvault greaseweazle decode N [--capture-attempt N] [--profile ibm.1440|ibm.720]
+                                    Decode saved SCP offline; result remains unverified
   fluxvault extract all [--project PATH]
                                     Process saved images with the extraction service
   fluxvault extract disk N [--project PATH]
@@ -111,6 +117,11 @@ Options:
   --dmde-log FILE                   Matching DMDE log for recovery import
   --conversion-workers N            Parallel Office files during process (1-16; default 4)
   --details                        Include bad-sector LBAs and evidence paths in disk show
+  --gw-drive A|B                   Greaseweazle drive (default A, not a Windows drive letter)
+  --profile NAME                   IBM 1.44 MB or 720 KB flux profile
+  --revs N                         Raw-flux revolutions per track (1-10; default 3)
+  --capture-attempt N              Raw-flux attempt to decode (default latest complete)
+  --source-write-protected         Confirm the source floppy's physical tab is protected
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
 
 #[derive(Debug)]
@@ -162,12 +173,55 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut import_log: Option<PathBuf> = None;
     let mut conversion_workers: Option<usize> = None;
     let mut details = false;
+    let mut gw_drive: Option<char> = None;
+    let mut gw_profile: Option<GreaseweazleProfile> = None;
+    let mut gw_revolutions: Option<u32> = None;
+    let mut gw_capture_attempt: Option<u32> = None;
+    let mut source_write_protected = false;
     let mut positional = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" => json_output = true,
             "--details" => details = true,
+            "--gw-drive" => {
+                index += 1;
+                let value = args.get(index).ok_or("--gw-drive requires A or B")?;
+                gw_drive = match value.to_ascii_uppercase().as_str() {
+                    "A" => Some('A'),
+                    "B" => Some('B'),
+                    _ => return Err("--gw-drive requires A or B (not A: or B:)".to_owned()),
+                };
+            }
+            "--profile" => {
+                index += 1;
+                gw_profile = Some(GreaseweazleProfile::parse(
+                    args.get(index).ok_or("--profile requires a value")?,
+                )?);
+            }
+            "--revs" => {
+                index += 1;
+                gw_revolutions = Some(
+                    args.get(index)
+                        .ok_or("--revs requires a number")?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|value| (1..=10).contains(value))
+                        .ok_or("--revs must be from 1 to 10")?,
+                );
+            }
+            "--capture-attempt" => {
+                index += 1;
+                gw_capture_attempt = Some(
+                    args.get(index)
+                        .ok_or("--capture-attempt requires a number")?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|value| *value > 0)
+                        .ok_or("--capture-attempt requires a positive number")?,
+                );
+            }
+            "--source-write-protected" => source_write_protected = true,
             "--project" => {
                 index += 1;
                 let value = args.get(index).ok_or("--project requires a path")?;
@@ -265,6 +319,19 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if details && !(positional.len() == 3 && positional[0] == "disk" && positional[1] == "show") {
         return Err("--details is only valid with disk show N".to_owned());
     }
+    let gw_capture =
+        positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "capture";
+    let gw_decode =
+        positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "decode";
+    if (gw_drive.is_some() || gw_revolutions.is_some() || source_write_protected) && !gw_capture {
+        return Err("--gw-drive, --revs, and --source-write-protected are only valid with greaseweazle capture".to_owned());
+    }
+    if gw_capture_attempt.is_some() && !gw_decode {
+        return Err("--capture-attempt is only valid with greaseweazle decode".to_owned());
+    }
+    if gw_profile.is_some() && !(gw_capture || gw_decode) {
+        return Err("--profile is only valid with greaseweazle capture or decode".to_owned());
+    }
     if drive_override.is_some()
         && !(positional.len() == 2 && positional[0] == "drive" && positional[1] == "probe")
         && !(positional.len() == 1 && positional[0] == "acquire")
@@ -344,6 +411,40 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     execution.stderr
                 ))
             }
+        }
+        Some("greaseweazle") if gw_capture && destination.is_none() => {
+            let disk_number = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or("greaseweazle capture requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            return flux::capture(
+                &project,
+                disk_number,
+                gw_profile,
+                gw_drive.unwrap_or('A'),
+                gw_revolutions.unwrap_or(3),
+                source_write_protected,
+                json_output,
+            );
+        }
+        Some("greaseweazle") if gw_decode && destination.is_none() => {
+            let disk_number = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or("greaseweazle decode requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            return flux::decode(
+                &project,
+                disk_number,
+                gw_capture_attempt,
+                gw_profile,
+                json_output,
+            );
         }
         Some("init") if positional.len() <= 2 && project_override.is_none() => {
             let root = positional
