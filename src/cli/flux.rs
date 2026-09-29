@@ -297,6 +297,34 @@ pub(super) fn consensus(
     })
 }
 
+pub(super) fn plan(
+    project: &ProjectState,
+    disk_number: u32,
+    json_output: bool,
+) -> Result<CliResponse, String> {
+    let plan = flux_capture::plan_flux_recovery(project, disk_number)?;
+    let output = if json_output {
+        serde_json::to_string(&plan).map_err(|error| error.to_string())?
+    } else {
+        format!(
+            "Disk {disk_number:03}: USB #{:03}, raw captures #{:03}/#{:03}\nMatching USB/dual-flux control sectors: {}\nCorroborated donor candidates (two raw captures agree): {:?}\nOnly one flux capture reported good: {:?}\nStill unresolved: {:?}\nUSB versus flux byte conflicts: {:?}\nFlux versus flux byte conflicts: {:?}\nNo image was changed or promoted; these are evidence-ranked candidates, not certified recovery.",
+            plan.usb_attempt,
+            plan.older_capture_attempt,
+            plan.newer_capture_attempt,
+            plan.matching_control_sectors,
+            plan.corroborated_donor_lbas,
+            plan.single_flux_read_lbas,
+            plan.unresolved_lbas,
+            plan.usb_flux_conflict_lbas,
+            plan.flux_flux_conflict_lbas
+        )
+    };
+    Ok(CliResponse {
+        output,
+        exit_code: 3,
+    })
+}
+
 fn infer_profile(project: &ProjectState, disk_number: u32) -> Result<GreaseweazleProfile, String> {
     let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
     attempts

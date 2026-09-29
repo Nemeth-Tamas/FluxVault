@@ -71,6 +71,7 @@ Usage:
   fluxvault greaseweazle compare N  Compare saved USB and flux sectors offline, read-only
   fluxvault greaseweazle consensus N
                                     Cross-check decodes from two raw captures offline
+  fluxvault greaseweazle plan N     Rank USB/dual-flux donor candidates offline
   fluxvault extract all [--project PATH]
                                     Process saved images with the extraction service
   fluxvault extract disk N [--project PATH]
@@ -509,6 +510,18 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             return flux::consensus(&project, disk_number, json_output);
+        }
+        Some("greaseweazle")
+            if positional.len() == 3 && positional[1] == "plan" && destination.is_none() =>
+        {
+            let disk_number = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or("greaseweazle plan requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            return flux::plan(&project, disk_number, json_output);
         }
         Some("init") if positional.len() <= 2 && project_override.is_none() => {
             let root = positional

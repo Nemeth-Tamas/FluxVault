@@ -177,13 +177,124 @@ pub struct FluxConsensus {
     pub physical_media_access: bool,
 }
 
-/// Re-decoding one SCP twice is not independent evidence. This comparison
-/// requires two distinct raw captures and never promotes any image bytes.
-pub fn compare_flux_captures(
+#[derive(Debug, Clone, Serialize)]
+pub struct FluxRecoveryPlan {
+    pub disk_number: u32,
+    pub usb_attempt: u32,
+    pub usb_sha256: String,
+    pub older_capture_attempt: u32,
+    pub older_decode_attempt: u32,
+    pub older_sha256: String,
+    pub newer_capture_attempt: u32,
+    pub newer_decode_attempt: u32,
+    pub newer_sha256: String,
+    pub total_sectors: usize,
+    pub matching_control_sectors: usize,
+    pub corroborated_donor_lbas: Vec<u64>,
+    pub single_flux_read_lbas: Vec<u64>,
+    pub unresolved_lbas: Vec<u64>,
+    pub usb_flux_conflict_lbas: Vec<u64>,
+    pub flux_flux_conflict_lbas: Vec<u64>,
+    pub image_promoted: bool,
+    pub physical_media_access: bool,
+}
+
+/// Integrate three saved, hash-checked sources without creating a composite.
+/// Two separate raw captures must report a sector good and agree byte-for-byte
+/// before it becomes a corroborated donor candidate for a USB-bad LBA.
+pub fn plan_flux_recovery(
     project: &ProjectState,
     disk_number: u32,
-) -> Result<FluxConsensus, String> {
+) -> Result<FluxRecoveryPlan, String> {
+    let images_dir = project.images_dir();
+    let attempts = imaging::load_attempts_for_disk(&images_dir, disk_number)?;
+    let usb = attempts
+        .iter()
+        .filter(|attempt| attempt.total_sectors > 0)
+        .min_by_key(|attempt| {
+            (
+                attempt.bad_sectors.len(),
+                std::cmp::Reverse(attempt.attempt_number),
+            )
+        })
+        .ok_or_else(|| format!("No saved USB image for disk {disk_number:03}"))?;
     let status = inspect_disk(project, disk_number)?;
+    let (older, newer) = latest_two_decodes(&status)?;
+    if older.profile != newer.profile {
+        return Err("Latest two raw-capture decodes use different sector profiles".to_owned());
+    }
+    let sectors = match newer.profile.as_str() {
+        "ibm.1440" => 2880,
+        "ibm.720" => 1440,
+        _ => return Err("Unsupported Greaseweazle sector profile".to_owned()),
+    };
+    if usb.total_sectors != sectors {
+        return Err("USB and Greaseweazle geometry disagree".to_owned());
+    }
+    let usb_path = recovery_plan::resolve_image_path(&images_dir, &usb.image_file)?;
+    let usb_bytes = read_regular_sector_image(&usb_path, sectors)?;
+    let usb_sha256 = sha256_bytes(&usb_bytes);
+    if !usb_sha256.eq_ignore_ascii_case(&usb.sha256) {
+        return Err("Saved USB image changed since acquisition; recovery plan refused".to_owned());
+    }
+    let usb_bad = validated_bad_set(&usb.bad_sectors, sectors, "USB")?;
+    let (older_bytes, older_bad) = verified_decode(project, older, sectors)?;
+    let (newer_bytes, newer_bad) = verified_decode(project, newer, sectors)?;
+    let mut plan = FluxRecoveryPlan {
+        disk_number,
+        usb_attempt: usb.attempt_number,
+        usb_sha256,
+        older_capture_attempt: older.capture_attempt,
+        older_decode_attempt: older.decode_attempt,
+        older_sha256: sha256_bytes(&older_bytes),
+        newer_capture_attempt: newer.capture_attempt,
+        newer_decode_attempt: newer.decode_attempt,
+        newer_sha256: sha256_bytes(&newer_bytes),
+        total_sectors: sectors,
+        matching_control_sectors: 0,
+        corroborated_donor_lbas: Vec::new(),
+        single_flux_read_lbas: Vec::new(),
+        unresolved_lbas: Vec::new(),
+        usb_flux_conflict_lbas: Vec::new(),
+        flux_flux_conflict_lbas: Vec::new(),
+        image_promoted: false,
+        physical_media_access: false,
+    };
+    for lba in 0..sectors {
+        let lba_u64 = lba as u64;
+        let range = lba * 512..(lba + 1) * 512;
+        let usb_good = !usb_bad.contains(&lba_u64);
+        let older_good = !older_bad.contains(&lba_u64);
+        let newer_good = !newer_bad.contains(&lba_u64);
+        let older_matches_usb =
+            older_good && usb_bytes[range.clone()] == older_bytes[range.clone()];
+        let newer_matches_usb =
+            newer_good && usb_bytes[range.clone()] == newer_bytes[range.clone()];
+        let flux_agrees =
+            older_good && newer_good && older_bytes[range.clone()] == newer_bytes[range];
+        if older_good && newer_good && !flux_agrees {
+            plan.flux_flux_conflict_lbas.push(lba_u64);
+        }
+        if usb_good {
+            if (older_good && !older_matches_usb) || (newer_good && !newer_matches_usb) {
+                plan.usb_flux_conflict_lbas.push(lba_u64);
+            } else if flux_agrees {
+                plan.matching_control_sectors += 1;
+            }
+        } else if flux_agrees {
+            plan.corroborated_donor_lbas.push(lba_u64);
+        } else if older_good ^ newer_good {
+            plan.single_flux_read_lbas.push(lba_u64);
+        } else if !older_good && !newer_good {
+            plan.unresolved_lbas.push(lba_u64);
+        }
+    }
+    Ok(plan)
+}
+
+fn latest_two_decodes(
+    status: &FluxDiskStatus,
+) -> Result<(&DecodeInspection, &DecodeInspection), String> {
     let mut chosen = Vec::new();
     for decode in status.decodes.iter().rev() {
         if chosen
@@ -192,15 +303,21 @@ pub fn compare_flux_captures(
         {
             chosen.push(decode);
             if chosen.len() == 2 {
-                break;
+                return Ok((chosen[1], chosen[0]));
             }
         }
     }
-    if chosen.len() != 2 {
-        return Err("Consensus requires decodes from two distinct raw-flux captures".to_owned());
-    }
-    let newer = chosen[0];
-    let older = chosen[1];
+    Err("Flux analysis requires decodes from two distinct raw-flux captures".to_owned())
+}
+
+/// Re-decoding one SCP twice is not independent evidence. This comparison
+/// requires two distinct raw captures and never promotes any image bytes.
+pub fn compare_flux_captures(
+    project: &ProjectState,
+    disk_number: u32,
+) -> Result<FluxConsensus, String> {
+    let status = inspect_disk(project, disk_number)?;
+    let (older, newer) = latest_two_decodes(&status)?;
     if newer.profile != older.profile {
         return Err("Latest two raw-capture decodes use different sector profiles".to_owned());
     }
@@ -1467,6 +1584,65 @@ mod tests {
         let conflict = compare_with_usb(&project, 7).unwrap();
         assert_eq!(conflict.conflicting_good_lbas, vec![3]);
         assert!(!conflict.no_reported_good_byte_conflicts);
+
+        assert!(
+            plan_flux_recovery(&project, 7)
+                .unwrap_err()
+                .contains("two distinct")
+        );
+        let second_capture = capture(
+            &project,
+            CaptureRequest {
+                disk_number: 7,
+                profile: GreaseweazleProfile::Ibm720,
+                drive: 'A',
+                revolutions: 3,
+            },
+            &mut backend,
+        )
+        .unwrap();
+        let second_decode = decode(
+            &project,
+            7,
+            second_capture.attempt_number,
+            None,
+            &mut backend,
+        )
+        .unwrap();
+        let plan = plan_flux_recovery(&project, 7).unwrap();
+        assert_eq!(plan.corroborated_donor_lbas, vec![2]);
+        assert_eq!(plan.unresolved_lbas, vec![711]);
+        assert_eq!(plan.usb_flux_conflict_lbas, vec![3]);
+        assert!(plan.flux_flux_conflict_lbas.is_empty());
+        assert_eq!(plan.matching_control_sectors, 1437);
+        assert!(!plan.image_promoted);
+        assert!(!plan.physical_media_access);
+        assert!(
+            fs::read_dir(project.root().join("Recovery"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+
+        let mut changed_flux = fs::read(&second_decode.image_path).unwrap();
+        changed_flux[2 * 512] = 0x55;
+        fs::write(&second_decode.image_path, &changed_flux).unwrap();
+        assert!(
+            plan_flux_recovery(&project, 7)
+                .unwrap_err()
+                .contains("changed")
+        );
+        let mut decode_metadata: DecodeRecord =
+            serde_json::from_slice(&fs::read(&second_decode.metadata_path).unwrap()).unwrap();
+        decode_metadata.output_sha256 = sha256_bytes(&changed_flux);
+        fs::write(
+            &second_decode.metadata_path,
+            serde_json::to_vec(&decode_metadata).unwrap(),
+        )
+        .unwrap();
+        let disputed = plan_flux_recovery(&project, 7).unwrap();
+        assert!(disputed.corroborated_donor_lbas.is_empty());
+        assert_eq!(disputed.flux_flux_conflict_lbas, vec![2]);
 
         fs::remove_dir_all(root).unwrap();
     }
