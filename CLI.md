@@ -1,5 +1,7 @@
 # FluxVault CLI
 
+For a copy-and-paste operator guide, start with [CHEATSHEET.md](CHEATSHEET.md).
+
 For the first Greaseweazle/NEC drive hookup, follow [GREASEWEAZLE_PREFLIGHT.md](GREASEWEAZLE_PREFLIGHT.md) with a disposable protected floppy before using customer media.
 
 Build with `cargo build --release`; the executable is `target\release\fluxvault.exe` on Windows. To install a copy and optionally add its directory to your user `PATH`, run `powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath` from the repository root; omit `-AddToPath` to copy without changing PATH, or add `-WhatIf` to preview. Open a new terminal after a PATH change. Running `fluxvault` without arguments shows command help; the desktop GUI has been removed. The release executable and installer were previously checked from PowerShell/CMD and with a disposable directory. No installation or PATH change was performed in your user profile.
