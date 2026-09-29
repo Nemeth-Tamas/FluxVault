@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     env, fs,
     fs::OpenOptions,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -10,7 +10,7 @@ use std::{
         mpsc::{self, Receiver},
     },
     thread,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -292,6 +292,95 @@ pub fn run_audited_command_with_version(
     AuditedCommandResult { audit, audit_error }
 }
 
+/// Bounded runner for short health/version probes. Long extraction/conversion
+/// commands use their own runners and must not inherit this short deadline.
+pub fn run_audited_probe(
+    tool_name: &str,
+    executable: &Path,
+    arguments: &[String],
+    audit_path: &Path,
+    timeout: Duration,
+) -> AuditedCommandResult {
+    let started_unix_ms = current_unix_ms();
+    let started = Instant::now();
+    let outcome = Command::new(executable)
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let (success, exit_code, stdout, stderr) = match outcome {
+        Ok(mut child) => {
+            let mut stdout_pipe = child.stdout.take();
+            let mut stderr_pipe = child.stderr.take();
+            let stdout_reader = thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut pipe) = stdout_pipe.take() {
+                    let _ = pipe.read_to_end(&mut bytes);
+                }
+                bytes
+            });
+            let stderr_reader = thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut pipe) = stderr_pipe.take() {
+                    let _ = pipe.read_to_end(&mut bytes);
+                }
+                bytes
+            });
+            let mut timed_out = false;
+            let mut issue = None;
+            let status = loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Some(status),
+                    Ok(None) if started.elapsed() >= timeout => {
+                        timed_out = true;
+                        issue = terminate_process_tree(&mut child).err();
+                        break child.wait().ok();
+                    }
+                    Ok(None) => thread::sleep(Duration::from_millis(20)),
+                    Err(error) => {
+                        issue = Some(format!("Process wait failed: {error}"));
+                        let _ = terminate_process_tree(&mut child);
+                        break child.wait().ok();
+                    }
+                }
+            };
+            let stdout = String::from_utf8_lossy(&stdout_reader.join().unwrap_or_default())
+                .trim()
+                .to_owned();
+            let mut stderr = String::from_utf8_lossy(&stderr_reader.join().unwrap_or_default())
+                .trim()
+                .to_owned();
+            if timed_out {
+                stderr.push_str(&format!("\nProbe timed out after {}s", timeout.as_secs()));
+            }
+            if let Some(issue) = issue {
+                stderr.push_str(&format!("\nProcess termination issue: {issue}"));
+            }
+            (
+                status.as_ref().is_some_and(|status| status.success()) && !timed_out,
+                status.and_then(|status| status.code()),
+                stdout,
+                stderr.trim().to_owned(),
+            )
+        }
+        Err(error) => (false, None, String::new(), error.to_string()),
+    };
+    let audit = CommandAudit {
+        tool: tool_name.to_owned(),
+        executable: executable.to_path_buf(),
+        arguments: arguments.to_vec(),
+        started_unix_ms,
+        duration_ms: started.elapsed().as_millis(),
+        success,
+        exit_code,
+        stdout,
+        stderr,
+        version: None,
+    };
+    let audit_error = append_audit(audit_path, &audit).err();
+    AuditedCommandResult { audit, audit_error }
+}
+
 #[cfg(windows)]
 pub fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
     let taskkill = std::env::var_os("SystemRoot")
@@ -346,7 +435,17 @@ pub(crate) fn check_tool(
         .iter()
         .map(|argument| (*argument).to_owned())
         .collect::<Vec<_>>();
-    let result = run_audited_command(kind.display_name(), &executable, &arguments, audit_path);
+    let timeout = match kind {
+        ToolKind::LibreOffice => Duration::from_secs(30),
+        ToolKind::SevenZip | ToolKind::Greaseweazle => Duration::from_secs(15),
+    };
+    let result = run_audited_probe(
+        kind.display_name(),
+        &executable,
+        &arguments,
+        audit_path,
+        timeout,
+    );
     let version = first_non_empty_line(&result.audit.stdout)
         .or_else(|| first_non_empty_line(&result.audit.stderr))
         .map(str::to_owned);
@@ -364,6 +463,11 @@ pub(crate) fn check_tool(
             format!(
                 "Egészségügyi ellenőrzés sikeres ({} ms).",
                 result.audit.duration_ms
+            )
+        } else if result.audit.stderr.contains("Probe timed out") {
+            format!(
+                "Version check timed out after {} seconds",
+                timeout.as_secs()
             )
         } else if result.audit.exit_code.is_some() {
             format!(

@@ -8,7 +8,7 @@ use std::{
 };
 
 use fluxvault::{
-    external_tools::CommandAudit,
+    external_tools::{CommandAudit, run_audited_probe},
     flux_capture::{self, CaptureRequest},
     greaseweazle::{
         GreaseweazleBackend, GreaseweazleCommand, GreaseweazleDeviceStatus, GreaseweazleProfile,
@@ -34,6 +34,37 @@ fn disposable_project(name: &str) -> (ProjectState, PathBuf) {
     fs::create_dir_all(&root).unwrap();
     let project = ProjectState::create_without_session(root.clone()).unwrap();
     (project, root)
+}
+
+#[test]
+fn version_probes_are_bounded_and_audited_without_media_access() {
+    let (_project, root) = disposable_project("probe-timeout");
+    let audit_path = root.join("logs").join("external-tools.jsonl");
+    let executable = mock_gw_path();
+    let version = run_audited_probe(
+        "Greaseweazle",
+        &executable,
+        &["--version".to_owned()],
+        &audit_path,
+        Duration::from_secs(2),
+    );
+    assert!(version.audit.success);
+    assert!(version.audit.stdout.contains("1.23"));
+    assert!(version.audit_error.is_none());
+
+    let hanging = run_audited_probe(
+        "Greaseweazle",
+        &executable,
+        &["info".to_owned(), "--mock-hang".to_owned()],
+        &audit_path,
+        Duration::from_millis(400),
+    );
+    assert!(!hanging.audit.success);
+    assert!(hanging.audit.stderr.contains("Probe timed out"));
+    assert!(hanging.audit.duration_ms < 10_000);
+    assert!(hanging.audit_error.is_none());
+    assert_eq!(fs::read_to_string(&audit_path).unwrap().lines().count(), 2);
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

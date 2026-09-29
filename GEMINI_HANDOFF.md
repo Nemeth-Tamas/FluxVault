@@ -1,5 +1,7 @@
 # FluxVault handoff for Gemini — 2026-09-28
 
+Update 2026-09-29: The Greaseweazle streaming runner described below was completed in `c57a6d1`. Offline USB/two-capture recovery planning and bounded host-version probes were added afterward. Treat the historical “Best next work” section as context, not an unfinished assignment; check `git log`, [TODO.md](TODO.md), and the current tree for the next task.
+
 Start from the current `main` branch; the last development commit before this handoff was `21c7781`. The repository is `C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault`, and `C:\Users\User\Desktop\FluxVault-Test` is the existing, **non-disposable** test project/evidence workspace. Do not reset or recreate it. Read [TODO.md](TODO.md), [CLI.md](CLI.md), and [GREASEWEAZLE_PREFLIGHT.md](GREASEWEAZLE_PREFLIGHT.md) first, then inspect the code and `git status` rather than assuming this note is current.
 
 ## Product and safety contract

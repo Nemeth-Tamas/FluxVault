@@ -541,18 +541,27 @@ impl ProcessGreaseweazleBackend {
     }
 }
 
-fn query_host_version(executable: &Path) -> Option<String> {
-    let output = Command::new(executable)
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    external_tools::first_non_empty_line(&stdout_text)
-        .or_else(|| external_tools::first_non_empty_line(&stderr_text))
-        .map(str::to_owned)
+fn query_host_version(executable: &Path, audit_path: &Path) -> Result<Option<String>, String> {
+    let arguments = vec!["--version".to_owned()];
+    let result = external_tools::run_audited_probe(
+        "Greaseweazle version",
+        executable,
+        &arguments,
+        audit_path,
+        Duration::from_secs(10),
+    );
+    if let Some(error) = result.audit_error {
+        return Err(format!("Cannot record Greaseweazle version probe: {error}"));
+    }
+    if !result.audit.success {
+        return Err(format!(
+            "Greaseweazle version probe failed: {}",
+            result.audit.stderr
+        ));
+    }
+    Ok(external_tools::first_non_empty_line(&result.audit.stdout)
+        .or_else(|| external_tools::first_non_empty_line(&result.audit.stderr))
+        .map(str::to_owned))
 }
 
 impl GreaseweazleBackend for ProcessGreaseweazleBackend {
@@ -565,7 +574,7 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
         command.validate_safe()?;
 
         if self.host_version.is_none() && command.subcommand() != "info" {
-            self.host_version = query_host_version(&self.executable);
+            self.host_version = query_host_version(&self.executable, &self.audit_path)?;
         }
 
         let timeout = self.timeout.unwrap_or_else(|| match command.subcommand() {
