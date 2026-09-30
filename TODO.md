@@ -196,6 +196,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [x] Build commands as argument arrays, never shell-concatenated strings.
 - [x] Unit-test command generation without hardware.
 - [x] Add CLI raw-SCP capture and offline decode routes with mock-backed artifact tests, immutable attempt numbering, SHA-256 provenance, and source-hash refusal; do not call them live-validated before the board arrives.
+- [x] Exercise the actual CLI end to end with an isolated mock `gw`: configured tool discovery, connected-board info, missing-board capture refusal before any artifact, two numbered raw captures, offline decodes, status, consensus, and command audit; no physical media involved.
 - [x] `greaseweazle status N` verifies saved raw/derived hashes without hardware and distinguishes Greaseweazle's reported sector count from independently validated sector quality.
 - [x] Conservatively parse exact missing LBAs from a complete, internally consistent IBM 80-cylinder `gw convert` grid; reject truncated/ambiguous grids and retain the result as vendor-reported evidence only.
 - [x] Compare best hash-verified USB image with latest hash-verified decoded flux image offline, reporting byte conflicts and donor candidates without promoting either source.

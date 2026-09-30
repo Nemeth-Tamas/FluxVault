@@ -15,3 +15,5 @@ This checklist is for the NEC FD-1231H and a **disposable, physically write-prot
 FluxVault permits only `gw info`, raw `gw read`, and file-to-file `gw convert`; it has no Greaseweazle write/erase/clean path. Raw capture pairs `--format` with `--raw`, because Greaseweazle documents that omitting `--raw` can regenerate flux rather than preserve the disk's physical emission. [Greaseweazle image-type guide](https://github.com/keirf/greaseweazle/wiki/Supported-Image-Types)
 
 The `--source-write-protected` flag records the operator's tab check; it is **not** proof that the connected hardware cannot write. Capture/decoding and the NEC/GW combination have not yet been physically validated in FluxVault. Decoded sector images and comparison results remain unverified evidence, never automatically promoted into customer output.
+
+Before the board arrived, an isolated end-to-end CLI test exercised tool setup, device info, refusal when the mock board is absent, two raw captures, offline decodes, status, consensus, and audit records. This checks the command wiring only; it does **not** substitute for the disposable-disk physical preflight above.

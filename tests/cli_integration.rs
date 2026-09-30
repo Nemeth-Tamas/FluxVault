@@ -25,6 +25,23 @@ fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
     child.wait_with_output().unwrap()
 }
 
+fn invoke_with_mock_gw(cwd: &Path, app_data: &Path, args: &[&str], device_missing: bool) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fluxvault"));
+    command
+        .current_dir(cwd)
+        .args(args)
+        .env("APPDATA", app_data)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if device_missing {
+        command.env("MOCK_GW_DEVICE_NOT_FOUND", "1");
+    } else {
+        command.env_remove("MOCK_GW_DEVICE_NOT_FOUND");
+    }
+    command.output().unwrap()
+}
+
 #[test]
 fn cli_only_entry_point_and_greaseweazle_preview_need_no_hardware() {
     let cwd = std::env::temp_dir();
@@ -98,6 +115,145 @@ fn flux_status_verifies_saved_hashes_without_a_drive_or_host_tool() {
     assert_eq!(changed.status.code(), Some(3));
     let changed_json: serde_json::Value = serde_json::from_slice(&changed.stdout).unwrap();
     assert_eq!(changed_json["evidence_healthy"], false);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_mock_greaseweazle_capture_decode_and_consensus_never_need_media() {
+    let root = std::env::temp_dir().join(format!(
+        "fluxvault-cli-gw-chain-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    let mock_gw = env!("CARGO_BIN_EXE_mock_gw");
+    let project_path = project.to_str().unwrap();
+    assert_eq!(
+        invoke_with_mock_gw(&root, &app_data, &["init", project_path], false)
+            .status
+            .code(),
+        Some(0)
+    );
+    let configured = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["tools", "set", "greaseweazle", mock_gw, "--json"],
+        false,
+    );
+    assert_eq!(configured.status.code(), Some(0));
+
+    let info = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["greaseweazle", "info", "--json"],
+        false,
+    );
+    assert_eq!(info.status.code(), Some(0));
+    let info_json: serde_json::Value = serde_json::from_slice(&info.stdout).unwrap();
+    assert_eq!(info_json["ready"], true);
+
+    let capture_args = [
+        "greaseweazle",
+        "capture",
+        "7",
+        "--profile",
+        "ibm.1440",
+        "--source-write-protected",
+        "--json",
+    ];
+    let missing = invoke_with_mock_gw(&project, &app_data, &capture_args, true);
+    assert_eq!(missing.status.code(), Some(2));
+    let missing_json: serde_json::Value = serde_json::from_slice(&missing.stdout).unwrap();
+    assert!(
+        missing_json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("No Greaseweazle board was found")
+    );
+    assert!(fs::read_dir(project.join("Flux")).unwrap().next().is_none());
+
+    for attempt in 1..=2 {
+        let capture = invoke_with_mock_gw(&project, &app_data, &capture_args, false);
+        assert_eq!(
+            capture.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&capture.stderr)
+        );
+        let capture_json: serde_json::Value = serde_json::from_slice(&capture.stdout).unwrap();
+        assert_eq!(capture_json["attempt"], attempt);
+        assert_eq!(capture_json["source_media_access"], "read_only");
+        let decode = invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &["greaseweazle", "decode", "7", "--json"],
+            false,
+        );
+        assert_eq!(
+            decode.status.code(),
+            Some(3),
+            "{}",
+            String::from_utf8_lossy(&decode.stderr)
+        );
+        let decode_json: serde_json::Value = serde_json::from_slice(&decode.stdout).unwrap();
+        assert_eq!(decode_json["capture_attempt"], attempt);
+        assert_eq!(decode_json["gw_reported_found_sectors"], 2880);
+        assert_eq!(decode_json["physical_media_access"], false);
+    }
+
+    let status = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["greaseweazle", "status", "7", "--json"],
+        false,
+    );
+    assert_eq!(status.status.code(), Some(3));
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["captures"].as_array().unwrap().len(), 2);
+    assert_eq!(status_json["decodes"].as_array().unwrap().len(), 2);
+    assert_eq!(status_json["evidence_healthy"], true);
+
+    let consensus = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["greaseweazle", "consensus", "7", "--json"],
+        false,
+    );
+    assert_eq!(consensus.status.code(), Some(0));
+    let consensus_json: serde_json::Value = serde_json::from_slice(&consensus.stdout).unwrap();
+    assert_eq!(
+        consensus_json["matching_reported_good_lbas"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2880
+    );
+    assert_eq!(consensus_json["physical_media_access"], false);
+
+    let audit = fs::read_to_string(project.join("Logs").join("external-tools.jsonl")).unwrap();
+    let commands: Vec<serde_json::Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for subcommand in ["info", "read", "convert"] {
+        assert!(commands.iter().any(|entry| {
+            entry["arguments"].as_array().is_some_and(|arguments| {
+                arguments.first().and_then(|arg| arg.as_str()) == Some(subcommand)
+            })
+        }));
+    }
+    assert!(!commands.iter().any(|entry| {
+        entry["arguments"].as_array().is_some_and(|arguments| {
+            arguments
+                .iter()
+                .any(|argument| matches!(argument.as_str(), Some("write" | "erase" | "clean")))
+        })
+    }));
     fs::remove_dir_all(root).unwrap();
 }
 
