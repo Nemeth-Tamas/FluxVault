@@ -203,9 +203,35 @@ Board:
 - firmware 1.6
 - board enumerated correctly
 - current shop cable is **straight**, so this setup uses **Greaseweazle drive B**
-- observed spindle speed on the current drive was ~299.4 RPM
+- current production candidate measured ~301.18 RPM
 
-Current drive:
+### Proven good drive — use this as the primary FluxVault Greaseweazle drive
+
+- **Mitsumi D353M3D-5056**
+- label/other marking: **D63119**
+- made in China
+- tested on 2026-10-05 with the same straight ribbon / Greaseweazle drive B setup
+- RPM: **301.177 rpm**, period **199.218 ms**
+- short IBM scan: **177/180 sectors (98%)** across cylinders 0-4
+- full 80-cylinder IBM scan: **2876/2880 sectors (99.86%)**
+- both heads read correctly across the disk; from cylinder 7 onward the test disk was effectively a wall of 18/18 tracks
+- targeted fixed-profile recovery on cylinders 0,5,6 recovered three of the four sectors missed by the first full pass
+- a second independent Mitsumi capture reproduced the same single remaining failure at cylinder 0, head 1, Greaseweazle grid sector position 6
+- this drive is considered the **fully working, reliable primary drive** for further FluxVault hardware validation
+
+### Secondary working drive
+
+- Samsung **SFD-321B/LBL1**
+- sticker/serial: **FBT6 S2BR9012752**
+- revision **T6B**
+- works on both heads and is usable, but was slightly weaker on the tested marginal WinWord disk than the Mitsumi
+- targeted Samsung reread of cylinder 0 head 1 reproduced the exact same single missing sector as the Mitsumi, strongly suggesting that remaining failure is media-level rather than a drive fault
+
+### Drive swapping policy
+
+Do **not** make routine physical drive swapping part of the automatic recovery workflow. Repeatedly unplugging/replugging the 34-pin ribbon risks chewing up the cable/connectors. The normal Greaseweazle-only workflow should assume the Mitsumi remains connected and should escalate using additional/targeted captures on that one drive. Treat alternate-drive testing as an optional manual last-resort/service action, not a normal automated stage.
+
+### Bad drive retained only as a diagnostic reference
 
 - NEC FD1231H
 - exact P/N: `134-506791-322-4`
@@ -219,13 +245,34 @@ Observed fault:
 - same pattern occurred across multiple Excel 5.0 Hungarian installer floppies
 - no visible disk scratching
 - no obvious mechanical damage/contamination found on inspection
-- therefore suspect this specific drive's head-0/read path; obtain/test a healthy 3.5-inch PC floppy drive before declaring the FluxVault Greaseweazle path physically validated
+- therefore suspect this specific drive's head-0/read path; do not use it for FluxVault production validation
 
 Do not "fix" this by weakening validation rules.
 
+## Recovery behavior learned from live Greaseweazle testing
+
+The 2026-10-05 tests validated the intended escalation shape manually:
+
+- initial Mitsumi full-disk scan: **2876/2880**
+- targeted reread of only cylinders 0, 5, and 6 using fixed `ibm.1440`, `--retries=5`, and `--raw`: effectively recovered **3 of the 4** previously missing sectors
+- remaining sector stayed missing across:
+  - the original full Mitsumi pass
+  - a targeted Mitsumi pass
+  - a fresh independent targeted Mitsumi capture
+  - a targeted Samsung capture
+- normal policy should therefore stop and report the disk as partial after bounded independent attempts show no improvement, rather than hammering one sector indefinitely
+
+Important implementation lesson:
+
+- `ibm.scan` is useful for format discovery/triage
+- once geometry is known, aggressive recovery should use the **fixed known profile** (for this test, `ibm.1440`)
+- a test using `ibm.scan --revs=10` accumulated bogus/phantom sector IDs such as 23/26 and 31/32 and eventually crashed EDSK output with `struct.error: ubyte format requires 0 <= number <= 255`
+- therefore do **not** use long multi-revolution `ibm.scan` as the normal known-format recovery strategy
+- preferred pattern is fixed profile + bounded retries + raw SCP preservation + targeted cylinders/heads
+
 ## Immediate development goal for next chat
 
-Once a healthy floppy drive is available:
+A healthy primary drive is now available: **Mitsumi D353M3D-5056**.
 
 1. Run the existing real-hardware preflight through **FluxVault itself**, not just direct `gw.exe`.
 2. Confirm:
