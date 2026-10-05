@@ -235,6 +235,39 @@ fn cli_mock_greaseweazle_capture_decode_and_consensus_never_need_media() {
     );
     assert_eq!(consensus_json["physical_media_access"], false);
 
+    // Recovery can seed an existing full decode, and completion is resumable
+    // without a connected board. No new physical read is allowed in this case.
+    let recover_args = [
+        "greaseweazle",
+        "recover",
+        "7",
+        "--gw-drive",
+        "B",
+        "--source-write-protected",
+        "--acquisition-only",
+        "--json",
+    ];
+    let recovered = invoke_with_mock_gw(&project, &app_data, &recover_args, false);
+    assert_eq!(
+        recovered.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&recovered.stdout)
+    );
+    let recovered_json: serde_json::Value = serde_json::from_slice(&recovered.stdout).unwrap();
+    assert_eq!(recovered_json["recovery"]["status"], "acquired");
+    assert_eq!(recovered_json["recovery"]["physical_reads_this_run"], 0);
+    assert_eq!(recovered_json["customer_delivery_certified"], false);
+    let resumed = invoke_with_mock_gw(&project, &app_data, &recover_args, true);
+    assert_eq!(resumed.status.code(), Some(0));
+    let resumed_json: serde_json::Value = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(resumed_json["recovery"]["resumed"], true);
+    assert_eq!(resumed_json["recovery"]["physical_reads_this_run"], 0);
+    assert_eq!(
+        resumed_json["recovery"]["image"],
+        recovered_json["recovery"]["image"]
+    );
+
     let audit = fs::read_to_string(project.join("Logs").join("external-tools.jsonl")).unwrap();
     let commands: Vec<serde_json::Value> = audit
         .lines()
@@ -247,6 +280,13 @@ fn cli_mock_greaseweazle_capture_decode_and_consensus_never_need_media() {
             })
         }));
     }
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|entry| entry["arguments"][0] == "read")
+            .count(),
+        2
+    );
     assert!(!commands.iter().any(|entry| {
         entry["arguments"].as_array().is_some_and(|arguments| {
             arguments

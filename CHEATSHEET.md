@@ -125,9 +125,9 @@ fluxvault extract disk 7
 
 `composite` uses corroborated saved-sector evidence; `fat` reconstructs only provable mirrored FAT sectors. Neither is permission to invent or silently certify damaged customer data. Some disks will still need attention.
 
-## 6. When the Greaseweazle arrives
+## 6. Greaseweazle: insert one disk, run one command
 
-Follow [the physical preflight checklist](GREASEWEAZLE_PREFLIGHT.md) **first**, with a disposable, write-protected disk. The Greaseweazle capture path has not yet been validated on the actual board/NEC drive. `tools check` only checks the host program; `greaseweazle info` checks for a connected, ready board.
+The tested **Mitsumi drive with the straight ribbon uses selector B**. The original NEC is faulty; do not use it as the production drive. See [setup and live checks](GREASEWEAZLE_PREFLIGHT.md). Check the host/board after connecting:
 
 ```powershell
 fluxvault tools check
@@ -135,28 +135,35 @@ fluxvault greaseweazle info
 fluxvault greaseweazle preview
 ```
 
-After the disposable-disk preflight, an example **read-only raw-flux capture** for disk 7 is:
+Insert the correctly numbered, protected **1.44 MB** floppy. No USB scan is required first:
 
 ```powershell
-fluxvault greaseweazle capture 7 --gw-drive A --source-write-protected
+fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 ```
 
-Then remove the floppy. These next commands work **offline** on saved evidence:
+FluxVault captures and decodes, rereads only problem areas within bounded limits, then runs extraction/conversion/audit/report processing. After it finishes, remove the disk and run the command with the next disk's number. It stops after two non-improving passes rather than endlessly hammering the disk.
+
+For verified **720 KB** media, add `--profile ibm.720`. Format discovery is not automatic yet; the default is 1.44 MB. Numbering/swapping is still manual here; a guided Greaseweazle batch loop is planned. Keep only one physical Greaseweazle command running at a time.
+
+Repeat the same command/settings to resume an interrupted job. A completed job is verified/reused, not physically reread. Partial results keep missing sectors explicit—no bytes are guessed. Clean maps can still contain lower-confidence single-capture sectors; they are not delivery certification. Full extraction from damaged filesystems remains unfinished. Add `--acquisition-only` to skip downstream processing.
+
+Optional **offline** evidence checks:
 
 ```powershell
-fluxvault greaseweazle decode 7
 fluxvault greaseweazle status 7
-fluxvault greaseweazle compare 7
+fluxvault disk show 7 --details
+fluxvault recovery queue
 ```
 
-After **two distinct physical flux captures**, also run:
+Expert separate capture/decode commands remain available:
 
 ```powershell
+fluxvault greaseweazle capture 7 --profile ibm.1440 --gw-drive B --source-write-protected
+fluxvault greaseweazle decode 7
 fluxvault greaseweazle consensus 7
-fluxvault greaseweazle plan 7
 ```
 
-These reports identify candidates and conflicts. They do **not** automatically put flux-decoded sectors into a certified customer image. If FluxVault cannot infer the format from a saved USB image, capture requires `--profile ibm.1440` or `--profile ibm.720`, chosen from independently verified disk format.
+Only `capture` in that last block accesses the disk. `consensus` requires two distinct saved raw captures; repeated decodes of one SCP do not count. `recover` already records confidence/provenance automatically; these expert commands are not required for its normal use.
 
 ## 7. Delivery, only when checks are clear
 

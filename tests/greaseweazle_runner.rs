@@ -10,6 +10,7 @@ use std::{
 use fluxvault::{
     external_tools::{CommandAudit, run_audited_probe},
     flux_capture::{self, CaptureRequest},
+    flux_recovery::{self, RecoveryPolicy},
     greaseweazle::{
         GreaseweazleBackend, GreaseweazleCommand, GreaseweazleDeviceStatus, GreaseweazleProfile,
         GreaseweazleProgressEvent, ProcessGreaseweazleBackend, classify_info_output,
@@ -44,12 +45,12 @@ fn version_probes_are_bounded_and_audited_without_media_access() {
     let version = run_audited_probe(
         "Greaseweazle",
         &executable,
-        &["--version".to_owned()],
+        &["info".to_owned()],
         &audit_path,
         Duration::from_secs(2),
     );
     assert!(version.audit.success);
-    assert!(version.audit.stdout.contains("1.23"));
+    assert!(version.audit.stderr.contains("1.23"));
     assert!(version.audit_error.is_none());
 
     let hanging = run_audited_probe(
@@ -82,7 +83,7 @@ fn runner_executes_info_preserves_output_and_records_audit_with_version() {
     assert!(!execution.timed_out);
     assert_eq!(execution.host_version.as_deref(), Some("1.23"));
 
-    let info = parse_info_output(&execution.stdout);
+    let info = parse_info_output(&execution.output_text());
     assert_eq!(info.status, GreaseweazleDeviceStatus::Connected);
     assert_eq!(info.host_tools_version.as_deref(), Some("1.23"));
     assert_eq!(info.model.as_deref(), Some("Greaseweazle V4"));
@@ -99,7 +100,7 @@ fn runner_executes_info_preserves_output_and_records_audit_with_version() {
     assert!(audit.success);
     assert_eq!(audit.exit_code, Some(0));
     assert_eq!(audit.version.as_deref(), Some("1.23"));
-    assert!(audit.stdout.contains("Greaseweazle V4"));
+    assert!(audit.stderr.contains("Greaseweazle V4"));
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -134,10 +135,7 @@ fn runner_streams_progress_events_during_raw_capture() {
     assert_eq!(result.attempt_number, 1);
     assert!(result.flux_path.exists());
     assert!(result.metadata_path.exists());
-    assert_eq!(
-        result.host_version.as_deref(),
-        Some("Greaseweazle Tools v1.23")
-    );
+    assert_eq!(result.host_version.as_deref(), Some("1.23"));
 
     // Verify that progress events were streamed
     let recorded = events.lock().unwrap().clone();
@@ -298,7 +296,7 @@ fn runner_detects_device_not_found_from_mock() {
 
     assert!(execution.success);
     assert_eq!(
-        classify_info_output(&execution.stdout),
+        classify_info_output(&execution.output_text()),
         GreaseweazleDeviceStatus::NotFound
     );
 
@@ -333,4 +331,227 @@ fn runner_strictly_blocks_unsafe_greaseweazle_commands_before_execution() {
     );
     let cmd = GreaseweazleCommand::info();
     assert_eq!(cmd.subcommand(), "info");
+}
+
+#[test]
+fn automatic_recovery_stops_after_clean_fast_pass_and_reuses_completed_job() {
+    let (project, root) = disposable_project("auto-clean");
+    let mut backend = ProcessGreaseweazleBackend::new(
+        mock_gw_path(),
+        project.logs_dir().join("external-tools.jsonl"),
+    )
+    .unwrap()
+    .with_stream_to_stderr(false);
+    let first = flux_recovery::recover(
+        &project,
+        7,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(first.physical_reads_this_run, 1);
+    assert_eq!(first.status, "acquired");
+    assert_eq!(first.single_capture_sectors, 2880);
+    assert_eq!(
+        fluxvault::imaging::load_project_statistics(&project.images_dir())
+            .unwrap()
+            .disk_count,
+        1
+    );
+    let repeat = flux_recovery::recover(
+        &project,
+        7,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(repeat.physical_reads_this_run, 0);
+    assert!(repeat.resumed);
+    assert_eq!(repeat.image, first.image);
+    fs::write(first.image, b"tampered").unwrap();
+    assert!(
+        flux_recovery::recover(
+            &project,
+            7,
+            GreaseweazleProfile::Ibm1440,
+            'B',
+            RecoveryPolicy::default(),
+            &mut backend,
+            &|_| {}
+        )
+        .is_err()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_recovery_targets_problem_cylinders_and_stops_without_improvement() {
+    let (project, root) = disposable_project("auto-stubborn");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut backend = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_stream_to_stderr(false)
+        .with_env("MOCK_GW_BAD_LBAS", "24");
+    let result = flux_recovery::recover(
+        &project,
+        1,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.stop_reason, "no_improvement");
+    assert_eq!(result.status, "partial");
+    assert_eq!(result.missing_lbas, vec![24]);
+    assert_eq!(result.physical_reads_this_run, 3);
+    let entries = fs::read_to_string(audit).unwrap();
+    assert!(entries.contains("--tracks=c=0,1,2:h=0-1"));
+    let provenance: serde_json::Value =
+        serde_json::from_slice(&fs::read(result.provenance).unwrap()).unwrap();
+    assert_eq!(provenance["sectors"][24]["confidence"], "unreadable");
+    assert_eq!(provenance["sectors"][36]["confidence"], "corroborated");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_recovery_merges_new_sector_and_refuses_changed_control_bytes() {
+    for conflict in [false, true] {
+        let (project, root) = disposable_project("auto-improvement");
+        let mut backend = ProcessGreaseweazleBackend::new(
+            mock_gw_path(),
+            project.logs_dir().join("external-tools.jsonl"),
+        )
+        .unwrap()
+        .with_stream_to_stderr(false)
+        .with_env("MOCK_GW_RECOVER_AFTER_FAST", "1");
+        if conflict {
+            backend = backend.with_env("MOCK_GW_CONFLICT_LBA", "36");
+        }
+        let result = flux_recovery::recover(
+            &project,
+            1,
+            GreaseweazleProfile::Ibm1440,
+            'B',
+            RecoveryPolicy::default(),
+            &mut backend,
+            &|_| {},
+        );
+        if conflict {
+            assert!(result.unwrap_err().contains("Control sectors disagree"));
+            assert!(fs::read_dir(project.images_dir()).unwrap().next().is_none());
+        } else {
+            let result = result.unwrap();
+            assert_eq!(result.physical_reads_this_run, 2);
+            assert_eq!(result.status, "acquired");
+            assert!(result.missing_lbas.is_empty());
+            assert!(result.corroborated_sectors > 0);
+            let provenance: serde_json::Value =
+                serde_json::from_slice(&fs::read(result.provenance).unwrap()).unwrap();
+            assert_eq!(
+                provenance["sectors"][24]["capture_attempts"],
+                serde_json::json!([2])
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn automatic_recovery_resumes_saved_raw_capture_after_failed_decode() {
+    let (project, root) = disposable_project("auto-resume");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut failing = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_stream_to_stderr(false)
+        .with_env("MOCK_GW_FAIL_CONVERT", "1");
+    assert!(
+        flux_recovery::recover(
+            &project,
+            1,
+            GreaseweazleProfile::Ibm1440,
+            'B',
+            RecoveryPolicy::default(),
+            &mut failing,
+            &|_| {}
+        )
+        .is_err()
+    );
+    // Time spent shut down must not trigger another physical pass, but a saved
+    // raw capture can still be decoded offline when the board is disconnected.
+    let journal_path = project.root().join("Flux/Recovery/001_job.json");
+    let mut journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+    journal["started_unix_ms"] = serde_json::json!(0);
+    fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    let mut resumed = ProcessGreaseweazleBackend::new(mock_gw_path(), audit)
+        .unwrap()
+        .with_stream_to_stderr(false)
+        .with_env("MOCK_GW_DEVICE_NOT_FOUND", "1");
+    let result = flux_recovery::recover(
+        &project,
+        1,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut resumed,
+        &|_| {},
+    )
+    .unwrap();
+    assert!(result.resumed);
+    assert_eq!(result.physical_reads_this_run, 0);
+    assert_eq!(result.capture_attempts, vec![1]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_recovery_refuses_absent_board_before_capture_and_invalid_policy() {
+    let (project, root) = disposable_project("auto-no-board");
+    let mut backend = ProcessGreaseweazleBackend::new(
+        mock_gw_path(),
+        project.logs_dir().join("external-tools.jsonl"),
+    )
+    .unwrap()
+    .with_stream_to_stderr(false)
+    .with_env("MOCK_GW_DEVICE_NOT_FOUND", "1");
+    let error = flux_recovery::recover(
+        &project,
+        1,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(error.contains("no physical capture started"));
+    assert!(
+        !fs::read_dir(project.root().join("Flux"))
+            .unwrap()
+            .any(|entry| {
+                entry
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "scp")
+            })
+    );
+    for seconds in [0, 29, 1801, u64::MAX] {
+        let policy = RecoveryPolicy {
+            max_seconds: seconds,
+            ..RecoveryPolicy::default()
+        };
+        assert!(policy.validate().is_err());
+    }
+    let mut policy = RecoveryPolicy::default();
+    policy.passes[0].retries = 11;
+    assert!(policy.validate().is_err());
+    fs::remove_dir_all(root).unwrap();
 }

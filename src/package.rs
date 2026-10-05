@@ -294,6 +294,24 @@ fn should_exclude(path: &Path) -> bool {
         .unwrap_or_default()
         .to_string_lossy()
         .to_ascii_lowercase();
+    // Recovery control state is internal; keep the sector-provenance evidence.
+    let in_flux_recovery = path.parent().is_some_and(|parent| {
+        parent
+            .file_name()
+            .is_some_and(|part| part.eq_ignore_ascii_case("Recovery"))
+            && parent.parent().is_some_and(|flux| {
+                flux.file_name()
+                    .is_some_and(|part| part.eq_ignore_ascii_case("Flux"))
+            })
+    });
+    if in_flux_recovery
+        && name
+            .strip_suffix(".lock")
+            .or_else(|| name.strip_suffix("_job.json"))
+            .is_some_and(|disk| !disk.is_empty() && disk.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return true;
+    }
     name.starts_with(".fluxvault-")
         || name.starts_with("__")
         || name.contains(".partial.")
@@ -515,6 +533,11 @@ mod tests {
         fs::write(project.join("project.json"), "{}").unwrap();
         fs::write(project.join("Images").join("001.img"), b"image").unwrap();
         fs::write(project.join("Images").join("001.partial.img"), b"partial").unwrap();
+        let flux_recovery = project.join("Flux").join("Recovery");
+        fs::create_dir_all(&flux_recovery).unwrap();
+        fs::write(flux_recovery.join("001_job.json"), b"internal").unwrap();
+        fs::write(flux_recovery.join("001.lock"), b"").unwrap();
+        fs::write(flux_recovery.join("001_attempt_001_provenance.json"), b"{}").unwrap();
         fs::write(
             project.join("Extracted").join("001").join("customer.doc"),
             b"document",
@@ -570,8 +593,8 @@ mod tests {
             &|_| {},
         )
         .unwrap();
-        assert_eq!(result.file_count, 5);
-        assert_eq!(result.total_bytes, 23);
+        assert_eq!(result.file_count, 6);
+        assert_eq!(result.total_bytes, 25);
         assert!(result.sha256_path.is_file());
         let mut zip = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
         assert!(zip.by_name("Images/001.img").is_ok());
@@ -592,6 +615,13 @@ mod tests {
                 .is_err()
         );
         assert!(zip.by_name("Images/001.partial.img").is_err());
+        assert!(zip.by_name("Flux/Recovery/001_job.json").is_err());
+        assert!(zip.by_name("Flux/Recovery/001.lock").is_err());
+        assert!(
+            zip.by_name("Flux/Recovery/001_attempt_001_provenance.json")
+                .is_ok()
+        );
+        assert!(!should_exclude(&project.join("Extracted/001/001.lock")));
         assert!(
             zip.by_name("Extracted/001/.fluxvault-inventory.json")
                 .is_err()

@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    greaseweazle::{GreaseweazleBackend, GreaseweazleCommand, GreaseweazleProfile},
+    greaseweazle::{
+        CaptureSettings, GreaseweazleBackend, GreaseweazleCommand, GreaseweazleProfile,
+    },
     imaging,
     project::ProjectState,
     recovery_plan,
@@ -44,6 +46,8 @@ struct CaptureRecord {
     detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     host_version: Option<String>,
+    #[serde(default)]
+    capture_settings: Option<CaptureSettings>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +85,8 @@ struct DecodeRecord {
     gw_bad_lbas: Option<Vec<u64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     host_version: Option<String>,
+    #[serde(default)]
+    capture_settings: Option<CaptureSettings>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +132,7 @@ pub struct DecodeInspection {
     pub sector_quality: String,
     pub detail: Option<String>,
     pub host_version: Option<String>,
+    pub capture_settings: Option<CaptureSettings>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -365,7 +372,7 @@ pub fn compare_flux_captures(
     Ok(result)
 }
 
-fn verified_decode(
+pub(crate) fn verified_decode(
     project: &ProjectState,
     decode: &DecodeInspection,
     sectors: usize,
@@ -378,7 +385,18 @@ fn verified_decode(
         .as_ref()
         .ok_or("Greaseweazle decode lacks a complete, consistent sector map; comparison refused")?;
     let bad_set = validated_bad_set(bad, sectors, "Greaseweazle")?;
-    if decode.gw_reported_total_sectors != Some(sectors)
+    let covered_sectors = match decode
+        .capture_settings
+        .as_ref()
+        .and_then(|s| s.cylinders.as_ref())
+    {
+        Some(cylinders) => {
+            decode.capture_settings.as_ref().unwrap().validate()?;
+            cylinders.len() * 2 * (sectors / 160)
+        }
+        None => sectors,
+    };
+    if decode.gw_reported_total_sectors != Some(covered_sectors)
         || decode.gw_reported_found_sectors != Some(sectors - bad_set.len())
     {
         return Err("Greaseweazle sector counts disagree with its map".to_owned());
@@ -647,6 +665,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 sector_quality: record.status,
                 detail: record.detail,
                 host_version: record.host_version,
+                capture_settings: record.capture_settings,
             });
         }
     }
@@ -694,6 +713,24 @@ pub fn capture(
     request: CaptureRequest,
     backend: &mut impl GreaseweazleBackend,
 ) -> Result<CaptureResult, String> {
+    capture_with_settings(
+        project,
+        request,
+        &CaptureSettings {
+            cylinders: None,
+            retries: 3,
+        },
+        backend,
+    )
+}
+
+pub fn capture_with_settings(
+    project: &ProjectState,
+    request: CaptureRequest,
+    settings: &CaptureSettings,
+    backend: &mut impl GreaseweazleBackend,
+) -> Result<CaptureResult, String> {
+    settings.validate()?;
     MediaSafetyPolicy::assert_invariants();
     if request.disk_number == 0 {
         return Err("Capture requires a positive disk number".to_owned());
@@ -708,11 +745,12 @@ pub fn capture(
     let final_flux = flux_dir.join(format!("{stem}.scp"));
     let partial_metadata = flux_dir.join(format!("{stem}.partial.json"));
     let final_metadata = flux_dir.join(format!("{stem}.json"));
-    let command = GreaseweazleCommand::raw_flux_read(
+    let command = GreaseweazleCommand::raw_flux_read_with_settings(
         request.profile,
         request.drive,
         request.revolutions,
         &partial_flux,
+        settings,
     )?;
     let mut record = CaptureRecord {
         schema_version: SCHEMA_VERSION,
@@ -728,6 +766,7 @@ pub fn capture(
         command: command.arguments().to_vec(),
         detail: None,
         host_version: None,
+        capture_settings: Some(settings.clone()),
     };
     reserve_record(&partial_metadata, &record)?;
 
@@ -889,6 +928,7 @@ pub fn decode(
         reported_total_sectors: None,
         gw_bad_lbas: None,
         host_version: None,
+        capture_settings: record.capture_settings.clone(),
     };
     reserve_decode_record(&partial_metadata, &decode_record)?;
     let execution = match backend.execute(&command) {
@@ -955,8 +995,12 @@ pub fn decode(
     let output_hash = hash_file(&partial_image)?;
     let reported_sectors =
         parse_sector_summary(&execution.stdout).or_else(|| parse_sector_summary(&execution.stderr));
-    let gw_bad_lbas = parse_sector_map(&execution.stdout, profile)
-        .or_else(|| parse_sector_map(&execution.stderr, profile));
+    let selected = record
+        .capture_settings
+        .as_ref()
+        .and_then(|s| s.cylinders.as_deref());
+    let gw_bad_lbas = parse_sector_map_selected(&execution.stdout, profile, selected)
+        .or_else(|| parse_sector_map_selected(&execution.stderr, profile, selected));
     fs::rename(&partial_image, &final_image)
         .map_err(|error| format!("Cannot finalize decoded image: {error}"))?;
     decode_record.output_sha256 = output_hash.clone();
@@ -986,7 +1030,7 @@ fn parse_sector_summary(output: &str) -> Option<(usize, usize)> {
     output.lines().rev().find_map(|line| {
         let line = line.trim();
         let (found, rest) = line.strip_prefix("Found ")?.split_once(" sectors of ")?;
-        let (total, _) = rest.split_once(' ')?;
+        let total = rest.split_whitespace().next()?;
         let found = found.parse::<usize>().ok()?;
         let total = total.parse::<usize>().ok()?;
         (total > 0 && found <= total).then_some((found, total))
@@ -995,14 +1039,32 @@ fn parse_sector_summary(output: &str) -> Option<(usize, usize)> {
 
 /// Parse only a complete IBM 80-cylinder grid matching gw's final sector total.
 /// This is a report from gw, not independent CRC verification of the .img bytes.
+#[cfg(test)]
 fn parse_sector_map(output: &str, profile: GreaseweazleProfile) -> Option<Vec<u64>> {
+    parse_sector_map_selected(output, profile, None)
+}
+
+fn parse_sector_map_selected(
+    output: &str,
+    profile: GreaseweazleProfile,
+    selected: Option<&[u32]>,
+) -> Option<Vec<u64>> {
     let sectors_per_track = match profile {
         GreaseweazleProfile::Ibm1440 => 18usize,
         GreaseweazleProfile::Ibm720 => 9usize,
     };
     let cylinders = 80usize;
     let heads = 2usize;
-    let expected_total = cylinders * heads * sectors_per_track;
+    let selected_set = selected.map(|values| values.iter().copied().collect::<BTreeSet<_>>());
+    if let Some(values) = selected
+        && (values.is_empty()
+            || selected_set.as_ref()?.len() != values.len()
+            || values.iter().any(|c| *c >= 80))
+    {
+        return None;
+    }
+    let expected_total =
+        selected.map_or(cylinders, |values| values.len()) * heads * sectors_per_track;
     let (reported_found, reported_total) = parse_sector_summary(output)?;
     if reported_total != expected_total {
         return None;
@@ -1045,6 +1107,16 @@ fn parse_sector_map(output: &str, profile: GreaseweazleProfile) -> Option<Vec<u6
             return None;
         }
         for (cylinder, cell) in cells.chars().enumerate() {
+            let in_capture = selected_set
+                .as_ref()
+                .is_none_or(|set| set.contains(&(cylinder as u32)));
+            if !in_capture {
+                if cell != ' ' {
+                    return None;
+                }
+                bad_lbas.push(((cylinder * heads + head) * sectors_per_track + sector) as u64);
+                continue;
+            }
             match cell {
                 '.' => found += 1,
                 'X' => {
@@ -1061,7 +1133,7 @@ fn parse_sector_map(output: &str, profile: GreaseweazleProfile) -> Option<Vec<u6
     Some(bad_lbas)
 }
 
-fn project_flux_dir(project: &ProjectState) -> Result<PathBuf, String> {
+pub(crate) fn project_flux_dir(project: &ProjectState) -> Result<PathBuf, String> {
     let root = project
         .root()
         .canonicalize()
@@ -1100,7 +1172,7 @@ fn resolve_derived_dir(flux_dir: &Path, create: bool) -> Result<PathBuf, String>
     Ok(resolved)
 }
 
-fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, String> {
+pub(crate) fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, String> {
     for attempt in 1..=999_999u32 {
         let stem = format!("{disk_number:03}_attempt_{attempt:03}");
         let mut available = true;

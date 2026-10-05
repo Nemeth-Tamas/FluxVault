@@ -8,6 +8,8 @@
 >
 > **Throughput target:** With one USB floppy drive and one Greaseweazle-connected drive operating concurrently on different disks, a 136-disk mixed-condition job—including automatic verification, escalation, extraction, conversion, audit, and ordinary recovery passes—should be achievable within one operator afternoon (target: no more than roughly 6 hours of attended wall-clock time, excluding genuinely pathological media that must continue unattended or be reported as unrecoverable).
 
+> **Greaseweazle-only priority (2026-10-05):** USB is optional. On the working Mitsumi drive (straight cable, selector B), start fast, decode preserved raw evidence, and escalate only problem areas within time/media-stress limits. Routine drive/ribbon swapping is not part of the workflow. `greaseweazle recover N` now implements a bounded single-disk slice and dispatches saved-image processing; automatic format discovery, damaged-filesystem extraction, the guided GW batch loop, and production scheduling remain open. See `CHAT_TO_CHAT_GREASEWEAZLE.md` for the hardware handoff and `GREASEWEAZLE_PREFLIGHT.md` for live results.
+
 ## 0. Development contract / project rules
 
 - [x] Rust stable, Windows-first application.
@@ -152,6 +154,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
   - [x] extraction failure;
   - [x] apparently readable image with zero recovered files when operator review is warranted.
 - [ ] Automatically run extraction immediately after an eligible acquisition or newly derived preferred image; no separate Files-page action in production mode.
+  - [x] Single-disk `greaseweazle recover N` dispatches the existing project-wide extraction/conversion/audit/workbook chain by default; partial images still follow conservative extraction eligibility rules.
   - [x] The retired GUI queued image-only extraction after each clean USB acquisition; the CLI retains `extract disk N`/`extract all`, but automatic nonblocking post-scan extraction remains a production-scheduler task.
   - [x] Add a one-button offline project pass that batches eligible extraction, conversion, evidence audit, and a Hungarian workbook without touching physical media.
 - [ ] Automatically re-run extraction and file inventory whenever a better composite, decoded flux image, or reconstructed filesystem becomes preferred.
@@ -193,6 +196,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 
 - [x] Create `GreaseweazleBackend` abstraction with a mock/no-hardware mode.
 - [x] Detect `gw.exe`, run info/version command, and show device status.
+  - [x] Match actual Windows host 1.23: obtain host version from `gw info` and parse normal info/progress on stderr as well as stdout. Mock executable reproduces that behavior instead of accepting unsupported `--version`.
 - [x] Build commands as argument arrays, never shell-concatenated strings.
 - [x] Unit-test command generation without hardware.
 - [x] Add CLI raw-SCP capture and offline decode routes with mock-backed artifact tests, immutable attempt numbering, SHA-256 provenance, and source-hash refusal; do not call them live-validated before the board arrives.
@@ -206,31 +210,41 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
 - [ ] Validate Greaseweazle donor-sector bytes independently (including repeated flux decodes/captures where needed), then create an immutable provenance-tracked composite only when good-sector conflicts are resolved; never claim vendor-reported dots alone prove clean bytes.
 - [x] Parse `gw` stderr/stdout incrementally into CLI progress/events.
 - [x] Store full command, version, start/end time, exit status, and captured output for every run.
-- [x] Bound and audit tool-health/version probes as well as `gw info`/read/convert, so a hung `--version` cannot stall the normal CLI path indefinitely.
+- [x] Bound and audit tool-health/version probes as well as `gw info`/read/convert, so a hung probe cannot stall the normal CLI path indefinitely.
 - [x] Parse `gw info` device details rather than trusting exit code zero (which upstream can return for `Device: Not found`); surface not-found/unknown/bootloader states and block capture before reserving an attempt.
 
 ## 10. Greaseweazle raw-flux acquisition — after board arrives
 
-- [ ] Detect board + connected drive and print device/firmware info.
-- [ ] **Preservation capture defaults to true raw flux**, e.g. SCP/KryoFlux, not regenerated “perfect” flux.
+- [x] Detect board and print device/firmware info; validate physical drive operation through a protected read. V4.1/Mitsumi selector B tested on 2026-10-05, host 1.23, firmware 1.6. This is not automatic drive-model detection or validation of the faulty NEC.
+- [x] **Preservation capture defaults to true raw flux** (SCP), not regenerated “perfect” flux; physically tested on the Mitsumi setup.
 - [x] Important guardrail: if `gw read --format=...` is used for a raw-flux file, pair it with `--raw`; otherwise Greaseweazle may regenerate flux and fill undecodable sectors rather than preserving the physical capture.
 - [ ] Default recovery workflow: automatically capture raw flux once when USB triage escalates a disk, then perform as much decoding/re-decoding as possible from that preserved capture instead of repeatedly stressing fragile media.
-- [ ] Allow configurable revolutions for raw capture where the selected image type supports it.
-- [ ] Preserve every raw acquisition as an immutable attempt with SHA-256.
-- [ ] Derive sector images from raw captures using `gw convert --format=<profile>`; derived images are separate artifacts, never replacements for raw flux.
-  - [x] Hardware-independent implementation stores numbered SCP attempts in `Flux`, hashes them, and stores offline decoded images under `Flux/Derived`; live hardware validation and sector-quality integration remain open.
+- [x] Allow configurable revolutions for raw capture (SCP; 1–10 via CLI).
+- [x] Preserve every raw acquisition as an immutable attempt with SHA-256, including numbered failed/partial evidence.
+- [x] Derive sector images from raw captures using `gw convert --format=<profile>`; separate artifacts, never replacements for raw flux.
+  - [x] Live raw capture/decode/status/independent-capture consensus passed with protected WinWord 1. Sparse targeted-capture grids parsed conservatively; unobserved cylinders stay unavailable.
 - [x] Profiles initially required for this collection:
   - [x] IBM PC 1.44 MB / HD.
   - [x] IBM PC 720 KB / DD.
 - [ ] Later expose other Greaseweazle disk definitions without hardcoding the whole universe into FluxVault.
 - [ ] Track/head selection and step settings available as expert flags, not in the basic happy path.
-- [ ] Apply bounded automatic physical-read policies based on media condition, elapsed time, revolutions, and prior improvement; stop automatically rather than endlessly hammering fragile media.
+- [x] Apply bounded single-disk automatic physical-read policies based on missing/conflicting sectors, elapsed time, revolutions, and prior improvement; stop rather than endlessly hammering media. Default 4 passes/600 seconds/2 consecutive non-improving passes; validated policies can tighten/change ceilings.
+  - [x] `greaseweazle recover N` works without USB: Fast whole disk, then fixed-profile problem-cylinder rereads with clean control cylinders; preserves raw/decode attempts and publishes immutable compatible image/log/metadata plus per-sector confidence/provenance.
+  - [x] Persist stages and completed result; resume saved raw decode without a new read, verify completed hashes, reject changed policy/settings, block duplicate per-project/disk jobs.
+  - [x] Live targeted recovery retained 2,879/2,880 sectors, no byte conflicts, and stopped with persistent LBA 24 explicitly unreadable. Repeat invocation read no media; downstream backup/audit/workbook ran.
+  - [ ] Add cross-project physical-device reservation and interruption tests at every journal/publish boundary before calling this a production scheduler.
 - [ ] Automatically infer the first decode profile from USB geometry/image size and flux evidence, then try evidence-ranked alternative profiles without operator selection.
   - [x] Initial CLI capture profile defaults from saved 1.44 MB/720 KB USB sector count; other/ambiguous formats require an explicit profile until flux-based inference exists.
 - [ ] After flux capture, automatically decode, compare against USB attempts, build the best composite, retry extraction/recovery, and update audit state.
+  - [x] GW-only single-disk job aggregates its independent raw captures with good-byte conflict refusal and explicit single-capture confidence, then calls `process`; full USB/GW composite integration and damaged-filesystem extraction remain open.
 - [ ] Tell the operator exactly when to move a USB-problem disk into the Greaseweazle drive and when it can be removed; no flux expertise should be required.
 
 ## 11. Autonomous two-drive production workflow
+
+Greaseweazle-only production is also a first-class mode; no USB scan is required. Build its guided disk-swap loop first around the single-disk recovery service, then add concurrent USB/GW scheduling. The working Mitsumi stays connected; alternate-drive comparison is an optional service action, not routine operator work.
+
+- [ ] Add a guided Greaseweazle-only batch loop with automatic numbering, custody confirmation, concise swap cues, resume, and background downstream work.
+- [ ] Infer standard formats from bounded flux discovery/BPB evidence; `recover` currently defaults to ibm.1440 and requires an explicit ibm.720 for known DD media.
 
 The target setup has two different drives working simultaneously on different floppies: the USB drive performs fast first-pass acquisition while the Greaseweazle drive processes disks automatically escalated from the USB queue. A single disk is never placed in both drives simultaneously; the scheduler tracks custody and tells the operator where each numbered disk goes next.
 
@@ -360,7 +374,9 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [ ] End-to-end automated fixture test: acquisition artifact -> triage -> extraction/recovery -> conversion -> audit -> verified package with no technical operator choices.
 - [ ] Scheduler tests prove USB and Greaseweazle jobs can run concurrently without disk-number or artifact cross-contamination.
 - [ ] Policy tests cover automatic escalation, bounded retries, no-improvement stopping, severe-damage carving, and unrecoverable outcomes.
+  - [x] Mock tests cover clean fast-pass stop, targeted escalation, no-improvement stop, recovered-sector provenance, control-byte conflict refusal, absent-board refusal, policy-limit validation, output tamper refusal, and offline decode resume after expiry with no board.
 - [ ] Long-run soak test models 136 disks, application restart, worker failure, and resumability.
+- [ ] Clear legacy Clippy warnings and enforce strict all-target linting; formatting, all-target checking and automated tests currently pass, but strict `-D warnings` linting does not yet pass.
 
 ## 18. CLI / automation interface
 
@@ -375,6 +391,7 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
   - [x] `disk show N --details` exposes saved attempt hashes, bad LBAs, retry counts, and evidence paths; JSON includes these fields automatically.
 - [x] Read-only drive commands: `drive list` and `drive probe --drive A:`. Probe only accepts an enumerated removable drive, performs no write, and reports whether software guards pass; the current USB adapter still needs independent hardware write-protection validation before customer use.
 - [ ] Acquisition commands: `acquire --drive A: --disk N --retries N` plus a production `scan` workflow where the only interaction is media-change confirmation.
+  - [x] Add `greaseweazle recover N --gw-drive B --source-write-protected [--policy FILE] [--acquisition-only]` with default downstream processing, JSON output, durable resume, and live protected-media validation.
   - [x] Add gated CLI `acquire` using the read-only USB backend, positive write-protection and floppy-geometry checks, and a required operator hardware-protection assertion. Live read-only test on customer 007 completed with one unresolved sector; the other 2,879 sectors exactly matched its earlier clean image. Independent physical write-protection validation remains open above.
   - [x] Add a guarded, guided single-drive `scan` loop that requires an explicit READ confirmation for each disk, advances project numbering only after a completed image, and reports the derived recovery queue. Tested with synthetic acquisition, not live hardware.
   - [ ] Turn guided scanning into the production zero-touch pipeline: automatic post-scan extraction/recovery decisions, crash-safe resume, reliable media-change detection, and independent hardware validation.
@@ -397,6 +414,7 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
 - [ ] CLI integration tests cover project discovery, JSON schemas, exit codes, resumability, and safe failure without physical hardware.
   - [x] Exercise the built executable against a disposable nested project: project discovery, JSON output/errors, exact exit codes, and a guided-scan quit path that never enumerates or reads a drive.
   - [x] Cross-process LibreOffice integration test proves hash-bound reuse, tampered-output refusal, persisted issue loading, and retry after restart using only a disposable RTF.
+  - [x] Cross-process GW recovery test seeds saved raw evidence, publishes a compatible image, then reuses the completed result with the mock board absent and no new read commands.
   - [ ] Add interrupted-acquisition resume integration scenarios without requiring physical media.
 - [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.
 - [x] `fluxvault audit` and `fluxvault package build --destination PATH` use the evidence-audit and verified-package services without application-wide project state.

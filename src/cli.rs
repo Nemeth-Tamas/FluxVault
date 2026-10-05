@@ -72,6 +72,9 @@ Usage:
   fluxvault greaseweazle consensus N
                                     Cross-check decodes from two raw captures offline
   fluxvault greaseweazle plan N     Rank USB/dual-flux donor candidates offline
+  fluxvault greaseweazle recover N [--gw-drive A|B] [--profile ibm.1440|ibm.720]
+      --source-write-protected [--policy FILE] [--acquisition-only]
+                                    Automatic bounded recovery without a USB reader
   fluxvault extract all [--project PATH]
                                     Process saved images with the extraction service
   fluxvault extract disk N [--project PATH]
@@ -128,6 +131,8 @@ Options:
   --revs N                         Raw-flux revolutions per track (1-10; default 3)
   --capture-attempt N              Raw-flux attempt to decode (default latest complete)
   --source-write-protected         Confirm the source floppy's physical tab is protected
+  --policy FILE                    JSON recovery policy for greaseweazle recover
+  --acquisition-only               Skip downstream processing after recovery
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
 
 #[derive(Debug)]
@@ -184,6 +189,8 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut gw_revolutions: Option<u32> = None;
     let mut gw_capture_attempt: Option<u32> = None;
     let mut source_write_protected = false;
+    let mut recovery_policy: Option<PathBuf> = None;
+    let mut acquisition_only = false;
     let mut positional = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -228,6 +235,13 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 );
             }
             "--source-write-protected" => source_write_protected = true,
+            "--acquisition-only" => acquisition_only = true,
+            "--policy" => {
+                index += 1;
+                recovery_policy = Some(PathBuf::from(
+                    args.get(index).ok_or("--policy requires a file")?,
+                ));
+            }
             "--project" => {
                 index += 1;
                 let value = args.get(index).ok_or("--project requires a path")?;
@@ -329,14 +343,26 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "capture";
     let gw_decode =
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "decode";
-    if (gw_drive.is_some() || gw_revolutions.is_some() || source_write_protected) && !gw_capture {
-        return Err("--gw-drive, --revs, and --source-write-protected are only valid with greaseweazle capture".to_owned());
+    let gw_recover =
+        positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "recover";
+    if (recovery_policy.is_some() || acquisition_only) && !gw_recover {
+        return Err(
+            "--policy and --acquisition-only are only valid with greaseweazle recover".to_owned(),
+        );
+    }
+    if gw_revolutions.is_some() && !gw_capture {
+        return Err("--revs is only valid with greaseweazle capture".to_owned());
+    }
+    if (gw_drive.is_some() || source_write_protected) && !(gw_capture || gw_recover) {
+        return Err("--gw-drive and --source-write-protected are only valid with greaseweazle capture/recover".to_owned());
     }
     if gw_capture_attempt.is_some() && !gw_decode {
         return Err("--capture-attempt is only valid with greaseweazle decode".to_owned());
     }
-    if gw_profile.is_some() && !(gw_capture || gw_decode) {
-        return Err("--profile is only valid with greaseweazle capture or decode".to_owned());
+    if gw_profile.is_some() && !(gw_capture || gw_decode || gw_recover) {
+        return Err(
+            "--profile is only valid with greaseweazle capture, decode, or recover".to_owned(),
+        );
     }
     if drive_override.is_some()
         && !(positional.len() == 2 && positional[0] == "drive" && positional[1] == "probe")
@@ -394,7 +420,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             )?;
             let mut backend = ProcessGreaseweazleBackend::new(executable, audit_path)?;
             let execution = backend.execute(&GreaseweazleCommand::info())?;
-            let info = parse_info_output(&execution.stdout);
+            let info = parse_info_output(&execution.output_text());
             needs_attention =
                 !execution.success || info.status != GreaseweazleDeviceStatus::Connected;
             if json_output {
@@ -440,6 +466,39 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     execution.exit_code, execution.stdout, execution.stderr
                 ))
             }
+        }
+        Some("greaseweazle") if gw_recover && destination.is_none() => {
+            let disk = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or("recover requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let policy = match recovery_policy {
+                Some(path) => {
+                    let path = if path.is_absolute() {
+                        path
+                    } else {
+                        cwd.join(path)
+                    };
+                    serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                        .map_err(|e| format!("Invalid recovery policy: {e}"))?
+                }
+                None => crate::flux_recovery::RecoveryPolicy::default(),
+            };
+            return flux::recover(
+                &project,
+                flux::RecoveryOptions {
+                    disk,
+                    profile: gw_profile.unwrap_or(GreaseweazleProfile::Ibm1440),
+                    drive: gw_drive.unwrap_or('A'),
+                    protected: source_write_protected,
+                    policy,
+                    acquisition_only,
+                    json_output,
+                },
+            );
         }
         Some("greaseweazle") if gw_capture && destination.is_none() => {
             let disk_number = positional[2]

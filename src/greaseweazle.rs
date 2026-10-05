@@ -47,6 +47,31 @@ impl GreaseweazleProfile {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureSettings {
+    /// None reads the whole disk; selected cylinders always include both heads.
+    pub cylinders: Option<Vec<u32>>,
+    pub retries: u32,
+}
+
+impl CaptureSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.retries > 10 {
+            return Err("Greaseweazle retries must be from 0 to 10".to_owned());
+        }
+        if let Some(cylinders) = &self.cylinders {
+            let unique = cylinders.iter().collect::<std::collections::BTreeSet<_>>();
+            if cylinders.is_empty()
+                || unique.len() != cylinders.len()
+                || cylinders.iter().any(|c| *c >= 80)
+            {
+                return Err("Target cylinders must be distinct numbers from 0 to 79".to_owned());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GreaseweazleCommand {
     arguments: Vec<String>,
@@ -72,6 +97,26 @@ impl GreaseweazleCommand {
         revolutions: u32,
         output_path: &Path,
     ) -> Result<Self, String> {
+        Self::raw_flux_read_with_settings(
+            profile,
+            drive,
+            revolutions,
+            output_path,
+            &CaptureSettings {
+                cylinders: None,
+                retries: 3,
+            },
+        )
+    }
+
+    pub fn raw_flux_read_with_settings(
+        profile: GreaseweazleProfile,
+        drive: char,
+        revolutions: u32,
+        output_path: &Path,
+        settings: &CaptureSettings,
+    ) -> Result<Self, String> {
+        settings.validate()?;
         MediaSafetyPolicy::assert_invariants();
         let drive = validate_drive(drive)?;
         if revolutions == 0 {
@@ -87,15 +132,28 @@ impl GreaseweazleCommand {
             );
         }
 
-        Self::new_checked(vec![
+        let mut arguments = vec![
             "read".to_owned(),
             format!("--format={}", profile.argument()),
             "--raw".to_owned(),
             "--no-clobber".to_owned(),
             format!("--drive={drive}"),
             format!("--revs={revolutions}"),
-            output_path.display().to_string(),
-        ])
+            format!("--retries={}", settings.retries),
+            "--seek-retries=0".to_owned(),
+        ];
+        if let Some(cylinders) = &settings.cylinders {
+            arguments.push(format!(
+                "--tracks=c={}:h=0-1",
+                cylinders
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        arguments.push(output_path.display().to_string());
+        Self::new_checked(arguments)
     }
 
     pub fn convert_flux_to_sector_image(
@@ -436,9 +494,17 @@ pub struct GreaseweazleExecution {
     pub duration_ms: u128,
 }
 
+impl GreaseweazleExecution {
+    /// The Windows host tool sends normal device/progress output to stderr.
+    pub fn output_text(&self) -> String {
+        format!("{}\n{}", self.stdout, self.stderr)
+    }
+}
+
 pub trait GreaseweazleBackend {
     fn mode(&self) -> BackendMode;
     fn execute(&mut self, command: &GreaseweazleCommand) -> Result<GreaseweazleExecution, String>;
+    fn set_operation_timeout(&mut self, _timeout: Duration) {}
 }
 
 pub type GreaseweazleProgressCallback = Box<dyn FnMut(&GreaseweazleProgressEvent) + Send>;
@@ -523,18 +589,21 @@ impl ProcessGreaseweazleBackend {
                 if let Some(cb) = &mut self.progress_callback {
                     cb(&event);
                 }
-                if self.stream_to_stderr {
-                    if let Some(formatted) = event.display_progress() {
-                        eprintln!("{formatted}");
-                    }
+                if self.stream_to_stderr
+                    && let Some(formatted) = event.display_progress()
+                {
+                    eprintln!("{formatted}");
                 }
             }
             StreamMessage::StderrLine(line) => {
+                let event = parse_progress_line(&line);
                 if let Some(cb) = &mut self.progress_callback {
-                    cb(&GreaseweazleProgressEvent::Error(line.clone()));
+                    cb(&event);
                 }
-                if self.stream_to_stderr && !line.is_empty() {
-                    eprintln!("gw [stderr]: {line}");
+                if self.stream_to_stderr
+                    && let Some(formatted) = event.display_progress()
+                {
+                    eprintln!("{formatted}");
                 }
             }
         }
@@ -542,7 +611,7 @@ impl ProcessGreaseweazleBackend {
 }
 
 fn query_host_version(executable: &Path, audit_path: &Path) -> Result<Option<String>, String> {
-    let arguments = vec!["--version".to_owned()];
+    let arguments = vec!["info".to_owned()];
     let result = external_tools::run_audited_probe(
         "Greaseweazle version",
         executable,
@@ -559,12 +628,17 @@ fn query_host_version(executable: &Path, audit_path: &Path) -> Result<Option<Str
             result.audit.stderr
         ));
     }
-    Ok(external_tools::first_non_empty_line(&result.audit.stdout)
-        .or_else(|| external_tools::first_non_empty_line(&result.audit.stderr))
-        .map(str::to_owned))
+    parse_info_host_version(&result.audit.stdout)
+        .or_else(|| parse_info_host_version(&result.audit.stderr))
+        .map(Some)
+        .ok_or_else(|| "Greaseweazle info did not report a host-tools version".to_owned())
 }
 
 impl GreaseweazleBackend for ProcessGreaseweazleBackend {
+    fn set_operation_timeout(&mut self, timeout: Duration) {
+        self.timeout = Some(timeout);
+    }
+
     fn mode(&self) -> BackendMode {
         BackendMode::Process
     }
@@ -704,7 +778,8 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
         let stderr_trimmed = stderr_text.trim().to_owned();
 
         if self.host_version.is_none() && command.subcommand() == "info" {
-            self.host_version = parse_info_host_version(&stdout_trimmed);
+            self.host_version = parse_info_host_version(&stdout_trimmed)
+                .or_else(|| parse_info_host_version(&stderr_trimmed));
         }
 
         let audit = CommandAudit {

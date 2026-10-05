@@ -48,7 +48,8 @@ impl ToolKind {
     fn version_arguments(self) -> &'static [&'static str] {
         match self {
             Self::SevenZip => &["i"],
-            Self::LibreOffice | Self::Greaseweazle => &["--version"],
+            Self::LibreOffice => &["--version"],
+            Self::Greaseweazle => &["info"],
         }
     }
 }
@@ -446,24 +447,32 @@ pub(crate) fn check_tool(
         audit_path,
         timeout,
     );
-    let version = first_non_empty_line(&result.audit.stdout)
-        .or_else(|| first_non_empty_line(&result.audit.stderr))
-        .map(str::to_owned);
+    let version = if kind == ToolKind::Greaseweazle {
+        crate::greaseweazle::parse_info_host_version(&result.audit.stdout)
+            .or_else(|| crate::greaseweazle::parse_info_host_version(&result.audit.stderr))
+    } else {
+        first_non_empty_line(&result.audit.stdout)
+            .or_else(|| first_non_empty_line(&result.audit.stderr))
+            .map(str::to_owned)
+    };
+    let ready = result.audit.success && (kind != ToolKind::Greaseweazle || version.is_some());
 
     ToolStatus {
         kind,
-        health: if result.audit.success {
+        health: if ready {
             ToolHealth::Ready
         } else {
             ToolHealth::Failed
         },
         executable: Some(executable),
         version,
-        detail: if result.audit.success {
+        detail: if ready {
             format!(
                 "Egészségügyi ellenőrzés sikeres ({} ms).",
                 result.audit.duration_ms
             )
+        } else if result.audit.success {
+            "Greaseweazle info did not report a host-tools version".to_owned()
         } else if result.audit.stderr.contains("Probe timed out") {
             format!(
                 "Version check timed out after {} seconds",
@@ -627,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn greaseweazle_health_check_is_version_only() {
-        assert_eq!(ToolKind::Greaseweazle.version_arguments(), &["--version"]);
+    fn greaseweazle_health_check_uses_supported_read_only_info() {
+        assert_eq!(ToolKind::Greaseweazle.version_arguments(), &["info"]);
     }
 }

@@ -288,3 +288,13 @@ A healthy primary drive is now available: **Mitsumi D353M3D-5056**.
 5. Keep it read-only, resumable, immutable, provenance-heavy, and operator-simple.
 
 The intended product is a floppy-eating archival appliance: insert disk, let FluxVault decide how hard it needs to try, and only bother the operator when physical disk handling is required.
+
+## Follow-through in FluxVault — 2026-10-05
+
+The next development session pulled this handoff and completed FluxVault's live preflight on the confirmed protected WinWord 1 floppy, Mitsumi/selector B. Actual host compatibility fixes: version from `gw info` instead of unsupported `--version`, and normal output parsing on stderr as well as stdout.
+
+Implemented `greaseweazle recover N --gw-drive B --source-write-protected`: fixed-profile fast capture, bounded targeted escalation, no-improvement/time/pass ceilings, hashed immutable artifacts, durable stage journal, and per-sector corroborated/single-capture/conflicting/unreadable provenance. It dispatches the existing offline project processing chain by default. Repeating a completed job verifies/reuses it with no new physical reads; interrupted decode resumes from saved raw evidence.
+
+Live project: `C:\Users\User\Desktop\FluxVault-Test\GW-Live-WinWord1`. Full captures 1/2 and targeted captures 3/4 are preserved. Automatic job seeded capture 2, reread cylinders 0/1/2 twice (problem cylinder plus controls), retained 2,879/2,880 sectors with no conflicts, stopped for no improvement, and explicitly left LBA 24 unreadable. Repeated recovery performed zero new reads; backup/audit/XLSX completed, but damaged-image extraction stayed flagged rather than claiming clean files. The floppy was then removed. Exact results/hash are in `GREASEWEAZLE_PREFLIGHT.md`.
+
+Remaining next work: guided GW-only batch loop and physical-device reservation; bounded automatic format discovery (current recovery default is ibm.1440, explicit ibm.720 supported); native damaged-directory/FAT extraction and carving; complete crash/interruption scenarios and concurrent USB/GW production scheduling. These items remain unchecked in TODO. Single-pass good sectors are lower-confidence evidence, not independently certified bytes. Do not mistake this successful single-disk slice for a finished zero-touch production appliance.

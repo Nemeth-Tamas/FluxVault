@@ -815,7 +815,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn next_attempt_number(directory: &Path, disk_number: u32) -> Result<u32, String> {
+pub(crate) fn next_attempt_number(directory: &Path, disk_number: u32) -> Result<u32, String> {
     let prefix = format!("{disk_number:03}_attempt_");
     let mut highest_attempt = 0u32;
 

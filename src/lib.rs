@@ -9,6 +9,7 @@ pub mod external_tools;
 pub mod extraction;
 pub mod floppy;
 pub mod flux_capture;
+pub mod flux_recovery;
 pub mod greaseweazle;
 pub mod imaging;
 pub mod legacy_logs;

@@ -15,6 +15,113 @@ use crate::{
 
 use super::CliResponse;
 
+pub(super) struct RecoveryOptions {
+    pub disk: u32,
+    pub profile: GreaseweazleProfile,
+    pub drive: char,
+    pub protected: bool,
+    pub policy: crate::flux_recovery::RecoveryPolicy,
+    pub acquisition_only: bool,
+    pub json_output: bool,
+}
+
+pub(super) fn recover(
+    project: &ProjectState,
+    options: RecoveryOptions,
+) -> Result<CliResponse, String> {
+    let RecoveryOptions {
+        disk,
+        profile,
+        drive,
+        protected,
+        policy,
+        acquisition_only,
+        json_output,
+    } = options;
+    if !protected {
+        return Err(
+            "Recovery requires --source-write-protected after checking the physical tab".to_owned(),
+        );
+    }
+    policy.validate()?;
+    let settings = external_tools::load_settings()?;
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let executable = external_tools::find_ready_tool(
+        ToolKind::Greaseweazle,
+        settings.path(ToolKind::Greaseweazle),
+        &audit,
+    )?;
+    let mut backend =
+        ProcessGreaseweazleBackend::new(executable, audit)?.with_stream_to_stderr(false);
+    eprintln!("READ ONLY: automatic recovery of disk {disk:03} on Greaseweazle drive {drive}");
+    let result =
+        crate::flux_recovery::recover(project, disk, profile, drive, policy, &mut backend, &|s| {
+            eprintln!("{s}")
+        })?;
+    let mut attention = result.status != "acquired";
+    let processing = if acquisition_only {
+        json!({"skipped":true})
+    } else {
+        eprintln!("Acquisition saved. Processing project files and reports...");
+        match super::run(
+            &[
+                "process".to_owned(),
+                "--project".to_owned(),
+                project.root().display().to_string(),
+                "--json".to_owned(),
+            ],
+            project.root(),
+        ) {
+            Ok(response) => {
+                attention |= response.exit_code != 0;
+                serde_json::from_str(&response.output)
+                    .unwrap_or_else(|_| json!({"detail":response.output}))
+            }
+            Err(error) => {
+                attention = true;
+                json!({"error":error,"acquisition_preserved":true})
+            }
+        }
+    };
+    let processing_summary = if acquisition_only {
+        "Skipped (--acquisition-only).".to_owned()
+    } else if let Some(error) = processing.get("error").and_then(|v| v.as_str()) {
+        format!("Needs attention: {error}. Acquisition evidence is preserved.")
+    } else {
+        format!(
+            "Extracted disks: {}; converted OK: {}; conversion failures: {}; recovery queue: {}; evidence attention: {}.\nWorkbook: {}",
+            processing["extracted"],
+            processing["converted_ok"],
+            processing["converted_failed"],
+            processing["recovery_queue"],
+            processing["evidence_attention"],
+            processing["workbook"]
+                .as_str()
+                .unwrap_or("See project Reports folder")
+        )
+    };
+    Ok(CliResponse {
+        output: if json_output {
+            json!({"recovery":result,"processing":processing,"source_media_access":"read_only","customer_delivery_certified":false}).to_string()
+        } else {
+            format!(
+                "Disk {disk:03}: {} ({}). Missing sectors: {}; conflicts: {}.\nPhysical reads this run: {}; corroborated sectors: {}; single-capture sectors: {}.\nImage: {}\nProvenance: {}\nDownstream: {}\nPhysical work finished; you may remove disk {disk:03}. Not customer-delivery certification.",
+                result.status,
+                result.stop_reason,
+                result.missing_lbas.len(),
+                result.conflicting_lbas.len(),
+                result.physical_reads_this_run,
+                result.corroborated_sectors,
+                result.single_capture_sectors,
+                result.image.display(),
+                result.provenance.display(),
+                processing_summary
+            )
+        },
+        exit_code: if attention { 3 } else { 0 },
+    })
+}
+
 pub(super) fn capture(
     project: &ProjectState,
     disk_number: u32,
@@ -84,7 +191,7 @@ pub(super) fn capture(
 
 fn verify_device_for_capture(backend: &mut impl GreaseweazleBackend) -> Result<(), String> {
     let info = backend.execute(&GreaseweazleCommand::info())?;
-    match (info.success, classify_info_output(&info.stdout)) {
+    match (info.success, classify_info_output(&info.output_text())) {
         (true, GreaseweazleDeviceStatus::Connected) => Ok(()),
         (true, GreaseweazleDeviceStatus::NotFound) => {
             Err("No Greaseweazle board was found; no capture attempt was started".to_owned())

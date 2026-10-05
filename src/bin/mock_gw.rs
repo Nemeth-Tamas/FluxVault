@@ -1,16 +1,16 @@
 use std::{env, fs, path::PathBuf, thread, time::Duration};
 
+// Match real gw.exe: ordinary messages and sector grids use stderr.
+macro_rules! println {
+    ($($arg:tt)*) => { std::eprintln!($($arg)*); };
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
 
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("mock_gw: Mock Greaseweazle host tool for FluxVault testing");
-        println!("Supported commands: --version, info, read, convert");
-        return;
-    }
-
-    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
-        println!("Greaseweazle Tools v1.23");
+        println!("Supported commands: info, read, convert");
         return;
     }
 
@@ -76,16 +76,47 @@ fn main() {
                 }
             }
 
-            // Write mock SCP file
-            if let Err(e) = fs::write(
-                &output_path,
-                b"SCP synthetic raw flux capture for mock testing",
-            ) {
+            let cylinders = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--tracks=c="))
+                .map(|value| {
+                    value
+                        .split(':')
+                        .next()
+                        .unwrap()
+                        .split(',')
+                        .map(|c| c.parse::<usize>().unwrap())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| (0..80).collect());
+            let bad = if env::var("MOCK_GW_RECOVER_AFTER_FAST").is_ok() && revolutions == 2 {
+                vec![24]
+            } else {
+                env::var("MOCK_GW_BAD_LBAS")
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter_map(|v| v.parse::<usize>().ok())
+                    .collect::<Vec<_>>()
+            };
+            let conflict = if revolutions > 2 {
+                env::var("MOCK_GW_CONFLICT_LBA")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+            } else {
+                None
+            };
+            let fixture = serde_json::json!({"cylinders":cylinders,"bad":bad,"conflict":conflict});
+            // Synthetic capture carries scenario/coverage into a later CLI process.
+            if let Err(e) = fs::write(&output_path, serde_json::to_vec(&fixture).unwrap()) {
                 eprintln!("** ERROR: Failed to write {}: {e}", output_path.display());
                 std::process::exit(1);
             }
         }
         "convert" => {
+            if env::var("MOCK_GW_FAIL_CONVERT").is_ok() {
+                eprintln!("** ERROR: simulated interrupted decode");
+                std::process::exit(1);
+            }
             let output_path = match args.last() {
                 Some(path) => PathBuf::from(path),
                 None => {
@@ -98,6 +129,20 @@ fn main() {
             let sectors_per_track = if is_720 { 9 } else { 18 };
             let total_sectors = 80 * 2 * sectors_per_track;
             let total_bytes = total_sectors * 512;
+            let fixture: serde_json::Value =
+                serde_json::from_slice(&fs::read(&args[args.len() - 2]).unwrap()).unwrap();
+            let cylinders = fixture["cylinders"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as usize)
+                .collect::<Vec<_>>();
+            let bad = fixture["bad"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as usize)
+                .collect::<Vec<_>>();
 
             println!("Converting input -> {}", output_path.display());
             println!("Reading c=0-79:h=0-1");
@@ -121,14 +166,39 @@ fn main() {
             println!("H. S: {units}");
             for head in 0..2 {
                 for sector in 0..sectors_per_track {
-                    let dots = ".".repeat(80);
+                    let dots: String = (0..80)
+                        .map(|c| {
+                            let lba = (c * 2 + head) * sectors_per_track + sector;
+                            if !cylinders.contains(&c) {
+                                ' '
+                            } else if bad.contains(&lba) {
+                                'X'
+                            } else {
+                                '.'
+                            }
+                        })
+                        .collect();
                     println!("{head}.{sector:>2}: {dots}");
                 }
             }
-            println!("Found {total_sectors} sectors of {total_sectors} (100%)");
+            let covered = cylinders.len() * 2 * sectors_per_track;
+            let missing = bad
+                .iter()
+                .filter(|lba| cylinders.contains(&(**lba / (sectors_per_track * 2))))
+                .count();
+            println!("Found {} sectors of {covered}", covered - missing);
 
             // Write dummy disk image
-            if let Err(e) = fs::write(&output_path, vec![0xE5; total_bytes]) {
+            let mut image = vec![0; total_bytes];
+            for lba in 0..total_sectors {
+                if cylinders.contains(&(lba / (sectors_per_track * 2))) && !bad.contains(&lba) {
+                    image[lba * 512..(lba + 1) * 512].fill(0xE5);
+                }
+            }
+            if let Some(lba) = fixture["conflict"].as_u64() {
+                image[lba as usize * 512] = 0x99;
+            }
+            if let Err(e) = fs::write(&output_path, image) {
                 eprintln!("** ERROR: Failed to write {}: {e}", output_path.display());
                 std::process::exit(1);
             }
