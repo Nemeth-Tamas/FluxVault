@@ -1,9 +1,9 @@
 //! Guided Greaseweazle custody loop. Only an explicit numbered confirmation can read media.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
     path::Path,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -25,6 +25,7 @@ const LOCK: &str = ".fluxvault-gw-scan.lock";
 
 pub(super) struct ScanOptions {
     pub profile: GreaseweazleProfile,
+    pub profile_map: BTreeMap<u32, String>,
     pub drive: char,
     pub protected: bool,
     pub policy: RecoveryPolicy,
@@ -35,6 +36,12 @@ pub(super) struct ScanOptions {
 }
 
 impl ScanOptions {
+    fn profile_for(&self, disk: u32) -> Result<GreaseweazleProfile, String> {
+        self.profile_map
+            .get(&disk)
+            .map_or(Ok(self.profile), |name| GreaseweazleProfile::parse(name))
+    }
+
     fn validate(&self) -> Result<(), String> {
         if !self.protected {
             return Err(
@@ -50,8 +57,100 @@ impl ScanOptions {
                 "--last-disk must be positive and leave room for the next number".to_owned(),
             );
         }
+        validate_profiles(&self.profile_map)?;
         self.policy.validate()
     }
+}
+
+fn validate_profiles(profiles: &BTreeMap<u32, String>) -> Result<(), String> {
+    for (disk, name) in profiles {
+        if *disk == 0 || *disk == u32::MAX {
+            return Err(
+                "Profile-map disk numbers must be positive and leave room for the next disk"
+                    .to_owned(),
+            );
+        }
+        if GreaseweazleProfile::parse(name)?.argument() != name {
+            return Err("Profile-map formats must be ibm.1440 or ibm.720".to_owned());
+        }
+    }
+    Ok(())
+}
+
+/// An explicit, bounded list of known formats, not an automatic format detector.
+pub(super) fn load_profile_map(path: &Path) -> Result<BTreeMap<u32, String>, String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Entry {
+        disk: u32,
+        profile: String,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MapFile {
+        schema_version: u32,
+        profiles: Vec<Entry>,
+    }
+    let text = path.to_string_lossy().to_ascii_uppercase();
+    if ["A:", "B:", "\\\\?\\A:", "\\\\?\\B:"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+    {
+        return Err("Profile maps must be saved on the workstation, not a floppy drive".to_owned());
+    }
+    if !fs::symlink_metadata(path)
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_file()
+    {
+        return Err("Profile map must be a regular file".to_owned());
+    }
+    let resolved = path.canonicalize().map_err(|e| e.to_string())?;
+    let text = resolved.to_string_lossy().to_ascii_uppercase();
+    if ["A:", "B:", "\\\\?\\A:", "\\\\?\\B:"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+    {
+        return Err("Profile map resolves to a floppy drive".to_owned());
+    }
+    let mut bytes = Vec::new();
+    File::open(resolved)
+        .map_err(|e| e.to_string())?
+        .take(65_537)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 65_536 {
+        return Err("Profile map exceeds 64 KiB".to_owned());
+    }
+    let list: MapFile =
+        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid profile map: {e}"))?;
+    if list.schema_version != 1 {
+        return Err("Unsupported profile-map schema".to_owned());
+    }
+    let mut profiles = BTreeMap::new();
+    for entry in list.profiles {
+        if profiles.insert(entry.disk, entry.profile).is_some() {
+            return Err(format!("Duplicate disk {:03} in profile map", entry.disk));
+        }
+    }
+    validate_profiles(&profiles)?;
+    Ok(profiles)
+}
+
+fn preflight_downstream(
+    acquisition_only: bool,
+    mut check: impl FnMut(crate::external_tools::ToolKind) -> Result<(), String>,
+) -> Result<(), String> {
+    if acquisition_only {
+        return Ok(());
+    }
+    for tool in [
+        crate::external_tools::ToolKind::SevenZip,
+        crate::external_tools::ToolKind::LibreOffice,
+    ] {
+        check(tool).map_err(|e| format!("Scan processing preflight failed before any media read: {e}. Configure the tool or explicitly use --acquisition-only to process saved images later."))?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -64,6 +163,8 @@ struct Pending {
 struct Journal {
     schema_version: u32,
     profile: String,
+    #[serde(default)]
+    profile_map: BTreeMap<u32, String>,
     drive: char,
     policy: RecoveryPolicy,
     #[serde(default)]
@@ -76,6 +177,15 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
     options.validate()?;
     crate::flux_capture::project_flux_dir(&project)?;
     let reservation = GreaseweazleReservation::acquire()?;
+    let settings = crate::external_tools::load_settings()?;
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    preflight_downstream(options.acquisition_only, |tool| {
+        eprintln!(
+            "Before feeding disks: checking {} for saved-file processing...",
+            tool.display_name()
+        );
+        crate::external_tools::find_ready_tool(tool, settings.path(tool), &audit).map(|_| ())
+    })?;
     let stdin = io::stdin();
     let mut stderr = io::stderr();
     run_with_io(
@@ -88,7 +198,7 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
                 project,
                 flux::RecoveryOptions {
                     disk,
-                    profile: options.profile,
+                    profile: options.profile_for(disk)?,
                     drive: options.drive,
                     protected: true,
                     policy: options.policy.clone(),
@@ -165,6 +275,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
         Journal {
             schema_version: 1,
             profile: options.profile.argument().to_owned(),
+            profile_map: options.profile_map.clone(),
             drive: options.drive,
             policy: options.policy.clone(),
             last_disk: options.last_disk,
@@ -172,6 +283,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
             completed: Vec::new(),
         }
     };
+    validate_profiles(&journal.profile_map)?;
     let ids = journal
         .completed
         .iter()
@@ -189,6 +301,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
     }
     if journal.pending.is_some()
         && (journal.profile != options.profile.argument()
+            || journal.profile_map != options.profile_map
             || journal.drive != options.drive
             || journal.policy != options.policy)
     {
@@ -198,6 +311,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
         return Err("Resume the pending disk with the same --last-disk target".to_owned());
     }
     journal.profile = options.profile.argument().to_owned();
+    journal.profile_map = options.profile_map.clone();
     journal.drive = options.drive;
     journal.policy = options.policy.clone();
     journal.last_disk = options.last_disk;
@@ -231,6 +345,7 @@ where
     let mut telemetry = benchmark::Session::start(
         project,
         json!({"profile":options.profile.argument(),
+        "profile_map":options.profile_map,
         "drive":options.drive,"policy":options.policy,"count":options.count,
         "acquisition_only":options.acquisition_only,"start_disk":project.current_disk_number(),
         "last_disk":options.last_disk}),
@@ -253,6 +368,7 @@ where
             break;
         }
         let next = disk.checked_add(1).ok_or("Disk number overflow")?;
+        let profile = options.profile_for(disk)?;
         if journal.completed.iter().any(|r| r.disk == disk) {
             return Err(format!(
                 "Disk {disk:03} is already completed in this scan; select the next unscanned disk"
@@ -282,7 +398,7 @@ where
                 waiting = Some((disk, Instant::now()));
             }
             writeln!(output,
-                "GW {}: insert floppy {disk:03}, check its write-protect hole is OPEN. Type READ {disk:03} to confirm its identity and read it, or QUIT:", options.drive
+                "GW {}: insert floppy {disk:03}, check its write-protect hole is OPEN. Type READ {disk:03} to confirm its identity and read it, or QUIT: [format {}]", options.drive, profile.argument()
             ).map_err(|e| e.to_string())?;
             output.flush().map_err(|e| e.to_string())?;
             let mut answer = String::new();
@@ -315,7 +431,7 @@ where
             save(&path, &journal)?; // Custody persists before any physical operation.
             telemetry.record(
                 "read_confirmed",
-                json!({"disk":disk,
+                json!({"disk":disk,"profile":profile.argument(),
                 "operator_wait_ms":benchmark::milliseconds(waiting.take().unwrap().1.elapsed())}),
             )?;
             let started = Instant::now();
@@ -352,7 +468,7 @@ where
             return Err(error);
         }
         if let Some(elapsed_ms) = recovery_elapsed_ms {
-            telemetry.record("recovery_finished", json!({"disk":disk,"elapsed_ms":elapsed_ms,
+            telemetry.record("recovery_finished", json!({"disk":disk,"profile":profile.argument(),"elapsed_ms":elapsed_ms,
                 "verification_ms":benchmark::milliseconds(verification.elapsed()),"outcome":benchmark::outcome(&result)}))?;
         }
         journal.pending = Some(Pending {
@@ -376,7 +492,7 @@ where
         save(&path, &journal)?;
         telemetry.record(
             "disk_committed",
-            json!({"disk":disk,"next_disk":next,
+            json!({"disk":disk,"profile":profile.argument(),"next_disk":next,
             "numbering_resumed":numbering_resumed,"outcome":benchmark::outcome(&result)}),
         )?;
         writeln!(output,
@@ -487,6 +603,7 @@ mod tests {
     fn options() -> ScanOptions {
         ScanOptions {
             profile: GreaseweazleProfile::Ibm1440,
+            profile_map: BTreeMap::new(),
             drive: 'B',
             protected: true,
             policy: RecoveryPolicy::default(),
@@ -519,6 +636,145 @@ mod tests {
     }
     fn no_read(_: &ProjectState, _: u32) -> Result<RecoveryResult, String> {
         panic!("no physical read authorized")
+    }
+
+    #[test]
+    fn profile_map_is_bounded_strict_and_selects_only_listed_disks() {
+        let fixture = Fixture::new();
+        let _project = fixture.project();
+        let path = fixture.0.join("profiles.json");
+        for invalid in [
+            r#"{"schema_version":2,"profiles":[]}"#,
+            r#"{"schema_version":1,"profiles":[{"disk":0,"profile":"ibm.720"}]}"#,
+            r#"{"schema_version":1,"profiles":[{"disk":9,"profile":"ibm.720"},{"disk":9,"profile":"ibm.1440"}]}"#,
+            r#"{"schema_version":1,"profiles":[{"disk":9,"profile":"720"}]}"#,
+            r#"{"schema_version":1,"profiles":[],"typo":true}"#,
+            r#"{"schema_version":1,"profiles":[{"disk":9,"profile":"ibm.scan"}]}"#,
+        ] {
+            fs::write(&path, invalid).unwrap();
+            assert!(load_profile_map(&path).is_err(), "accepted {invalid}");
+        }
+        fs::write(&path, vec![b' '; 65_537]).unwrap();
+        assert!(load_profile_map(&path).unwrap_err().contains("64 KiB"));
+        fs::write(
+            &path,
+            include_str!("../../policies/customer-first-20-profiles.json"),
+        )
+        .unwrap();
+        let mut opts = options();
+        opts.profile_map = load_profile_map(&path).unwrap();
+        opts.validate().unwrap();
+        assert_eq!(opts.profile_for(8).unwrap(), GreaseweazleProfile::Ibm1440);
+        assert_eq!(opts.profile_for(9).unwrap(), GreaseweazleProfile::Ibm720);
+        assert_eq!(opts.profile_for(10).unwrap(), GreaseweazleProfile::Ibm1440);
+        let policy: RecoveryPolicy =
+            serde_json::from_str(include_str!("../../policies/pilot-short.json")).unwrap();
+        policy.validate().unwrap();
+        assert_eq!(policy.max_seconds, 180);
+        assert!(load_profile_map(Path::new("A:\\profiles.json")).is_err());
+    }
+
+    #[test]
+    fn pending_mixed_format_job_refuses_changed_map_and_older_journals_still_load() {
+        let fixture = Fixture::new();
+        let project = fixture.project();
+        let mut opts = options();
+        opts.profile_map.insert(9, "ibm.720".to_owned());
+        let path = fixture.0.join(JOURNAL);
+        let mut journal = load(&path, &opts).unwrap();
+        journal.pending = Some(Pending {
+            disk: 9,
+            result: None,
+        });
+        save(&path, &journal).unwrap();
+        let mut changed = options();
+        changed.profile_map.insert(9, "ibm.1440".to_owned());
+        assert!(
+            load(&path, &changed)
+                .err()
+                .unwrap()
+                .contains("same profile")
+        );
+        assert_eq!(load(&path, &opts).unwrap().profile_map[&9], "ibm.720");
+        let mut legacy = serde_json::to_value(journal).unwrap();
+        legacy.as_object_mut().unwrap().remove("profile_map");
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(load(&path, &options()).unwrap().profile_map.is_empty());
+        assert_eq!(project.current_disk_number(), 1);
+    }
+
+    #[test]
+    fn downstream_preflight_checks_both_tools_and_explicit_capture_only_skips_it() {
+        use crate::external_tools::ToolKind;
+        let mut checked = Vec::new();
+        let error = preflight_downstream(false, |tool| {
+            checked.push(tool);
+            if tool == ToolKind::LibreOffice {
+                Err("LibreOffice unavailable".to_owned())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(checked, [ToolKind::SevenZip, ToolKind::LibreOffice]);
+        assert!(error.contains("before any media read"));
+        assert!(error.contains("--acquisition-only"));
+        preflight_downstream(true, |_| {
+            panic!("capture-only must not require downstream tools")
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn twenty_disk_mixed_format_pilot_stops_at_target_and_runs_one_tail() {
+        let fixture = Fixture::new();
+        let mut project = fixture.project();
+        let mut opts = options();
+        opts.profile_map.insert(9, "ibm.720".to_owned());
+        opts.last_disk = Some(20);
+        opts.acquisition_only = false;
+        let mut processed = 0;
+        let mut output = Vec::new();
+        let confirmations = (1..=21)
+            .map(|n| format!("READ {n:03}\n"))
+            .collect::<String>();
+        let response = run_with_io(
+            &mut project,
+            &opts,
+            Cursor::new(confirmations),
+            &mut output,
+            |p, n| {
+                assert!(n <= 20);
+                Ok(result(p, n, n % 6 == 0))
+            },
+            |_, _| Ok(()),
+            |_| {
+                processed += 1;
+                Ok(CliResponse {
+                    output: "{}".to_owned(),
+                    exit_code: 0,
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(response.exit_code, 3);
+        assert_eq!(processed, 1);
+        assert_eq!(project.current_disk_number(), 21);
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output
+                .lines()
+                .any(|line| line.contains("READ 009") && line.contains("ibm.720"))
+        );
+        assert!(
+            output
+                .lines()
+                .any(|line| line.contains("READ 010") && line.contains("ibm.1440"))
+        );
+        assert!(!output.contains("READ 021"));
+        let measured = benchmark::report(&project).unwrap();
+        assert_eq!(measured.unique_committed_disks, 20);
+        assert_eq!(measured.status_counts["partial"], 3);
     }
 
     #[test]

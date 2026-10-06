@@ -80,7 +80,7 @@ Usage:
       --source-write-protected [--policy FILE] [--acquisition-only]
                                     Automatic bounded recovery without a USB reader
   fluxvault greaseweazle scan [--count N] [--last-disk N] --gw-drive A|B --source-write-protected
-      [--profile ibm.1440|ibm.720] [--policy FILE] [--acquisition-only]
+      [--profile ibm.1440|ibm.720] [--profile-map FILE] [--policy FILE] [--acquisition-only]
                                     Guided disk swaps, durable numbering, automatic processing
   fluxvault extract all [--project PATH]
                                     Process saved images with the extraction service
@@ -138,6 +138,7 @@ Options:
   --details                        Include bad-sector LBAs and evidence paths in disk show
   --gw-drive A|B                   Greaseweazle drive (default A, not a Windows drive letter)
   --profile NAME                   IBM 1.44 MB or 720 KB flux profile
+  --profile-map FILE               Known per-disk formats for mixed-format GW scans
   --revs N                         Raw-flux revolutions per track (1-10; default 3)
   --capture-attempt N              Raw-flux attempt to decode (default latest complete)
   --source-write-protected         Confirm the source floppy's physical tab is protected
@@ -201,6 +202,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut gw_capture_attempt: Option<u32> = None;
     let mut source_write_protected = false;
     let mut recovery_policy: Option<PathBuf> = None;
+    let mut profile_map_path: Option<PathBuf> = None;
     let mut acquisition_only = false;
     let mut positional = Vec::new();
     let mut index = 0;
@@ -251,6 +253,15 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 index += 1;
                 recovery_policy = Some(PathBuf::from(
                     args.get(index).ok_or("--policy requires a file")?,
+                ));
+            }
+            "--profile-map" => {
+                index += 1;
+                if profile_map_path.is_some() {
+                    return Err("Only one --profile-map may be supplied".to_owned());
+                }
+                profile_map_path = Some(PathBuf::from(
+                    args.get(index).ok_or("--profile-map requires a file")?,
                 ));
             }
             "--project" => {
@@ -369,6 +380,9 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "recover";
     let gw_scan =
         positional.len() == 2 && positional[0] == "greaseweazle" && positional[1] == "scan";
+    if profile_map_path.is_some() && !gw_scan {
+        return Err("--profile-map is only valid with greaseweazle scan".to_owned());
+    }
     if (recovery_policy.is_some() || acquisition_only) && !(gw_recover || gw_scan) {
         return Err(
             "--policy and --acquisition-only are only valid with greaseweazle recover/scan"
@@ -547,6 +561,10 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     project,
                     flux_scan::ScanOptions {
                         profile: gw_profile.unwrap_or(GreaseweazleProfile::Ibm1440),
+                        profile_map: match profile_map_path {
+                            Some(path) => flux_scan::load_profile_map(&cwd.join(path))?,
+                            None => Default::default(),
+                        },
                         drive: gw_drive.ok_or("greaseweazle scan requires --gw-drive A|B")?,
                         protected: source_write_protected,
                         policy,

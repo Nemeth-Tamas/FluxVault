@@ -372,12 +372,23 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 
 ### First workable pilot — single Greaseweazle station
 
+**Current operator-time target:** first run up to 20 customer disks (001–020), stopping earlier with `QUIT` if needed; collect real timing/recovery data before expanding to 136. Disk 009's archived image is 720 KB, so the cohort must switch formats rather than decode everything as HD. See `PILOT_20.md`.
+
+- [x] Provide the short 20-disk runbook, opt-in 180-second/three-pass recovery policy, and archive-derived profile list; preserve the normal recovery defaults.
+- [x] Support a validated per-disk profile map in guided GW scanning, persist/bind pending resume settings, record actual profiles, and switch 009 to DD/010 back to HD without technical swap-time decisions.
+- [x] Preflight required downstream tools before normal GW scan custody/acquisition, with explicit acquisition-only bypass and no physical read on failure.
+- [x] Test the 20-disk mixed-format cap/tail and cross-process 008/009/010 switching, changed-map restart refusal, older journals, invalid maps, and processing-preflight refusal without hardware.
+- [ ] Complete a live up-to-20-disk cohort, retain telemetry and compare recovered payloads with the original archive before scaling up.
+
 - [x] Provide a controlled pilot runbook with isolated projects, small live smoke-test gates, the full numbered collection, restart instructions and a local data-review recipe (`PILOT_136.md`).
 - [x] Add `--last-disk 136` to guided GW scans so the same command stops at the same collection endpoint after restart; keep `--count` as a session cap and preserve older journals.
 - [x] Persist synced per-invocation benchmark events with build/configuration fingerprint, confirmations, recovery/verification timing, read counts, missing/conflicting LBAs, hashes, failures and downstream results; retain interrupted-session evidence without overwriting previous runs.
 - [x] Export benchmark JSON/per-disk CSV automatically and through offline `benchmark report`; deduplicate resumed numbering, retain partial statuses, flag truncated tails, and reject malformed committed records. Keep internal telemetry outside customer packages.
 - [x] Simulate a 136-disk single-station scan with partial disks, failure at disk 061, persisted resume, unique yield/error accounting and a restart-safe stop at 136.
 - [ ] Pass small clean/damaged live smoke tests with telemetry before starting the full pilot; inspect fixed-profile behavior on known DD/nonstandard media.
+  - [x] Customer 007 live guided smoke test: 2,880/2,880 sectors, one capture, 18 extracted files with all payload hashes matching the archived originals, 18 successful document conversions, clean evidence audit/workbook and benchmark exports. Whole-image hashes differ at five LBAs; do not claim byte-identical media or infer the cause.
+  - [x] Customer 009 live mapped-DD smoke test: 1,440/1,440 sectors, one capture, exact 737,280-byte image, one reachable FAT file, clean evidence audit/workbook and benchmark exports; actual profile switch used with the short policy.
+  - [ ] Compare live 009 against the archive's signature-carved outputs (including a large legacy Word candidate and JPEG), distinguishing deleted/orphaned content, recovery-tool reports and actual reachable files. A clean FAT extraction is not equivalence to legacy carving, and whole-image/payload hashes currently differ.
 - [ ] Run the first 136-disk physical pilot and collect benchmark/audit/recovery artifacts, preserving the original script archive for comparison.
 - [ ] Compare pilot source/recovered-file hashes and yield against the script/DMDE baseline, then prioritize changes using measured failure/throughput data.
 

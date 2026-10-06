@@ -1,0 +1,9 @@
+{
+  "passes": [
+    { "name": "Fast", "revolutions": 2, "retries": 0 },
+    { "name": "Normal", "revolutions": 3, "retries": 1 },
+    { "name": "Recovery", "revolutions": 5, "retries": 2 }
+  ],
+  "max_seconds": 180,
+  "no_improvement_limit": 2
+}

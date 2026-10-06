@@ -440,6 +440,7 @@ pub(crate) fn run_extraction(
     let listing_arguments = vec![
         "l".to_owned(),
         "-slt".to_owned(),
+        "-sccUTF-8".to_owned(),
         "--".to_owned(),
         request.image_path.display().to_string(),
     ];
@@ -494,6 +495,7 @@ pub(crate) fn run_extraction(
     let extraction_arguments = vec![
         "x".to_owned(),
         "-y".to_owned(),
+        "-sccUTF-8".to_owned(),
         format!("-o{}", temporary_directory.display()),
         "--".to_owned(),
         request.image_path.display().to_string(),
@@ -1053,6 +1055,25 @@ mod tests {
         assert!(!first.reused);
         assert!(first.file_count > 0);
         assert!(first.inventory_path.is_file());
+        let listing = fs::read_to_string(&first.listing_path).unwrap();
+        for entry in fs::read_dir(&first.output_directory).unwrap() {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            if !name.is_ascii() {
+                assert!(
+                    listing.contains(&name),
+                    "Unicode filename missing from UTF-8 listing: {name}"
+                );
+            }
+        }
+        let audit = fs::read_to_string(&request.command_audit_path).unwrap();
+        assert!(audit.lines().all(|line| {
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            row["arguments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == "-sccUTF-8")
+        }));
 
         let second = run_extraction(&request, &|_| {}).expect("second extraction should reuse");
         assert!(second.reused);

@@ -5,6 +5,8 @@
 > [!IMPORTANT]
 > `A:` is the **Windows USB floppy drive**. Greaseweazle's `--gw-drive A` is a **different drive selector**. Do not use a customer disk to test write protection. The USB acquisition commands require an independently verified write blocker and a positive Windows protection report; the flag does not bypass either check.
 
+**Ready for the current Greaseweazle run?** Start with [Tonight's 20-disk pilot](PILOT_20.md): a single restart-safe command, the correct mixed formats (009 is 720 KB), a shorter recovery budget, and automatic processing/measurements.
+
 ## 1. Get to a working prompt
 
 The current built executable is in the repository. To use it from any folder as `fluxvault`, run this once from PowerShell:
@@ -166,7 +168,7 @@ fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 
 FluxVault captures and decodes, rereads only problem areas within bounded limits, then runs extraction/conversion/audit/report processing. After it finishes, remove the disk and run the command with the next disk's number. It stops after two non-improving passes rather than endlessly hammering the disk.
 
-For verified **720 KB** media, add `--profile ibm.720` to either command. Keep a scan session on the selected format; stop/restart to change it. The default is 1.44 MB. FluxVault reserves the Greaseweazle across your CLI sessions and project folders, so another `scan`, `recover`, `capture`, or `info` command reports that it is busy instead of competing for the board.
+For verified **720 KB** media, add `--profile ibm.720` to either command. For a known mixed sequence, `scan --profile-map FILE` switches formats from a saved per-disk list; see the pilot guide for the supplied customer list. Otherwise keep the session on its selected format. The default is 1.44 MB. FluxVault reserves the Greaseweazle across your CLI sessions and project folders, so another `scan`, `recover`, `capture`, or `info` command reports that it is busy instead of competing for the board.
 
 Repeat the same command/settings to resume an interrupted job. A completed job is verified/reused, not physically reread. Partial results keep missing sectors explicit—no bytes are guessed. The downstream pipeline now salvages intact reachable FAT12 files and validated original names automatically, but missing metadata/deleted files/carving remain unfinished. Clean maps can still contain lower-confidence single-capture sectors; they are not delivery certification. Add `--acquisition-only` to skip downstream processing.
 

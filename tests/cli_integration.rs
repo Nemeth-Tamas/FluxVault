@@ -61,6 +61,252 @@ fn invoke_mock_with_input(
 }
 
 #[test]
+fn cli_mixed_format_scan_switches_at_009_and_binds_resume_to_the_saved_map() {
+    let root = std::env::temp_dir().join(format!(
+        "fluxvault-cli-mixed-pilot-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &[
+                "tools",
+                "set",
+                "greaseweazle",
+                env!("CARGO_BIN_EXE_mock_gw")
+            ],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(&project, &app_data, &["disk", "select", "8"], false)
+            .status
+            .success()
+    );
+    let map = root.join("profiles.json");
+    fs::write(
+        &map,
+        include_str!("../policies/customer-first-20-profiles.json"),
+    )
+    .unwrap();
+    let policy = root.join("policy.json");
+    fs::write(&policy, include_str!("../policies/pilot-short.json")).unwrap();
+    let scan = [
+        "greaseweazle",
+        "scan",
+        "--gw-drive",
+        "B",
+        "--source-write-protected",
+        "--profile-map",
+        map.to_str().unwrap(),
+        "--policy",
+        policy.to_str().unwrap(),
+        "--last-disk",
+        "10",
+        "--acquisition-only",
+        "--json",
+    ];
+    let first = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &scan,
+        false,
+        Some(b"READ 008\nQUIT\n"),
+        &[],
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&first.stdout)
+    );
+    let failed = invoke_mock_with_input(&project, &app_data, &scan, true, Some(b"READ 009\n"), &[]);
+    assert_eq!(failed.status.code(), Some(2));
+    fs::write(
+        &map,
+        r#"{"schema_version":1,"profiles":[{"disk":9,"profile":"ibm.1440"}]}"#,
+    )
+    .unwrap();
+    let refused =
+        invoke_mock_with_input(&project, &app_data, &scan, false, Some(b"READ 009\n"), &[]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&refused.stdout).contains("same profile"));
+    fs::write(
+        &map,
+        include_str!("../policies/customer-first-20-profiles.json"),
+    )
+    .unwrap();
+    let resumed = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &scan,
+        false,
+        Some(b"READ 009\nREAD 010\nREAD 011\n"),
+        &[],
+    );
+    assert_eq!(
+        resumed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&resumed.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(result["next_disk"], 11);
+    assert_eq!(result["total_scanned"], 3);
+    assert_eq!(
+        fs::metadata(result["disks"][0]["image"].as_str().unwrap())
+            .unwrap()
+            .len(),
+        737_280
+    );
+    assert_eq!(
+        fs::metadata(result["disks"][1]["image"].as_str().unwrap())
+            .unwrap()
+            .len(),
+        1_474_560
+    );
+    let audit = fs::read_to_string(project.join("Logs/external-tools.jsonl")).unwrap();
+    let reads = audit
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|v| v["arguments"][0] == "read")
+        .collect::<Vec<_>>();
+    assert_eq!(reads.len(), 3); // Wrong-map restart did not cause an extra physical capture.
+    for (row, expected) in
+        reads
+            .iter()
+            .zip(["--format=ibm.1440", "--format=ibm.720", "--format=ibm.1440"])
+    {
+        assert!(
+            row["arguments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == expected)
+        );
+    }
+    let journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".fluxvault-gw-scan.json")).unwrap())
+            .unwrap();
+    assert_eq!(journal["profile_map"]["9"], "ibm.720");
+    assert!(!String::from_utf8_lossy(&resumed.stderr).contains("READ 011"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_scan_processing_preflight_fails_before_custody_or_any_gw_command() {
+    let root = std::env::temp_dir().join(format!(
+        "fluxvault-cli-scan-preflight-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    // Existing but incompatible tool makes failure deterministic even when real 7-Zip is installed.
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &["tools", "set", "sevenzip", env!("CARGO_BIN_EXE_mock_gw")],
+            false
+        )
+        .status
+        .success()
+    );
+    let response = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &[
+            "greaseweazle",
+            "scan",
+            "--gw-drive",
+            "B",
+            "--source-write-protected",
+            "--last-disk",
+            "20",
+            "--json",
+        ],
+        false,
+        Some(b"READ 001\n"),
+        &[],
+    );
+    assert_eq!(response.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&response.stdout)
+            .contains("preflight failed before any media read")
+    );
+    assert!(!String::from_utf8_lossy(&response.stderr).contains("Type READ"));
+    assert!(!project.join(".fluxvault-gw-scan.json").exists());
+    assert!(fs::read_dir(project.join("Flux")).unwrap().next().is_none());
+    let audit = fs::read_to_string(project.join("Logs/external-tools.jsonl")).unwrap();
+    assert!(!audit.contains("Greaseweazle"));
+    let capture_only = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &[
+            "greaseweazle",
+            "scan",
+            "--gw-drive",
+            "B",
+            "--source-write-protected",
+            "--last-disk",
+            "20",
+            "--acquisition-only",
+            "--json",
+        ],
+        false,
+        Some(b"QUIT\n"),
+        &[],
+    );
+    assert_eq!(capture_only.status.code(), Some(0));
+    let invalid_flag = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["status", "--profile-map", "nonexistent.json", "--json"],
+        false,
+    );
+    assert_eq!(invalid_flag.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&invalid_flag.stdout).contains("only valid with greaseweazle scan")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
     let root = std::env::temp_dir().join(format!(
         "fluxvault-cli-gw-scan-{}-{}",

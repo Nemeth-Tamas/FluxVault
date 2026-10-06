@@ -1,5 +1,7 @@
 # The first 136-disk pilot
 
+**Current attended session:** start with [PILOT_20.md](PILOT_20.md). The first 20 customer disks are a mixed-format cohort (009 is 720 KB); use its supplied per-disk format list. Extend the format list from verified archive evidence before attempting the remaining collection rather than assuming all 136 are 1.44 MB.
+
 **Goal:** read the numbered customer collection on the working Mitsumi/Greaseweazle station, preserve evidence, run the saved-file processing chain, and collect a useful performance/recovery baseline. This is a controlled single-station pilot, not a promise that every damaged disk will yield every file or that the six-hour dual-drive target has been met.
 
 ## 1. Start with a small hardware smoke test

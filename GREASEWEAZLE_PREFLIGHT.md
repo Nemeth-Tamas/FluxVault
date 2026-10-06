@@ -80,3 +80,18 @@ The saved image above was reused, with no physical drive access.
 | Repeat processing | Verified reuse, 21 delivery-map rows, source SHA-256 unchanged, partial audit/workbook retained for LBA 24 |
 
 Fresh processing project: `C:\Users\User\Desktop\FluxVault-Test\Native-LFN-WinWord-8ed96b6bdaca4de79c4e83906844c5d5`. Earlier delivery mirrors in older test projects were not deleted; safe automatic retirement of obsolete managed mirrors remains planned. Synthetic tests additionally cover Unicode names, malformed VFAT slots, alias/path collisions, fragmented directories, ASCII short-name case flags, inventory/provenance integrity, old-schema reuse and OS metadata exclusion from verified packages.
+
+## Guided customer smoke checks — 2026-10-06
+
+Protected customer disks were confirmed by the operator; each used a fresh isolated project under `FluxVault-Test` and one whole-disk physical capture. Both completed the guided scan, downstream processing, evidence audit, workbook and benchmark export.
+
+| Disk | Actual profile / sectors | Observed recovery time | Downstream result |
+| --- | --- | --- | --- |
+| 007 | ibm.1440 / 2,880 of 2,880 | 104.790 seconds; 182.696-second complete session | 18 extracted files; all 18 file-content hashes match archived originals; 18 successful conversions, no evidence attention |
+| 009 | ibm.720 / 1,440 of 1,440 | 101.760 seconds; 102.070-second complete session | One reachable FAT file, no eligible Office conversions; no evidence attention |
+
+007 project: `C:\Users\User\Desktop\FluxVault-Test\Pilot-Smoke-007-20261006`; image SHA-256 `ca3831409d0ef217dc732078be99fe52ee211ddd9fc35f98cd0a22040b72ab77`. Its whole image differs from archived `Images/007.bin` at LBAs 6, 15, 22, 2007 and 2008; content-hash agreement does not mean byte-identical disk images or establish why these sectors differ.
+
+009 project: `C:\Users\User\Desktop\FluxVault-Test\Pilot-Smoke-009-20261006`; image SHA-256 `b10cfe96525bb0aec3952c84c8d6df124b908fb170cd33ce94395dd90c4cc7c2`. This run used `--profile-map policies/customer-first-20-profiles.json` with the short three-pass/180-second policy, proving the DD override is actually wired into physical capture and decoding. The archive's 009 contains a damaged boot image and signature-carved outputs/recovery-tool reports; their hashes/counts are not equivalent to this reachable-file extraction. Carved/deleted-content comparison remains an explicit regression task.
+
+These two observations are useful shakedown measurements, not a 20-disk or 136-disk throughput guarantee. The guided 20-disk cap, 008-HD/009-DD/010-HD switching, restart binding and downstream preflight also have synthetic/cross-process tests. Extraction now explicitly requests UTF-8 console output from 7-Zip; a saved-image integration check verifies Hungarian filenames in the listing and hash-bound extraction reuse without another physical read. See `PILOT_20.md` for the current attended-run command.
