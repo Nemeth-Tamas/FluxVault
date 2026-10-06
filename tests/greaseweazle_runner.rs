@@ -23,6 +23,186 @@ fn mock_gw_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_mock_gw"))
 }
 
+#[test]
+fn automatic_format_trials_do_not_redirect_consensus_to_the_wrong_profile() {
+    let (project, root) = disposable_project("auto-consensus");
+    let mut backend = ProcessGreaseweazleBackend::new(
+        mock_gw_path(),
+        project.logs_dir().join("external-tools.jsonl"),
+    )
+    .unwrap()
+    .with_env("MOCK_GW_RECOVER_AFTER_FAST", "1");
+    let policy = RecoveryPolicy {
+        passes: RecoveryPolicy::default().passes[..2].to_vec(),
+        ..RecoveryPolicy::default()
+    };
+    let result =
+        flux_recovery::recover_auto(&project, 1, 'B', policy, &mut backend, &|_| {}).unwrap();
+    assert_eq!(result.status, "acquired");
+    assert_eq!(result.selected_profile.as_deref(), Some("ibm.1440"));
+    assert_eq!(result.physical_reads_this_run, 2);
+    let status = flux_capture::inspect_disk(&project, 1).unwrap();
+    assert_eq!(status.preferred_profile.as_deref(), Some("ibm.1440"));
+    assert!(status.decodes.iter().any(|d| d.profile == "ibm.720"));
+    let consensus = flux_capture::compare_flux_captures(&project, 1).unwrap();
+    assert_eq!(consensus.total_sectors, 2880);
+    assert!(consensus.conflicting_reported_good_lbas.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn packed_capture_decodes_and_recovery_resumes_without_hardware_or_lost_provenance() {
+    let (project, root) = disposable_project("packed-resume");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut backend = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone()).unwrap();
+    let recovered = flux_recovery::recover(
+        &project,
+        1,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    let image_hash = recovered.image_sha256.clone();
+    fluxvault::flux_archive::pack(&project, 1, 1, true).unwrap();
+    let mut offline =
+        ProcessGreaseweazleBackend::new_offline(mock_gw_path(), audit.clone()).unwrap();
+    let decoded = flux_capture::decode(
+        &project,
+        1,
+        1,
+        Some(GreaseweazleProfile::Ibm1440),
+        &mut offline,
+    )
+    .unwrap();
+    let status = flux_capture::inspect_disk(&project, 1).unwrap();
+    assert!(status.evidence_healthy);
+    assert_eq!(status.decodes.len(), 2);
+    assert_eq!(decoded.sha256, image_hash);
+    assert!(!root.join("Flux/001_attempt_001.scp").exists());
+    assert!(!fs::read_dir(root.join("Flux")).unwrap().any(|e| {
+        e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".fluxvault-unpack-")
+    }));
+    let resumed = flux_recovery::recover(
+        &project,
+        1,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut offline,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(resumed.physical_reads_this_run, 0);
+    assert!(resumed.resumed);
+    assert_eq!(resumed.image_sha256, image_hash);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn automatic_dd_selection_is_offline_resumable_and_does_not_repeat_capture() {
+    let (project, root) = disposable_project("auto-dd");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut backend = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_env("MOCK_GW_MEDIA_FORMAT", "ibm.720");
+    let result = flux_recovery::recover_auto(
+        &project,
+        9,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "acquired");
+    assert_eq!(result.physical_reads_this_run, 1);
+    assert_eq!(fs::metadata(&result.image).unwrap().len(), 737280);
+    let job: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("Flux/Recovery/009_job.json")).unwrap())
+            .unwrap();
+    assert_eq!(job["profile"], "ibm.720");
+    assert_eq!(job["automatic_format"], true);
+    let before = fs::read(&audit).unwrap();
+    let mut absent = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_env("MOCK_GW_DEVICE_NOT_FOUND", "1");
+    let resumed = flux_recovery::recover_auto(
+        &project,
+        9,
+        'B',
+        RecoveryPolicy::default(),
+        &mut absent,
+        &|_| {},
+    )
+    .unwrap();
+    assert!(resumed.resumed);
+    assert_eq!(resumed.physical_reads_this_run, 0);
+    assert_eq!(fs::read(&audit).unwrap(), before);
+    assert!(
+        flux_recovery::recover(
+            &project,
+            9,
+            GreaseweazleProfile::Ibm720,
+            'B',
+            RecoveryPolicy::default(),
+            &mut absent,
+            &|_| {}
+        )
+        .unwrap_err()
+        .contains("different")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn offline_backend_has_no_version_board_probe_and_rejects_board_commands() {
+    let (project, root) = disposable_project("offline-only");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut acquisition = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone()).unwrap();
+    flux_capture::capture(
+        &project,
+        CaptureRequest {
+            disk_number: 1,
+            profile: GreaseweazleProfile::Ibm1440,
+            drive: 'B',
+            revolutions: 2,
+        },
+        &mut acquisition,
+    )
+    .unwrap();
+    let count = fs::read_to_string(&audit).unwrap().lines().count();
+    let mut offline = ProcessGreaseweazleBackend::new_offline(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_env("MOCK_GW_DEVICE_NOT_FOUND", "1");
+    assert!(
+        offline
+            .execute(&GreaseweazleCommand::info())
+            .unwrap_err()
+            .contains("convert only")
+    );
+    let (decision, _) =
+        fluxvault::flux_format::identify(&project, 1, 1, &mut offline, &|_| {}).unwrap();
+    assert_eq!(decision.selected_profile.as_deref(), Some("ibm.1440"));
+    let text = fs::read_to_string(&audit).unwrap();
+    let added: Vec<CommandAudit> = text
+        .lines()
+        .skip(count)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(added.len(), 2);
+    assert!(added.iter().all(|a| a.arguments[0] == "convert"));
+    let reused = fs::read(&audit).unwrap();
+    fluxvault::flux_format::identify(&project, 1, 1, &mut offline, &|_| {}).unwrap();
+    assert_eq!(fs::read(&audit).unwrap(), reused);
+    let _ = fs::remove_dir_all(root);
+}
+
 fn disposable_project(name: &str) -> (ProjectState, PathBuf) {
     let root = std::env::temp_dir().join(format!(
         "fluxvault-gw-runner-{name}-{}-{}",

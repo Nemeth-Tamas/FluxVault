@@ -1,6 +1,6 @@
 # The first 136-disk pilot
 
-**Current attended session:** start with [PILOT_20.md](PILOT_20.md). The first 20 customer disks are a mixed-format cohort (009 is 720 KB); use its supplied per-disk format list. Extend the format list from verified archive evidence before attempting the remaining collection rather than assuming all 136 are 1.44 MB.
+**Current checkpoint:** the first 20-disk pilot is complete; see [PILOT_20.md](PILOT_20.md) for measured results. New projects now identify supported IBM 720 KB/1.44 MB formats from saved raw flux and pack complete captures in the background. No customer-number format list is required for a new standard-format cohort. Ambiguous/nonstandard evidence stops custody for now; run the short live gates on this new build before a full session.
 
 **Goal:** read the numbered customer collection on the working Mitsumi/Greaseweazle station, preserve evidence, run the saved-file processing chain, and collect a useful performance/recovery baseline. This is a controlled single-station pilot, not a promise that every damaged disk will yield every file or that the six-hour dual-drive target has been met.
 
@@ -20,7 +20,7 @@ Set-Location 'C:\Users\User\Desktop\FluxVault-Test\Pilot-Smoke-007'
 & $fluxVaultPilotExe greaseweazle scan --gw-drive B --source-write-protected --last-disk 7
 ```
 
-The example assumes the smoke-test folder does not already exist. Choose a new name if it does. Customer 007's archived acquisition was clean; it is a useful initial comparison disk, not a guarantee of a clean new read. Insert it only when ready for the physical test, with its write-protect hole open. Confirm **`READ 007`** only after checking the actual label. On **GW SWAP**, remove it.
+The example assumes the folder does not exist; choose a fresh name otherwise. Customer 007's archive was clean, not a guarantee of a clean new read. Insert with the protection hole open and confirm **`007`** after checking the label. On **GW SWAP**, remove it. Also test 009 in a fresh smoke project (`disk select 9`, `scan --last-disk 9`) to exercise automatic DD discovery and packed storage. Neither test should use the old pilot folder for a new physical read.
 
 Before committing to the full collection, also exercise a damaged disk in a separate smoke-test project, inspect its preserved partial result, and verify that file processing and the benchmark exports finish. Keep smoke tests separate from the full pilot's numbered sequence. If you want me to operate the live test, tell me which numbered floppy is inserted first.
 
@@ -31,7 +31,7 @@ After the short hardware checks pass:
 ```powershell
 & $fluxVaultPilotExe init 'C:\Users\User\Desktop\FluxVault-Test\Customer-136-Pilot'
 Set-Location 'C:\Users\User\Desktop\FluxVault-Test\Customer-136-Pilot'
-& $fluxVaultPilotExe scan --last-disk 136 --profile-map 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\policies\customer-first-20-profiles.json'
+& $fluxVaultPilotExe scan --last-disk 136
 ```
 
 Check the disk label against every prompt. Insert the protected disk, type the displayed **number only** (e.g. `004`), and wait for **GW SWAP** before removing it. Completed partial results advance normally. An acquisition error keeps the same disk selected and preserves evidence. **`QUIT`** ends feeding early and runs the saved-file processing tail. The source floppy is never written by FluxVault. After initial settings are saved, plain `scan` reuses them on restart.
@@ -40,9 +40,11 @@ For Enter-only swaps, add `--no-verify` explicitly on each invocation: the warni
 
 `--last-disk 136` means **stop after numbered disk 136**, not “read another 136 disks.” Repeat that exact command after a restart; no remaining-disk arithmetic is needed. An interrupted physical job asks you to reconfirm the same numbered disk; an interrupted completed-numbering commit is reconciled without another physical read. Keep the same profile, drive, policy and end target for a pending job. Do not change disk selection from another terminal.
 
-Default format is **1.44 MB**, with bounded Fast/Normal/Recovery/Detective passes. For a known 720 KB cohort, use `--profile ibm.720` in a separate smoke test/session. This pilot does not yet choose formats automatically. A raw capture remains preserved even when the selected decoder cannot recover useful sectors; such a result is not proof the underlying floppy contains no recoverable data.
+New projects default to **automatic IBM 720 KB/1.44 MB discovery**, with bounded Fast/Normal/Recovery/Detective passes. Nearly complete coherent HD evidence needs one offline decode; otherwise both profiles are tried without another physical read. Unknown/ambiguous evidence is preserved and custody stops rather than guessing or hammering the disk. Expert fixed profiles/maps remain available. Old scan journals retain their old fixed mode; do not switch a pending job's mode.
 
-The example map preserves the known 009-DD override throughout the 136-disk run; unlisted numbers still default to HD. Archive inspection found 134 full HD-sized images, 009 DD-sized, and a 417,792-byte image for 133. That truncated/nonstandard image alone does not establish 133's physical format. Automatic saved-flux format discovery and handling this exception are acceptance priorities before calling format selection universal.
+Archive inspection found 134 HD-sized images, 009 DD-sized, and a 417,792-byte image for 133; the latter does not establish its physical geometry. Supported automatic discovery has passed saved 007/009 tests, not universal format acceptance. Use a short 009 live check to validate the new path before scaling up. Nonstandard/severely damaged 133 handling remains open.
+
+New scans default to verified packed retention. One background worker packs completed captures while swaps continue; original SCP size/hash and all bytes survive in `.scp.zip` plus binding metadata. Raw working copies retire only after verification. `--capture-storage raw` opts out; old journals keep raw storage. `storage resume` finishes pending packing offline. Original pilot/archive evidence stays separate. On a copy of all 26 captures, this reclaimed 76.42% of raw working space; it is not a new acquisition-throughput measurement.
 
 ## 3. Read the benchmark
 

@@ -18,6 +18,7 @@ use super::{CliResponse, media_reservation::GreaseweazleReservation};
 pub(super) struct RecoveryOptions {
     pub disk: u32,
     pub profile: GreaseweazleProfile,
+    pub automatic_format: bool,
     pub drive: char,
     pub protected: bool,
     pub policy: crate::flux_recovery::RecoveryPolicy,
@@ -68,6 +69,7 @@ pub(super) fn recover_reserved(
     let RecoveryOptions {
         disk,
         profile,
+        automatic_format,
         drive,
         protected,
         policy,
@@ -90,10 +92,15 @@ pub(super) fn recover_reserved(
     let mut backend =
         ProcessGreaseweazleBackend::new(executable, audit)?.with_stream_to_stderr(false);
     eprintln!("READ ONLY: automatic recovery of disk {disk:03} on Greaseweazle drive {drive}");
-    let result =
+    let result = if automatic_format {
+        crate::flux_recovery::recover_auto(project, disk, drive, policy, &mut backend, &|s| {
+            eprintln!("{s}")
+        })?
+    } else {
         crate::flux_recovery::recover(project, disk, profile, drive, policy, &mut backend, &|s| {
             eprintln!("{s}")
-        })?;
+        })?
+    };
     let mut attention = result.status != "acquired";
     let processing = if acquisition_only {
         json!({"skipped":true})
@@ -239,18 +246,22 @@ pub(super) fn decode(
     profile_override: Option<GreaseweazleProfile>,
     json_output: bool,
 ) -> Result<CliResponse, String> {
+    let profile_override = match profile_override {
+        Some(profile) => Some(profile),
+        None => crate::flux_recovery::completed_profile(project, disk_number)?
+            .as_deref()
+            .map(GreaseweazleProfile::parse)
+            .transpose()?,
+    };
     let capture_attempt = match capture_attempt {
         Some(attempt) => attempt,
         None => flux_capture::latest_capture_attempt(project, disk_number)?,
     };
     let settings = external_tools::load_settings()?;
     let audit_path = project.logs_dir().join("external-tools.jsonl");
-    let executable = external_tools::find_ready_tool(
-        ToolKind::Greaseweazle,
-        settings.path(ToolKind::Greaseweazle),
-        &audit_path,
-    )?;
-    let mut backend = ProcessGreaseweazleBackend::new(executable, audit_path)?;
+    let executable =
+        external_tools::find_offline_greaseweazle(settings.path(ToolKind::Greaseweazle))?;
+    let mut backend = ProcessGreaseweazleBackend::new_offline(executable, audit_path)?;
     eprintln!(
         "Offline decode of disk {disk_number:03} raw capture #{capture_attempt:03}; no floppy drive accessed"
     );
@@ -314,6 +325,7 @@ pub(super) fn status(
             "captures": status.captures,
             "decodes": status.decodes,
             "evidence_healthy": status.evidence_healthy,
+            "preferred_profile": status.preferred_profile,
             "attention_required": status.attention_required,
             "physical_media_access": false
         })

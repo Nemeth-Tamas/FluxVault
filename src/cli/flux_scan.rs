@@ -29,6 +29,8 @@ const LOCK: &str = ".fluxvault-gw-scan.lock";
 
 pub(super) struct ScanOptions {
     pub profile: GreaseweazleProfile,
+    pub automatic_format: bool,
+    pub packed_captures: bool,
     pub profile_map: BTreeMap<u32, String>,
     pub drive: char,
     pub protected: bool,
@@ -43,6 +45,17 @@ pub(super) struct ScanOptions {
 }
 
 impl ScanOptions {
+    fn automatic_for(&self, disk: u32) -> bool {
+        self.automatic_format && !self.profile_map.contains_key(&disk)
+    }
+
+    fn format_label(&self, disk: u32) -> Result<&str, String> {
+        if self.automatic_for(disk) {
+            Ok("auto (720 KB / 1.44 MB)")
+        } else {
+            Ok(self.profile_for(disk)?.argument())
+        }
+    }
     fn profile_for(&self, disk: u32) -> Result<GreaseweazleProfile, String> {
         self.profile_map
             .get(&disk)
@@ -183,6 +196,10 @@ struct Journal {
     schema_version: u32,
     profile: String,
     #[serde(default)]
+    automatic_format: bool,
+    #[serde(default)]
+    packed_captures: bool,
+    #[serde(default)]
     profile_map: BTreeMap<u32, String>,
     drive: char,
     policy: RecoveryPolicy,
@@ -196,6 +213,8 @@ struct Journal {
 
 pub(super) struct SavedDefaults {
     pub profile: GreaseweazleProfile,
+    pub automatic_format: bool,
+    pub packed_captures: bool,
     pub profile_map: BTreeMap<u32, String>,
     pub drive: char,
     pub policy: RecoveryPolicy,
@@ -219,6 +238,8 @@ pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefau
     validate_workers(journal.conversion_workers)?;
     Ok(Some(SavedDefaults {
         profile: GreaseweazleProfile::parse(&journal.profile)?,
+        automatic_format: journal.automatic_format,
+        packed_captures: journal.packed_captures,
         profile_map: journal.profile_map,
         drive: journal.drive,
         policy: journal.policy,
@@ -242,7 +263,18 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
     })?;
     let stdin = io::stdin();
     let mut stderr = io::stderr();
-    run_with_io(
+    let mut queue = if options.packed_captures
+        && project
+            .root()
+            .join("Flux/.fluxvault-storage-queue")
+            .is_dir()
+    {
+        Some(crate::flux_archive::Queue::start(&project)?)
+    } else {
+        None
+    };
+    let mut storage_errors = Vec::new();
+    let response = run_with_io(
         &mut project,
         &options,
         stdin.lock(),
@@ -253,6 +285,7 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
                 flux::RecoveryOptions {
                     disk,
                     profile: options.profile_for(disk)?,
+                    automatic_format: options.automatic_for(disk),
                     drive: options.drive,
                     protected: true,
                     policy: options.policy.clone(),
@@ -269,9 +302,46 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
             serde_json::from_value(value["recovery"].clone())
                 .map_err(|e| format!("Invalid recovery result: {e}"))
         },
-        flux_recovery::verify_completed_result,
+        |project, result| {
+            flux_recovery::verify_completed_result(project, result)?;
+            if options.packed_captures && queue.is_none() {
+                match crate::flux_archive::Queue::start(project) {
+                    Ok(worker) => queue = Some(worker),
+                    Err(error) => storage_errors.push(error),
+                }
+            }
+            if let Some(queue) = &queue {
+                for attempt in &result.capture_attempts {
+                    if let Err(error) = queue.enqueue(result.disk, *attempt) {
+                        storage_errors.push(error);
+                    }
+                }
+            }
+            Ok(())
+        },
         |project| flux::process_saved_with_workers(project, options.conversion_workers),
-    )
+    );
+    if let Some(queue) = queue {
+        eprintln!("Finishing queued lossless capture storage; no physical drive access...");
+        storage_errors.extend(queue.finish());
+    }
+    for error in &storage_errors {
+        eprintln!("Capture storage attention: {error}");
+    }
+    let mut response = response?;
+    if !storage_errors.is_empty() {
+        response.exit_code = 3;
+    }
+    if options.json_output {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&response.output).map_err(|e| e.to_string())?;
+        value["capture_storage"] =
+            json!({"managed_packing":options.packed_captures,"errors":storage_errors});
+        response.output = value.to_string();
+    } else if options.packed_captures {
+        response.output.push_str(&format!("\nManaged capture storage: {}. Verified ZIP captures retain the original SCP bytes/hash; failed tasks remain resumable.", if storage_errors.is_empty() { "completed" } else { "needs attention" }));
+    }
+    Ok(response)
 }
 
 fn regular_or_missing(path: &Path) -> Result<(), String> {
@@ -329,6 +399,8 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
         Journal {
             schema_version: 1,
             profile: options.profile.argument().to_owned(),
+            automatic_format: options.automatic_format,
+            packed_captures: options.packed_captures,
             profile_map: options.profile_map.clone(),
             drive: options.drive,
             policy: options.policy.clone(),
@@ -357,6 +429,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
     }
     if journal.pending.is_some()
         && (journal.profile != options.profile.argument()
+            || journal.automatic_format != options.automatic_format
             || journal.profile_map != options.profile_map
             || journal.drive != options.drive
             || journal.policy != options.policy)
@@ -367,6 +440,8 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
         return Err("Resume the pending disk with the same --last-disk target".to_owned());
     }
     journal.profile = options.profile.argument().to_owned();
+    journal.automatic_format = options.automatic_format;
+    journal.packed_captures = options.packed_captures;
     journal.profile_map = options.profile_map.clone();
     journal.drive = options.drive;
     journal.policy = options.policy.clone();
@@ -402,6 +477,8 @@ where
     let mut telemetry = benchmark::Session::start(
         project,
         json!({"profile":options.profile.argument(),
+        "automatic_format":options.automatic_format,
+        "packed_captures":options.packed_captures,
         "profile_map":options.profile_map,
         "drive":options.drive,"policy":options.policy,"count":options.count,
         "acquisition_only":options.acquisition_only,"start_disk":project.current_disk_number(),
@@ -471,7 +548,7 @@ where
                 &format!("GW {} / WAITING FOR YOU / INSERT {disk:03}", options.drive),
                 &format!(
                     "Check disk label {disk:03} and OPEN write-protect hole. Format: {}",
-                    profile.argument()
+                    options.format_label(disk)?
                 ),
             )?;
             if options.no_verify {
@@ -484,7 +561,7 @@ where
                 writeln!(
                     output,
                     "Type {disk:03} to confirm and read it, or QUIT: [format {}]",
-                    profile.argument()
+                    options.format_label(disk)?
                 )
                 .map_err(|e| e.to_string())?;
             }
@@ -582,8 +659,12 @@ where
             )?;
             return Err(error);
         }
+        let selected_profile = result
+            .selected_profile
+            .as_deref()
+            .unwrap_or(profile.argument());
         if let Some(elapsed_ms) = recovery_elapsed_ms {
-            telemetry.record("recovery_finished", json!({"disk":disk,"profile":profile.argument(),"elapsed_ms":elapsed_ms,
+            telemetry.record("recovery_finished", json!({"disk":disk,"profile":selected_profile,"elapsed_ms":elapsed_ms,
                 "verification_ms":benchmark::milliseconds(verification.elapsed()),"outcome":benchmark::outcome(&result)}))?;
         }
         journal.pending = Some(Pending {
@@ -607,7 +688,7 @@ where
         save(&path, &journal)?;
         telemetry.record(
             "disk_committed",
-            json!({"disk":disk,"profile":profile.argument(),"next_disk":next,
+            json!({"disk":disk,"profile":selected_profile,"next_disk":next,
             "numbering_resumed":numbering_resumed,"outcome":benchmark::outcome(&result)}),
         )?;
         let capped = options.last_disk.is_some_and(|last| disk >= last)
@@ -779,6 +860,8 @@ mod tests {
     fn options() -> ScanOptions {
         ScanOptions {
             profile: GreaseweazleProfile::Ibm1440,
+            automatic_format: false,
+            packed_captures: false,
             profile_map: BTreeMap::new(),
             drive: 'B',
             protected: true,
@@ -940,6 +1023,7 @@ mod tests {
     fn result(project: &ProjectState, disk: u32, partial: bool) -> RecoveryResult {
         RecoveryResult {
             disk,
+            selected_profile: None,
             status: if partial { "partial" } else { "acquired" }.to_owned(),
             stop_reason: "synthetic".to_owned(),
             capture_attempts: vec![1],

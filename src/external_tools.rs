@@ -241,6 +241,16 @@ pub(crate) fn find_ready_tool(
         .ok_or_else(|| format!("{} has no executable path", kind.display_name()))
 }
 
+/// Resolve a saved-image decoder without probing a connected board.
+pub(crate) fn find_offline_greaseweazle(configured: Option<&Path>) -> Result<PathBuf, String> {
+    candidate_paths(ToolKind::Greaseweazle, configured)
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| {
+            "Greaseweazle host executable is unavailable for offline decoding".to_owned()
+        })
+}
+
 pub fn run_audited_command(
     tool_name: &str,
     executable: &Path,

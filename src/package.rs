@@ -83,6 +83,26 @@ pub(crate) fn build_package(
     if !project.join("project.json").is_file() {
         return Err("The selected source is not a FluxVault project.".to_owned());
     }
+    // Packed flux is evidence, not an unrelated nested ZIP. Verify its logical
+    // original identity before including the container and binding sidecar.
+    let flux = project.join("Flux");
+    if flux.is_dir() {
+        for entry in fs::read_dir(&flux).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(stem) = name.strip_suffix(".scp.packed.json") {
+                let state = crate::project::ProjectState::open_without_session(project.clone())?;
+                let (disk, attempt) = stem
+                    .split_once("_attempt_")
+                    .ok_or("Invalid packed capture filename")?;
+                crate::flux_archive::verify_packed(
+                    &state,
+                    disk.parse().map_err(|_| "Invalid packed disk")?,
+                    attempt.parse().map_err(|_| "Invalid packed attempt")?,
+                )?;
+            }
+        }
+    }
     if !request.destination.is_dir() {
         return Err(format!(
             "Destination directory does not exist: {}",
@@ -313,11 +333,22 @@ fn should_exclude(path: &Path) -> bool {
     {
         return true;
     }
+    let managed_capture_zip = name
+        .strip_suffix(".scp.zip")
+        .and_then(|stem| stem.split_once("_attempt_"))
+        .is_some_and(|(disk, attempt)| {
+            disk.parse::<u32>().is_ok_and(|n| n > 0) && attempt.parse::<u32>().is_ok_and(|n| n > 0)
+        })
+        && path.parent().is_some_and(|p| {
+            p.file_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case("Flux"))
+        })
+        && path.with_extension("packed.json").is_file();
     name.starts_with(".fluxvault-")
         || name.starts_with("__")
         || name.contains(".partial.")
         || name.ends_with(".tmp")
-        || name.ends_with(".zip")
+        || (name.ends_with(".zip") && !managed_capture_zip)
         || name.ends_with(".zip.sha256")
         || name == "external-tools.jsonl"
 }
@@ -475,9 +506,11 @@ fn manifest_text(rows: &[ManifestRow]) -> String {
 }
 
 fn readme_text(project_name: &str, file_count: usize, total_bytes: u64) -> String {
-    format!(
+    let mut text = format!(
         "FluxVault archival package\r\nProject: {project_name}\r\nFiles: {file_count}\r\nSource bytes: {total_bytes}\r\n\r\nImages: acquired sector images.\r\nLogs: acquisition and recovery logs.\r\nExtracted: recovered source files.\r\nConverted: customer-friendly converted copies.\r\nRecovery: preserved recovery evidence, derived images, and backups.\r\nReports: selected inventories and reports.\r\nFlux: raw flux captures, where available.\r\n\r\nWindows System Volume Information and Recycle Bin folders are excluded from delivery files; original sector images retain all captured bytes.\r\nCheck PACKAGE_MANIFEST.csv for each included file's SHA-256.\r\nA partial image or recovered file is not proof that every original byte was readable.\r\nReview audit and recovery reports for limitations before delivery.\r\n"
-    )
+    );
+    text.push_str("\r\nPacked flux: a managed .scp.zip contains one byte-identical original SCP, not regenerated flux. Its .scp.packed.json binds original/packed sizes and SHA-256. FluxVault decodes it transparently; a ZIP tool can restore the original SCP member.\r\n");
+    text
 }
 
 fn safe_file_name(name: &str) -> String {

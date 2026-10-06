@@ -521,6 +521,7 @@ pub struct ProcessGreaseweazleBackend {
     host_version: Option<String>,
     progress_callback: Option<GreaseweazleProgressCallback>,
     extra_envs: HashMap<String, String>,
+    offline_only: bool,
 }
 
 enum StreamMessage {
@@ -544,7 +545,29 @@ impl ProcessGreaseweazleBackend {
             host_version: None,
             progress_callback: None,
             extra_envs: HashMap::new(),
+            offline_only: false,
         })
+    }
+
+    /// Offline decoding must never query USB, even to discover the host version.
+    pub fn new_offline(executable: PathBuf, audit_path: PathBuf) -> Result<Self, String> {
+        let version_path = executable.parent().map(|p| p.join("VERSION"));
+        let version = version_path.and_then(|p| {
+            let info = std::fs::symlink_metadata(&p).ok()?;
+            if !info.file_type().is_file() || info.len() > 128 {
+                return None;
+            }
+            let value = std::fs::read_to_string(p).ok()?.trim().to_owned();
+            (!value.is_empty()
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)))
+            .then_some(value)
+        });
+        let mut backend = Self::new(executable, audit_path)?;
+        backend.offline_only = true;
+        backend.host_version = version;
+        Ok(backend)
     }
 
     pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
@@ -651,7 +674,10 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
         MediaSafetyPolicy::assert_invariants();
         command.validate_safe()?;
 
-        if self.host_version.is_none() && command.subcommand() != "info" {
+        if self.offline_only && command.subcommand() != "convert" {
+            return Err("Offline backend permits convert only; board access refused".to_owned());
+        }
+        if !self.offline_only && self.host_version.is_none() && command.subcommand() != "info" {
             self.host_version = query_host_version(&self.executable, &self.audit_path)?;
         }
 

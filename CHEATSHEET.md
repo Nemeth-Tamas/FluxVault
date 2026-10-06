@@ -17,6 +17,10 @@
 
 **Capture size experiment:** `fv storage benchmark 7` measures lossless compression on a saved capture of disk 007 and verifies exact decompression. It does not change any captures.
 
+**New projects need no format list:** `fv scan --last-disk 136` identifies supported 720 KB/1.44 MB formats from saved raw flux. Completed captures pack in the background; their exact bytes/hash survive while the uncompressed working copy is retired after verification. Old projects keep saved formats/raw storage. Ambiguous/nonstandard formats stop for now with evidence preserved.
+
+**Saved-capture tools:** `fv greaseweazle identify 9` identifies format without hardware. `fv storage pack 7` makes a verified container but keeps raw; add `--retire-raw` explicitly to reclaim space. `fv storage resume` finishes durable packing tasks after interruption without a disk in the drive. Normal decode/recovery commands handle packed evidence transparently.
+
 ## 1. Get to a working prompt
 
 The current built executable is in the repository. To use it from any folder as `fluxvault`, run this once from PowerShell:

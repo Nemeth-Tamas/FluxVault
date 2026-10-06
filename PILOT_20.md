@@ -1,5 +1,7 @@
 # Tonight's 20-disk pilot
 
+**Historical runbook: this project already completed 001–020. Do not rerun its `init` block.** For the next fresh batch, use [PILOT_136.md](PILOT_136.md): new projects default to automatic standard-format discovery and verified background packing. This pilot retains its old mapped-format/raw settings and original evidence.
+
 **One station, one command, numbered swaps.** Use the working Mitsumi on Greaseweazle selector **B**. Keep the old archive unchanged; this run creates fresh evidence and measurements in its own folder.
 
 ## Start once
@@ -80,7 +82,7 @@ Partial disks remain partial even when intact files can be extracted. In particu
 
 Conversion is already threaded: a shared queue feeds the next job to whichever worker finishes. `process --conversion-workers 12` is supported today (valid range 1–16), but the automatic scan tail currently uses four; exposing a saved scan worker setting and smarter mixed-size scheduling is planned. More workers require a measured CPU/RAM budget, not an assumed linear speedup.
 
-Most space is physical multi-revolution flux evidence, not extracted documents: 26 SCP files account for 985.13 MiB, while `Converted` is only 34.24 MiB. The old sector-image ZIP is not an equivalent storage comparison. Planned lossless background compression must verify byte-identical decompression, preserve provenance/resume, and avoid competing with acquisition; no captures are removed by this documentation update.
+Most space is multi-revolution flux: 26 SCP files account for 985.13 MiB, while `Converted` is 34.24 MiB. The sector-only script ZIP is not an equivalent comparison. Verified background packing is now implemented for new scans; this original pilot deliberately retains all its raw captures.
 
 ## Offline operator-preparation checkpoint — 2026-10-06
 
@@ -92,4 +94,6 @@ The fresh 12-worker run returned 164 OK/eight partial DOCX timeouts; the restric
 
 `storage benchmark 7` measured 54,050,828 raw bytes to 12,343,912 ZIP/Deflate bytes at level 6 (**77.16% smaller**), approximately 0.86 seconds compression / 0.07 seconds roundtrip verification. Source and decompressed hashes matched exactly. This measures one full capture in memory; no working capture has been packed/deleted. Customer ZIP entries now use lossless compression rather than uncompressed storage.
 
-The full offline archival-package test then included all **26 raw captures**, derived evidence, originals, converted files and selected reports: **937 manifest-verified files**, **266.19 MiB ZIP**. The raw SCP entries alone compressed from **985.13 to 232.24 MiB (76.42% smaller)**. The local artifact is under `FluxVault-Test/Offline-Prep-Packages-20261006`; it contains no conversion-state history or benchmark internals. It remains an archival test package, not certification of the three partial disks. Working captures stay uncompressed until transparent background packing/decode/resume is implemented.
+The first offline archival-package test included all **26 raw captures**, derived evidence, originals, converted files and selected reports: **937 manifest-verified files**, **266.19 MiB ZIP**, under `FluxVault-Test/Offline-Prep-Packages-20261006`. Raw entries compressed 985.13 -> 232.24 MiB (76.42% smaller). It is not certification of the three partial disks.
+
+The next batch implemented transparent managed packing and validated it on `FluxVault-Test/Offline-Packed-Capture-Validation-20261006`, a separate copy: **26 captures / 1,032,982,606 bytes -> 243,529,973 bytes (232.25 MiB, 76.42% smaller), 27.07 seconds**. Containers reproduced original size/SHA-256 before copied raw retirement; 20/20 disks stayed hash-healthy, packed 007 decoded to the same image hash and packed 009 identified as DD. Source pilot retains all 26 raw files. New scans default to this policy; offline `storage pack` retains raw unless `--retire-raw` is explicit.

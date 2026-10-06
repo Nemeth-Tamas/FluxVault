@@ -48,6 +48,9 @@ Usage:
                                     Export recorded pilot timings and recovery outcomes offline
   fluxvault storage benchmark N [--project PATH]
                                     Measure verified lossless capture compression; no evidence changed
+  fluxvault storage pack N [--capture-attempt N] [--retire-raw]
+                                    Pack a saved SCP; retain raw unless retirement explicitly requested
+  fluxvault storage resume          Finish durable scan packing tasks without hardware
   fluxvault project show [--project PATH]
                                     Show saved project metadata
   fluxvault disk list [--project PATH]
@@ -77,16 +80,19 @@ Usage:
                                     Preserve immutable raw SCP flux; never write the floppy
   fluxvault greaseweazle decode N [--capture-attempt N] [--profile ibm.1440|ibm.720]
                                     Decode saved SCP offline; result remains unverified
+  fluxvault greaseweazle identify N [--capture-attempt N]
+                                    Identify supported IBM format from saved whole-disk flux offline
   fluxvault greaseweazle status N   Verify saved flux/decode evidence without hardware
   fluxvault greaseweazle compare N  Compare saved USB and flux sectors offline, read-only
   fluxvault greaseweazle consensus N
                                     Cross-check decodes from two raw captures offline
   fluxvault greaseweazle plan N     Rank USB/dual-flux donor candidates offline
-  fluxvault greaseweazle recover N [--gw-drive A|B] [--profile ibm.1440|ibm.720]
+  fluxvault greaseweazle recover N [--gw-drive A|B] [--profile auto|ibm.1440|ibm.720]
       --source-write-protected [--policy FILE] [--acquisition-only]
                                     Automatic bounded recovery without a USB reader
   fluxvault greaseweazle scan [--count N] [--last-disk N] [--gw-drive A|B]
-      [--profile ibm.1440|ibm.720] [--profile-map FILE] [--policy FILE] [--acquisition-only]
+      [--profile auto|ibm.1440|ibm.720] [--profile-map FILE] [--policy FILE] [--acquisition-only]
+      [--capture-storage packed|raw]
                                     Guided disk swaps, durable numbering, automatic processing
   fluxvault extract all [--project PATH]
                                     Process saved images with the extraction service
@@ -143,10 +149,12 @@ Options:
   --conversion-workers N            Parallel Office jobs (1-16; default 4); scan saves this setting
   --details                        Include bad-sector LBAs and evidence paths in disk show
   --gw-drive A|B                   GW selector (capture/recover default A; scan saved/B; not Windows A:)
-  --profile NAME                   IBM 1.44 MB or 720 KB flux profile
+  --profile NAME                   auto, ibm.1440 or ibm.720 (new scans default auto)
+  --capture-storage packed|raw     Scan retention (new scans pack verified complete captures)
+  --retire-raw                     storage pack only: retire raw copy AFTER verified publication
   --profile-map FILE               Known per-disk formats for mixed-format GW scans
   --revs N                         Raw-flux revolutions per track (1-10; default 3)
-  --capture-attempt N              Raw-flux attempt to decode (default latest complete)
+  --capture-attempt N              Capture to decode/identify/pack (default latest complete)
   --source-write-protected         Confirm the source floppy's physical tab is protected
   --policy FILE                    JSON recovery policy for greaseweazle recover/scan
   --acquisition-only               Skip downstream processing after recovery
@@ -206,6 +214,9 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut details = false;
     let mut gw_drive: Option<char> = None;
     let mut gw_profile: Option<GreaseweazleProfile> = None;
+    let mut automatic_format: Option<bool> = None;
+    let mut packed_captures: Option<bool> = None;
+    let mut retire_raw = false;
     let mut gw_revolutions: Option<u32> = None;
     let mut gw_capture_attempt: Option<u32> = None;
     let mut source_write_protected = false;
@@ -221,6 +232,15 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             "--json" => json_output = true,
             "--details" => details = true,
             "--no-verify" => no_verify = true,
+            "--retire-raw" => retire_raw = true,
+            "--capture-storage" => {
+                index += 1;
+                packed_captures = Some(match args.get(index).map(String::as_str) {
+                    Some("packed") => true,
+                    Some("raw") => false,
+                    _ => return Err("--capture-storage requires packed or raw".to_owned()),
+                });
+            }
             "--color" => {
                 index += 1;
                 color_mode = Some(terminal::ColorMode::parse(
@@ -239,9 +259,13 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             }
             "--profile" => {
                 index += 1;
-                gw_profile = Some(GreaseweazleProfile::parse(
-                    args.get(index).ok_or("--profile requires a value")?,
-                )?);
+                let name = args.get(index).ok_or("--profile requires a value")?;
+                automatic_format = Some(name == "auto");
+                gw_profile = if name == "auto" {
+                    None
+                } else {
+                    Some(GreaseweazleProfile::parse(name)?)
+                };
             }
             "--revs" => {
                 index += 1;
@@ -391,10 +415,20 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "capture";
     let gw_decode =
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "decode";
+    let gw_identify =
+        positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "identify";
     let gw_recover =
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "recover";
     let gw_scan =
         positional.len() == 2 && positional[0] == "greaseweazle" && positional[1] == "scan";
+    let storage_pack =
+        positional.len() == 3 && positional[0] == "storage" && positional[1] == "pack";
+    if packed_captures.is_some() && !gw_scan {
+        return Err("--capture-storage is only valid with Greaseweazle scan".to_owned());
+    }
+    if retire_raw && !storage_pack {
+        return Err("--retire-raw is only valid with storage pack".to_owned());
+    }
     if (no_verify || color_mode.is_some()) && !gw_scan {
         return Err("--no-verify and --color are only valid with Greaseweazle scan".to_owned());
     }
@@ -423,8 +457,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if (gw_drive.is_some() || source_write_protected) && !(gw_capture || gw_recover || gw_scan) {
         return Err("--gw-drive and --source-write-protected are only valid with greaseweazle capture/recover/scan".to_owned());
     }
-    if gw_capture_attempt.is_some() && !gw_decode {
-        return Err("--capture-attempt is only valid with greaseweazle decode".to_owned());
+    if gw_capture_attempt.is_some() && !(gw_decode || gw_identify || storage_pack) {
+        return Err("--capture-attempt is only valid with greaseweazle decode/identify".to_owned());
+    }
+    if automatic_format == Some(true) && !(gw_recover || gw_scan) {
+        return Err("--profile auto is only valid with greaseweazle recover/scan".to_owned());
     }
     if gw_profile.is_some() && !(gw_capture || gw_decode || gw_recover || gw_scan) {
         return Err(
@@ -464,6 +501,59 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut needs_attention = false;
     let output = match positional.first().map(String::as_str) {
         Some("help") if positional.len() == 1 => Ok(HELP.to_owned()),
+        Some("storage")
+            if positional.len() == 2 && positional[1] == "resume" && destination.is_none() =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            eprintln!("Resuming durable lossless storage tasks; no board or floppy access...");
+            let errors = crate::flux_archive::Queue::start(&project)?.finish();
+            return Ok(CliResponse {
+                exit_code: if errors.is_empty() { 0 } else { 3 },
+                output: if json_output {
+                    json!({"errors":errors,"physical_media_access":false}).to_string()
+                } else if errors.is_empty() {
+                    "Capture storage queue complete; byte-identical originals preserved in verified containers.".to_owned()
+                } else {
+                    format!(
+                        "Capture storage needs attention; tasks and evidence retained:\n{}",
+                        errors.join("\n")
+                    )
+                },
+            });
+        }
+        Some("storage") if storage_pack && destination.is_none() => {
+            let disk = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or("storage pack requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let attempt = gw_capture_attempt.map_or_else(
+                || crate::flux_capture::latest_capture_attempt(&project, disk),
+                Ok,
+            )?;
+            eprintln!(
+                "Packing saved disk {disk:03} capture {attempt:03}; verifying full byte-identical decompression..."
+            );
+            let packed = crate::flux_archive::pack(&project, disk, attempt, retire_raw)?;
+            let raw_present = project.root().join("Flux").join(&packed.raw_file).is_file();
+            if json_output {
+                Ok(json!({"capture":packed,"raw_retirement_requested":retire_raw,"raw_working_copy_present":raw_present,"physical_media_access":false}).to_string())
+            } else {
+                Ok(format!(
+                    "Disk {disk:03} capture {attempt:03}: {:.2} MiB -> {:.2} MiB. SHA-256 roundtrip MATCH.\nOriginal SCP working copy: {}. Packed capture remains available to decode/status/recovery/export.\nNo physical media access.",
+                    packed.raw_bytes as f64 / 1048576.0,
+                    packed.packed_bytes as f64 / 1048576.0,
+                    if raw_present {
+                        "retained (use --retire-raw explicitly to retire)"
+                    } else {
+                        "packed-only; original bytes/hash preserved"
+                    }
+                ))
+            }
+        }
         Some("storage")
             if positional.len() == 3 && positional[1] == "benchmark" && destination.is_none() =>
         {
@@ -614,6 +704,10 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 return flux_scan::run(
                     project,
                     flux_scan::ScanOptions {
+                        packed_captures: packed_captures
+                            .unwrap_or_else(|| saved.as_ref().is_none_or(|s| s.packed_captures)),
+                        automatic_format: automatic_format
+                            .unwrap_or_else(|| saved.as_ref().is_none_or(|s| s.automatic_format)),
                         profile: gw_profile.unwrap_or_else(|| {
                             saved
                                 .as_ref()
@@ -657,6 +751,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 &project,
                 flux::RecoveryOptions {
                     disk,
+                    automatic_format: automatic_format.unwrap_or(false),
                     profile: gw_profile.unwrap_or(GreaseweazleProfile::Ibm1440),
                     drive: gw_drive.unwrap_or('A'),
                     protected: source_write_protected,
@@ -665,6 +760,50 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     json_output,
                 },
             );
+        }
+        Some("greaseweazle") if gw_identify && destination.is_none() => {
+            let disk = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or("identify requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let attempt = gw_capture_attempt.map_or_else(
+                || crate::flux_capture::latest_capture_attempt(&project, disk),
+                Ok,
+            )?;
+            let settings = crate::external_tools::load_settings()?;
+            let executable = crate::external_tools::find_offline_greaseweazle(
+                settings.path(ToolKind::Greaseweazle),
+            )?;
+            let mut backend = crate::greaseweazle::ProcessGreaseweazleBackend::new_offline(
+                executable,
+                project.logs_dir().join("external-tools.jsonl"),
+            )?
+            .with_stream_to_stderr(false);
+            let (decision, report) =
+                crate::flux_format::identify(&project, disk, attempt, &mut backend, &|s| {
+                    eprintln!("{s}")
+                })?;
+            return Ok(CliResponse {
+                exit_code: if decision.selected_profile.is_some() {
+                    0
+                } else {
+                    3
+                },
+                output: if json_output {
+                    json!({"decision":decision,"report":report,"physical_media_access":false})
+                        .to_string()
+                } else {
+                    format!(
+                        "Disk {disk:03} format: {} ({})\nDecision report: {}\nSaved captures only; no physical read.",
+                        decision.selected_profile.as_deref().unwrap_or("UNRESOLVED"),
+                        decision.reason,
+                        report.display()
+                    )
+                },
+            });
         }
         Some("greaseweazle") if gw_capture && destination.is_none() => {
             let disk_number = positional[2]

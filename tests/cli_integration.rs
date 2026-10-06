@@ -26,6 +26,133 @@ fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
 }
 
 #[test]
+fn default_scan_discovers_dd_packs_and_reuses_evidence_across_cli_processes() {
+    let root = std::env::temp_dir().join(format!(
+        "fv-auto-packed-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &[
+                "tools",
+                "set",
+                "greaseweazle",
+                env!("CARGO_BIN_EXE_mock_gw")
+            ],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(&project, &app_data, &["disk", "select", "9"], false)
+            .status
+            .success()
+    );
+    let scanned = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &["scan", "--last-disk", "9", "--acquisition-only", "--json"],
+        false,
+        Some(b"9\n"),
+        &[("MOCK_GW_MEDIA_FORMAT", "ibm.720")],
+    );
+    assert_eq!(
+        scanned.status.code(),
+        Some(0),
+        "{}\n{}",
+        String::from_utf8_lossy(&scanned.stdout),
+        String::from_utf8_lossy(&scanned.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&scanned.stdout).unwrap();
+    assert_eq!(summary["capture_storage"]["managed_packing"], true);
+    assert_eq!(
+        summary["capture_storage"]["errors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    let journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".fluxvault-gw-scan.json")).unwrap())
+            .unwrap();
+    assert_eq!(journal["automatic_format"], true);
+    assert_eq!(journal["packed_captures"], true);
+    assert_eq!(journal["completed"][0]["selected_profile"], "ibm.720");
+    assert!(!project.join("Flux/009_attempt_001.scp").exists());
+    assert!(project.join("Flux/009_attempt_001.scp.zip").is_file());
+    let audit = project.join("Logs/external-tools.jsonl");
+    let before = fs::read_to_string(&audit).unwrap();
+    let identified = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["greaseweazle", "identify", "9", "--json"],
+        true,
+    );
+    assert_eq!(identified.status.code(), Some(0));
+    let identified: serde_json::Value = serde_json::from_slice(&identified.stdout).unwrap();
+    assert_eq!(identified["decision"]["selected_profile"], "ibm.720");
+    assert_eq!(fs::read_to_string(&audit).unwrap(), before);
+    let decoded = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["greaseweazle", "decode", "9", "--json"],
+        true,
+    );
+    assert_eq!(decoded.status.code(), Some(3));
+    let added = fs::read_to_string(&audit).unwrap();
+    let commands: Vec<serde_json::Value> = added
+        .lines()
+        .skip(before.lines().count())
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0]["arguments"][0], "convert");
+    assert!(
+        commands[0]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a == "--format=ibm.720")
+    );
+    assert_eq!(
+        invoke_with_mock_gw(&project, &app_data, &["storage", "resume", "--json"], true)
+            .status
+            .code(),
+        Some(0)
+    );
+    let events = fs::read_dir(project.join("Logs/Benchmark"))
+        .unwrap()
+        .map(|e| fs::read_to_string(e.unwrap().path()).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(events.lines().any(|line| {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        v.to_string().contains("disk_committed") && v.to_string().contains("ibm.720")
+    }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn enter_only_scan_is_explicit_colored_json_clean_and_saved_workers_survive_restart() {
     let root = std::env::temp_dir().join(format!(
         "fv-enter-scan-{}-{}",

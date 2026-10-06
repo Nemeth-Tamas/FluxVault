@@ -55,6 +55,7 @@ pub fn benchmark(
         .as_deref()
         .ok_or("Capture has no source hash")?;
     let bytes = capture.bytes.ok_or("Capture has no recorded size")?;
+    let source = crate::flux_archive::open_source(path, bytes, expected)?;
     if bytes == 0 || bytes > SAMPLE_LIMIT {
         return Err(
             "Compression benchmark is bounded to nonempty captures up to 128 MiB".to_owned(),
@@ -66,7 +67,7 @@ pub fn benchmark(
             "Measuring lossless ZIP/Deflate level {level}; checking full byte-identical decompression..."
         ));
         measurements.push(measure(
-            File::open(path).map_err(|e| e.to_string())?,
+            File::open(&source.path).map_err(|e| e.to_string())?,
             bytes,
             expected,
             level,

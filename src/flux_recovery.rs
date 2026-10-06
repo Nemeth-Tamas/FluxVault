@@ -86,6 +86,8 @@ struct Journal {
     schema_version: u32,
     disk: u32,
     profile: String,
+    #[serde(default)]
+    automatic_format: bool,
     drive: char,
     started_unix_ms: u64,
     #[serde(default)]
@@ -98,6 +100,8 @@ struct Journal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryResult {
     pub disk: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_profile: Option<String>,
     pub status: String,
     pub stop_reason: String,
     pub capture_attempts: Vec<u32>,
@@ -144,7 +148,11 @@ fn aggregate(
             let d = status
                 .decodes
                 .iter()
-                .find(|d| d.capture_attempt == stage.capture_attempt && d.decode_attempt == number)
+                .find(|d| {
+                    d.capture_attempt == stage.capture_attempt
+                        && d.decode_attempt == number
+                        && d.profile == profile.argument()
+                })
                 .ok_or("Saved recovery decode is missing")?;
             if d.profile != profile.argument() {
                 return Err("Recovery profile changed".to_owned());
@@ -249,6 +257,42 @@ pub fn recover(
     backend: &mut impl GreaseweazleBackend,
     progress: &impl Fn(&str),
 ) -> Result<RecoveryResult, String> {
+    recover_impl(
+        project, disk, profile, false, drive, policy, backend, progress,
+    )
+}
+
+/// Capture once, select a supported format offline, then target its missing sectors.
+pub fn recover_auto(
+    project: &ProjectState,
+    disk: u32,
+    drive: char,
+    policy: RecoveryPolicy,
+    backend: &mut impl GreaseweazleBackend,
+    progress: &impl Fn(&str),
+) -> Result<RecoveryResult, String> {
+    recover_impl(
+        project,
+        disk,
+        GreaseweazleProfile::Ibm1440,
+        true,
+        drive,
+        policy,
+        backend,
+        progress,
+    )
+}
+
+fn recover_impl(
+    project: &ProjectState,
+    disk: u32,
+    mut profile: GreaseweazleProfile,
+    automatic_format: bool,
+    drive: char,
+    policy: RecoveryPolicy,
+    backend: &mut impl GreaseweazleBackend,
+    progress: &impl Fn(&str),
+) -> Result<RecoveryResult, String> {
     policy.validate()?;
     if disk == 0 || !matches!(drive, 'A' | 'B') {
         return Err("Recovery requires a positive disk number and drive A or B".to_owned());
@@ -295,6 +339,7 @@ pub fn recover(
             schema_version: 1,
             disk,
             profile: profile.argument().to_owned(),
+            automatic_format,
             drive,
             started_unix_ms: external_tools::current_unix_ms(),
             empty_capture_budget_restarts: Vec::new(),
@@ -305,12 +350,14 @@ pub fn recover(
     };
     if j.schema_version != 1
         || j.disk != disk
-        || j.profile != profile.argument()
+        || j.automatic_format != automatic_format
+        || (!automatic_format && j.profile != profile.argument())
         || j.drive != drive
         || j.policy != policy
     {
         return Err("Saved job has different disk/settings/policy; new reads refused".to_owned());
     }
+    profile = GreaseweazleProfile::parse(&j.profile)?;
     if j.stages.len() > policy.passes.len()
         || j.stages
             .iter()
@@ -324,7 +371,31 @@ pub fn recover(
     for stage in &j.stages {
         stage.settings.validate()?;
     }
-    if !resumed && flux_capture::latest_capture_attempt(project, disk).is_ok() {
+    if !resumed && automatic_format && flux_capture::latest_capture_attempt(project, disk).is_ok() {
+        let status = flux_capture::inspect_disk(project, disk)?;
+        if let Some(capture) = status.captures.iter().rev().find(|c| {
+            c.status == "complete"
+                && c.hash_matches
+                && c.capture_settings
+                    .as_ref()
+                    .is_none_or(|s| s.cylinders.is_none())
+        }) {
+            progress(&format!(
+                "Using saved whole-disk capture #{} for automatic format identification",
+                capture.attempt
+            ));
+            j.stages.push(Stage {
+                capture_attempt: capture.attempt,
+                decode_attempt: None,
+                settings: capture.capture_settings.clone().unwrap_or(CaptureSettings {
+                    cylinders: None,
+                    retries: 3,
+                }),
+            });
+        }
+    }
+    if !resumed && !automatic_format && flux_capture::latest_capture_attempt(project, disk).is_ok()
+    {
         let status = flux_capture::inspect_disk(project, disk)?;
         if let Some(d) = status.decodes.iter().rev().find(|d| {
             d.profile == profile.argument()
@@ -504,6 +575,25 @@ pub fn recover(
             reads += 1;
         }
         let capture = j.stages[index].capture_attempt;
+        if automatic_format && index == 0 && j.stages[index].decode_attempt.is_none() {
+            let (decision, report) =
+                crate::flux_format::identify(project, disk, capture, backend, progress)?;
+            let selected = decision.selected_profile.as_deref().ok_or_else(|| format!("Cannot safely identify disk {disk:03}: {}. Raw capture preserved; no further physical reads. Decision: {}", decision.reason, report.display()))?;
+            profile = GreaseweazleProfile::parse(selected)?;
+            j.profile = selected.to_owned();
+            let chosen = decision
+                .candidates
+                .iter()
+                .find(|c| c.profile == selected)
+                .ok_or("Selected format has no candidate")?;
+            j.stages[index].decode_attempt = chosen.decode_attempt;
+            save_journal(&state, &j)?;
+            progress(&format!(
+                "Detected {selected}: {}. Evidence: {}",
+                decision.reason,
+                report.display()
+            ));
+        }
         let existing = flux_capture::inspect_disk(project, disk)?
             .decodes
             .into_iter()
@@ -581,6 +671,31 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Read a completed job's selected format; this hint never replaces hash checks.
+pub(crate) fn completed_profile(
+    project: &ProjectState,
+    disk: u32,
+) -> Result<Option<String>, String> {
+    let path = flux_capture::project_flux_dir(project)?
+        .join("Recovery")
+        .join(format!("{disk:03}_job.json"));
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(info) if !info.file_type().is_file() || info.len() > 1024 * 1024 => {
+            return Err("Unsafe recovery journal".to_owned());
+        }
+        _ => {}
+    }
+    let job: Journal = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Invalid recovery journal: {e}"))?;
+    if job.schema_version != 1 || job.disk != disk {
+        return Err("Recovery journal identity mismatch".to_owned());
+    }
+    GreaseweazleProfile::parse(&job.profile)?;
+    Ok(job.result.as_ref().map(|_| job.profile))
+}
+
 /// Recheck a published batch result without invoking a host tool or reading media.
 pub(crate) fn verify_completed_result(
     project: &ProjectState,
@@ -611,6 +726,11 @@ pub(crate) fn verify_completed_result(
     if job.schema_version != 1
         || job.disk != result.disk
         || saved.disk != result.disk
+        || saved.selected_profile != result.selected_profile
+        || result
+            .selected_profile
+            .as_ref()
+            .is_some_and(|p| p != &job.profile)
         || saved.image != result.image
         || saved.image_sha256 != result.image_sha256
         || saved.provenance != result.provenance
@@ -663,7 +783,7 @@ fn hash_path(path: &Path) -> Result<String, String> {
 
 /// Commit a newly derived image without replacing evidence that appeared
 /// after slot selection. std::fs::rename can replace an existing destination.
-fn publish_image_no_replace(source: &Path, destination: &Path) -> Result<(), String> {
+pub(crate) fn publish_image_no_replace(source: &Path, destination: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -798,6 +918,7 @@ fn publish(
     write_new(&metadata, &meta)?;
     Ok(RecoveryResult {
         disk: j.disk,
+        selected_profile: Some(j.profile.clone()),
         status: if unresolved.is_empty() {
             "acquired"
         } else if unresolved.len() == e.sectors.len() {

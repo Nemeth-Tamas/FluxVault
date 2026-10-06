@@ -109,7 +109,13 @@ fn main() {
             } else {
                 None
             };
-            let fixture = serde_json::json!({"cylinders":cylinders,"bad":bad,"conflict":conflict});
+            let media_format = env::var("MOCK_GW_MEDIA_FORMAT").unwrap_or_else(|_| {
+                args.iter()
+                    .find_map(|a| a.strip_prefix("--format="))
+                    .unwrap_or("ibm.1440")
+                    .to_owned()
+            });
+            let fixture = serde_json::json!({"cylinders":cylinders,"bad":bad,"conflict":conflict,"media_format":media_format});
             // Synthetic capture carries scenario/coverage into a later CLI process.
             if let Err(e) = fs::write(&output_path, serde_json::to_vec(&fixture).unwrap()) {
                 eprintln!("** ERROR: Failed to write {}: {e}", output_path.display());
@@ -141,12 +147,18 @@ fn main() {
                 .iter()
                 .map(|v| v.as_u64().unwrap() as usize)
                 .collect::<Vec<_>>();
-            let bad = fixture["bad"]
+            let mut bad = fixture["bad"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .map(|v| v.as_u64().unwrap() as usize)
                 .collect::<Vec<_>>();
+            if fixture["media_format"]
+                .as_str()
+                .is_some_and(|p| p != if is_720 { "ibm.720" } else { "ibm.1440" })
+            {
+                bad = (0..total_sectors).collect();
+            }
 
             println!("Converting input -> {}", output_path.display());
             println!("Reading c=0-79:h=0-1");

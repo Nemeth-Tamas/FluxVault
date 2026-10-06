@@ -114,6 +114,9 @@ pub struct CaptureInspection {
     pub sha256: Option<String>,
     pub hash_matches: bool,
     pub host_version: Option<String>,
+    pub capture_settings: Option<CaptureSettings>,
+    pub storage: String,
+    pub packed_flux: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,6 +141,7 @@ pub struct DecodeInspection {
 #[derive(Debug, Clone, Serialize)]
 pub struct FluxDiskStatus {
     pub disk_number: u32,
+    pub preferred_profile: Option<String>,
     pub captures: Vec<CaptureInspection>,
     pub decodes: Vec<DecodeInspection>,
     pub evidence_healthy: bool,
@@ -302,8 +306,23 @@ pub fn plan_flux_recovery(
 fn latest_two_decodes(
     status: &FluxDiskStatus,
 ) -> Result<(&DecodeInspection, &DecodeInspection), String> {
+    let profiles = status
+        .decodes
+        .iter()
+        .map(|d| d.profile.as_str())
+        .collect::<BTreeSet<_>>();
+    if status.preferred_profile.is_none() && profiles.len() > 1 {
+        return Err("Multiple saved sector profiles without a completed recovery selection; comparison refused".to_owned());
+    }
     let mut chosen = Vec::new();
     for decode in status.decodes.iter().rev() {
+        if status
+            .preferred_profile
+            .as_ref()
+            .is_some_and(|p| p != &decode.profile)
+        {
+            continue;
+        }
         if chosen
             .iter()
             .all(|prior: &&DecodeInspection| prior.capture_attempt != decode.capture_attempt)
@@ -438,9 +457,27 @@ pub fn compare_with_usb(
         .ok_or_else(|| format!("No saved USB image for disk {disk_number:03}"))?;
     let usb_path = recovery_plan::resolve_image_path(&images_dir, &usb.image_file)?;
     let status = inspect_disk(project, disk_number)?;
+    if status.preferred_profile.is_none()
+        && status
+            .decodes
+            .iter()
+            .map(|d| d.profile.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+            > 1
+    {
+        return Err("Multiple saved sector profiles without a completed recovery selection; comparison refused".to_owned());
+    }
     let flux = status
         .decodes
-        .last()
+        .iter()
+        .rev()
+        .find(|d| {
+            status
+                .preferred_profile
+                .as_ref()
+                .is_none_or(|p| p == &d.profile)
+        })
         .ok_or_else(|| format!("No saved Greaseweazle decode for disk {disk_number:03}"))?;
     let expected_sectors = match flux.profile.as_str() {
         "ibm.1440" => 2880usize,
@@ -560,12 +597,12 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 && record.status == "complete"
                 && record.flux_file.as_deref()
                     == expected_raw.file_name().and_then(|name| name.to_str())
-                && fs::symlink_metadata(&expected_raw)
-                    .ok()
-                    .is_some_and(|info| {
-                        info.file_type().is_file() && Some(info.len()) == record.bytes
+                && record
+                    .bytes
+                    .zip(record.sha256.as_deref())
+                    .is_some_and(|(size, hash)| {
+                        crate::flux_archive::verify(&expected_raw, size, hash).is_ok()
                     })
-                && record.sha256.as_deref() == hash_file(&expected_raw).ok().as_deref()
         });
         captures.push(CaptureInspection {
             attempt,
@@ -575,13 +612,28 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                 .unwrap_or_else(|| "invalid_metadata".to_owned()),
             profile: record.as_ref().map(|record| record.profile.clone()),
             metadata,
-            raw_flux: (!partial).then_some(expected_raw),
+            raw_flux: (!partial).then_some(expected_raw.clone()),
+            storage: if expected_raw.is_file() {
+                "raw"
+            } else if hash_matches {
+                "packed"
+            } else {
+                "missing_or_invalid"
+            }
+            .to_owned(),
+            packed_flux: expected_raw
+                .with_extension("scp.zip")
+                .is_file()
+                .then(|| expected_raw.with_extension("scp.zip")),
             bytes: record.as_ref().and_then(|record| record.bytes),
             sha256: record.as_ref().and_then(|record| record.sha256.clone()),
             hash_matches,
             host_version: record
                 .as_ref()
                 .and_then(|record| record.host_version.clone()),
+            capture_settings: record
+                .as_ref()
+                .and_then(|record| record.capture_settings.clone()),
         });
     }
     captures.sort_by_key(|capture| capture.attempt);
@@ -647,9 +699,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
                     capture.attempt == record.capture_attempt
                         && capture.hash_matches
                         && capture.sha256.as_deref() == Some(record.source_sha256.as_str())
-                })
-                && hash_file(&flux_dir.join(&expected_source)).ok().as_deref()
-                    == Some(record.source_sha256.as_str());
+                });
             decodes.push(DecodeInspection {
                 capture_attempt: record.capture_attempt,
                 decode_attempt: record.decode_attempt,
@@ -681,6 +731,7 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
             .all(|decode| decode.output_hash_matches && decode.source_hash_matches);
     Ok(FluxDiskStatus {
         disk_number,
+        preferred_profile: crate::flux_recovery::completed_profile(project, disk_number)?,
         captures,
         decodes,
         evidence_healthy,
@@ -887,21 +938,18 @@ pub fn decode(
     if flux_file != format!("{stem}.scp") {
         return Err("Capture metadata contains an unexpected SCP filename".to_owned());
     }
-    let input = flux_dir.join(flux_file);
-    if !fs::symlink_metadata(&input)
-        .map_err(|error| format!("Cannot inspect raw-flux source: {error}"))?
-        .file_type()
-        .is_file()
-    {
-        return Err("Raw-flux source is not a regular file".to_owned());
-    }
+    let logical_input = flux_dir.join(flux_file);
     let source_hash = record
         .sha256
         .as_deref()
         .ok_or("Capture has no saved SHA-256")?;
-    if hash_file(&input)? != source_hash {
-        return Err("Raw-flux capture changed since acquisition; decode refused".to_owned());
-    }
+    let source = crate::flux_archive::open_source(
+        &logical_input,
+        record.bytes.ok_or("Capture size missing")?,
+        source_hash,
+    )
+    .map_err(|e| format!("Raw-flux capture changed or is unavailable; decode refused: {e}"))?;
+    let input = &source.path;
     let profile = match profile_override {
         Some(profile) => profile,
         None => GreaseweazleProfile::parse(&record.profile)?,
@@ -916,7 +964,7 @@ pub fn decode(
     let final_metadata = derived_dir.join(format!("{derived_stem}.json"));
     let partial_metadata = derived_dir.join(format!("{derived_stem}.partial.json"));
     let command =
-        GreaseweazleCommand::convert_flux_to_sector_image(profile, &input, &partial_image)?;
+        GreaseweazleCommand::convert_flux_to_sector_image(profile, input, &partial_image)?;
     if path_occupied(&final_image)?
         || path_occupied(&final_metadata)?
         || path_occupied(&partial_image)?
@@ -1186,11 +1234,51 @@ fn resolve_derived_dir(flux_dir: &Path, create: bool) -> Result<PathBuf, String>
     Ok(resolved)
 }
 
+/// Logical original identity is independent of managed raw/packed retention.
+pub(crate) fn raw_identity(
+    project: &ProjectState,
+    disk: u32,
+    attempt: u32,
+) -> Result<(PathBuf, u64, String), String> {
+    if disk == 0 || attempt == 0 {
+        return Err("Capture numbers must be positive".to_owned());
+    }
+    let flux = project_flux_dir(project)?;
+    let stem = format!("{disk:03}_attempt_{attempt:03}");
+    let meta = flux.join(format!("{stem}.json"));
+    let info = fs::symlink_metadata(&meta).map_err(|e| e.to_string())?;
+    if !info.file_type().is_file() || info.len() > 65536 {
+        return Err("Unsafe capture metadata".to_owned());
+    }
+    let record: CaptureRecord = serde_json::from_slice(&fs::read(meta).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if record.schema_version != SCHEMA_VERSION
+        || record.disk_number != disk
+        || record.attempt_number != attempt
+        || record.status != "complete"
+        || record.flux_file.as_deref() != Some(format!("{stem}.scp").as_str())
+    {
+        return Err("Capture metadata does not identify a completed matching SCP".to_owned());
+    }
+    Ok((
+        flux.join(format!("{stem}.scp")),
+        record.bytes.ok_or("Capture size missing")?,
+        record.sha256.ok_or("Capture hash missing")?,
+    ))
+}
+
 pub(crate) fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, String> {
     for attempt in 1..=999_999u32 {
         let stem = format!("{disk_number:03}_attempt_{attempt:03}");
         let mut available = true;
-        for suffix in [".scp", ".partial.scp", ".json", ".partial.json"] {
+        for suffix in [
+            ".scp",
+            ".partial.scp",
+            ".json",
+            ".partial.json",
+            ".scp.zip",
+            ".scp.packed.json",
+        ] {
             if path_occupied(&directory.join(format!("{stem}{suffix}")))? {
                 available = false;
                 break;
