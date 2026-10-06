@@ -135,6 +135,8 @@ fluxvault recovery extract 7
 
 ## 6. Greaseweazle: start once, feed the disks
 
+For the first measured customer run, follow [the 136-disk pilot guide](PILOT_136.md). Scans now save a local benchmark automatically; `fluxvault benchmark report` exports it again without touching hardware. For a restart-safe numbered endpoint, use `--last-disk 136` instead of a per-invocation `--count 136`.
+
 The tested **Mitsumi drive with the straight ribbon uses selector B**. The original NEC is faulty; do not use it as the production drive. See [setup and live checks](GREASEWEAZLE_PREFLIGHT.md). Check the host/board after connecting:
 
 ```powershell

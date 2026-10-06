@@ -42,6 +42,8 @@ Usage:
   fluxvault                         Show command help
   fluxvault init [path]             Create a project
   fluxvault status [--project PATH] Show project status
+  fluxvault benchmark report [--project PATH]
+                                    Export recorded pilot timings and recovery outcomes offline
   fluxvault project show [--project PATH]
                                     Show saved project metadata
   fluxvault disk list [--project PATH]
@@ -77,7 +79,7 @@ Usage:
   fluxvault greaseweazle recover N [--gw-drive A|B] [--profile ibm.1440|ibm.720]
       --source-write-protected [--policy FILE] [--acquisition-only]
                                     Automatic bounded recovery without a USB reader
-  fluxvault greaseweazle scan [--count N] --gw-drive A|B --source-write-protected
+  fluxvault greaseweazle scan [--count N] [--last-disk N] --gw-drive A|B --source-write-protected
       [--profile ibm.1440|ibm.720] [--policy FILE] [--acquisition-only]
                                     Guided disk swaps, durable numbering, automatic processing
   fluxvault extract all [--project PATH]
@@ -128,6 +130,7 @@ Options:
   --disk N                          Disk number for acquisition
   --retries N                       Bad-sector retry passes for acquisition (0-10; default 2)
   --count N                         Stop guided scan after N disks (default: until QUIT)
+  --last-disk N                     Stop GW scan after this numbered disk, across restarts
   --write-blocker-verified          Operator asserts separate hardware protection test
   --source DIR                      External recovered-files folder for DMDE import
   --dmde-log FILE                   Matching DMDE log for recovery import
@@ -186,6 +189,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut acquisition_disk: Option<u32> = None;
     let mut acquisition_retries: Option<usize> = None;
     let mut scan_count: Option<usize> = None;
+    let mut last_disk: Option<u32> = None;
     let mut write_blocker_verified = false;
     let mut import_source: Option<PathBuf> = None;
     let mut import_log: Option<PathBuf> = None;
@@ -297,6 +301,17 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                         .ok_or("--count requires a positive number")?,
                 );
             }
+            "--last-disk" => {
+                index += 1;
+                last_disk = Some(
+                    args.get(index)
+                        .ok_or("--last-disk requires a number")?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|n| *n > 0 && *n < u32::MAX)
+                        .ok_or("--last-disk requires a positive number below 4294967295")?,
+                );
+            }
             "--write-blocker-verified" => write_blocker_verified = true,
             "--source" => {
                 index += 1;
@@ -395,6 +410,9 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if scan_count.is_some() && !(gw_scan || (positional.len() == 1 && positional[0] == "scan")) {
         return Err("--count is only valid with scan or greaseweazle scan".to_owned());
     }
+    if last_disk.is_some() && !gw_scan {
+        return Err("--last-disk is only valid with greaseweazle scan".to_owned());
+    }
     if (import_source.is_some() || import_log.is_some())
         && !(positional.len() == 3 && positional[0] == "recovery" && positional[1] == "import")
     {
@@ -404,6 +422,36 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut needs_attention = false;
     let output = match positional.first().map(String::as_str) {
         Some("help") if positional.len() == 1 => Ok(HELP.to_owned()),
+        Some("benchmark")
+            if positional.len() == 2 && positional[1] == "report" && destination.is_none() =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let result = crate::benchmark::report(&project)?;
+            let (summary, disks_csv) = crate::benchmark::export(&project, &result)?;
+            if json_output {
+                Ok(
+                    json!({"benchmark":result,"summary":summary,"disks_csv":disks_csv,
+                    "physical_media_access":false})
+                    .to_string(),
+                )
+            } else {
+                Ok(format!(
+                    "Pilot benchmark: {} unique disk(s), {} timed physical job(s), {} recovery error(s).\nFinished sessions: {}; incomplete/active sessions: {}.\nSummary: {}\nPer-disk CSV: {}\nFeed-only 136-disk projection: {} (observed sample, not a production guarantee).",
+                    result.unique_committed_disks,
+                    result.timed_physical_jobs,
+                    result.recovery_errors,
+                    result.finished_sessions,
+                    result.incomplete_sessions,
+                    summary.display(),
+                    disks_csv.display(),
+                    result
+                        .projected_136_feed_hours
+                        .map(|v| format!("{v:.2} hours"))
+                        .unwrap_or_else(|| "Not enough physical-read data".to_owned())
+                ))
+            }
+        }
         Some("greaseweazle")
             if positional.len() == 2
                 && positional[1] == "preview"
@@ -503,6 +551,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                         protected: source_write_protected,
                         policy,
                         count: scan_count,
+                        last_disk,
                         acquisition_only,
                         json_output,
                     },

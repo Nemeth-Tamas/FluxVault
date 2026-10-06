@@ -370,6 +370,17 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 
 ## 16. Current dataset regression targets
 
+### First workable pilot — single Greaseweazle station
+
+- [x] Provide a controlled pilot runbook with isolated projects, small live smoke-test gates, the full numbered collection, restart instructions and a local data-review recipe (`PILOT_136.md`).
+- [x] Add `--last-disk 136` to guided GW scans so the same command stops at the same collection endpoint after restart; keep `--count` as a session cap and preserve older journals.
+- [x] Persist synced per-invocation benchmark events with build/configuration fingerprint, confirmations, recovery/verification timing, read counts, missing/conflicting LBAs, hashes, failures and downstream results; retain interrupted-session evidence without overwriting previous runs.
+- [x] Export benchmark JSON/per-disk CSV automatically and through offline `benchmark report`; deduplicate resumed numbering, retain partial statuses, flag truncated tails, and reject malformed committed records. Keep internal telemetry outside customer packages.
+- [x] Simulate a 136-disk single-station scan with partial disks, failure at disk 061, persisted resume, unique yield/error accounting and a restart-safe stop at 136.
+- [ ] Pass small clean/damaged live smoke tests with telemetry before starting the full pilot; inspect fixed-profile behavior on known DD/nonstandard media.
+- [ ] Run the first 136-disk physical pilot and collect benchmark/audit/recovery artifacts, preserving the original script archive for comparison.
+- [ ] Compare pilot source/recovered-file hashes and yield against the script/DMDE baseline, then prioritize changes using measured failure/throughput data.
+
 Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression truth while porting functionality.
 
 - [ ] Import/represent all 136 floppy records.

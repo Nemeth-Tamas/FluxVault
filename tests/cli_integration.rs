@@ -138,6 +138,8 @@ fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
     assert_eq!(response["scanned"], 2);
     assert_eq!(response["next_disk"], 3);
     assert_eq!(response["processing"]["skipped"], true);
+    assert_eq!(response["benchmark"]["unique_disks"], 2);
+    assert!(Path::new(response["benchmark"]["summary"].as_str().unwrap()).exists());
     assert!(String::from_utf8_lossy(&first.stderr).contains("No read started"));
     let journal_path = project.join(".fluxvault-gw-scan.json");
     let original: serde_json::Value =
@@ -151,6 +153,30 @@ fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
             .filter(|v| v["arguments"][0] == "read")
             .count()
     };
+    assert_eq!(reads(&audit_path), 2);
+    let end_reached = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &[
+            "greaseweazle",
+            "scan",
+            "--gw-drive",
+            "B",
+            "--source-write-protected",
+            "--last-disk",
+            "2",
+            "--acquisition-only",
+            "--json",
+        ],
+        true,
+        Some(b"READ 003\n"),
+        &[],
+    );
+    assert_eq!(end_reached.status.code(), Some(0));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&end_reached.stdout).unwrap()["scanned"],
+        0
+    );
     assert_eq!(reads(&audit_path), 2);
     let bounded = [
         "greaseweazle",
@@ -252,6 +278,19 @@ fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
     let metadata: serde_json::Value =
         serde_json::from_slice(&fs::read(project.join("project.json")).unwrap()).unwrap();
     assert_eq!(metadata["current_disk_number"], 3);
+    let benchmark = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["benchmark", "report", "--json"],
+        true,
+    );
+    assert_eq!(benchmark.status.code(), Some(0));
+    let measured: serde_json::Value = serde_json::from_slice(&benchmark.stdout).unwrap();
+    assert_eq!(measured["physical_media_access"], false);
+    assert_eq!(measured["benchmark"]["unique_committed_disks"], 3);
+    assert_eq!(measured["benchmark"]["recovery_errors"], 2);
+    assert_eq!(measured["benchmark"]["status_counts"]["partial"], 1);
+    assert_eq!(reads(&audit_path), read_count);
     fs::remove_dir_all(root).unwrap();
 }
 

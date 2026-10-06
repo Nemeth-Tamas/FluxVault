@@ -5,13 +5,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, Write},
     path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
+    benchmark,
     flux_recovery::{self, RecoveryPolicy, RecoveryResult},
     greaseweazle::GreaseweazleProfile,
     project::ProjectState,
@@ -28,6 +29,7 @@ pub(super) struct ScanOptions {
     pub protected: bool,
     pub policy: RecoveryPolicy,
     pub count: Option<usize>,
+    pub last_disk: Option<u32>,
     pub acquisition_only: bool,
     pub json_output: bool,
 }
@@ -42,6 +44,11 @@ impl ScanOptions {
         }
         if !matches!(self.drive, 'A' | 'B') || self.count == Some(0) {
             return Err("Scan requires drive A or B and a positive --count".to_owned());
+        }
+        if self.last_disk.is_some_and(|n| n == 0 || n == u32::MAX) {
+            return Err(
+                "--last-disk must be positive and leave room for the next number".to_owned(),
+            );
         }
         self.policy.validate()
     }
@@ -59,6 +66,8 @@ struct Journal {
     profile: String,
     drive: char,
     policy: RecoveryPolicy,
+    #[serde(default)]
+    last_disk: Option<u32>,
     pending: Option<Pending>,
     completed: Vec<RecoveryResult>,
 }
@@ -158,6 +167,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
             profile: options.profile.argument().to_owned(),
             drive: options.drive,
             policy: options.policy.clone(),
+            last_disk: options.last_disk,
             pending: None,
             completed: Vec::new(),
         }
@@ -184,9 +194,13 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
     {
         return Err("Resume the pending disk with the same profile, drive, and policy".to_owned());
     }
+    if journal.pending.is_some() && journal.last_disk != options.last_disk {
+        return Err("Resume the pending disk with the same --last-disk target".to_owned());
+    }
     journal.profile = options.profile.argument().to_owned();
     journal.drive = options.drive;
     journal.policy = options.policy.clone();
+    journal.last_disk = options.last_disk;
     Ok(journal)
 }
 
@@ -214,8 +228,16 @@ where
     *project = ProjectState::open_without_session(root.clone())?;
     let path = root.join(JOURNAL);
     let mut journal = load(&path, options)?;
+    let mut telemetry = benchmark::Session::start(
+        project,
+        json!({"profile":options.profile.argument(),
+        "drive":options.drive,"policy":options.policy,"count":options.count,
+        "acquisition_only":options.acquisition_only,"start_disk":project.current_disk_number(),
+        "last_disk":options.last_disk}),
+    )?;
     let mut results = Vec::new();
     let mut resumed_advances = 0usize;
+    let mut waiting: Option<(u32, Instant)> = None;
     loop {
         if options.count.is_some_and(|limit| results.len() >= limit) {
             break;
@@ -224,6 +246,12 @@ where
             .pending
             .as_ref()
             .map_or(project.current_disk_number(), |p| p.disk);
+        if options.last_disk.is_some_and(|last| disk > last) {
+            if journal.pending.is_some() {
+                return Err("End-disk target excludes a pending job; no read started".to_owned());
+            }
+            break;
+        }
         let next = disk.checked_add(1).ok_or("Disk number overflow")?;
         if journal.completed.iter().any(|r| r.disk == disk) {
             return Err(format!(
@@ -237,6 +265,8 @@ where
                 "Pending disk {disk:03} disagrees with project numbering; no read started"
             ));
         }
+        let numbering_resumed = saved_result.is_some();
+        let mut recovery_elapsed_ms = None;
         let result = if let Some(mut result) = saved_result {
             resumed_advances += 1;
             writeln!(
@@ -248,6 +278,9 @@ where
             result.resumed = true;
             result
         } else {
+            if waiting.as_ref().is_none_or(|(number, _)| *number != disk) {
+                waiting = Some((disk, Instant::now()));
+            }
             writeln!(output,
                 "GW {}: insert floppy {disk:03}, check its write-protect hole is OPEN. Type READ {disk:03} to confirm its identity and read it, or QUIT:", options.drive
             ).map_err(|e| e.to_string())?;
@@ -280,7 +313,26 @@ where
             *project = fresh;
             journal.pending = Some(Pending { disk, result: None });
             save(&path, &journal)?; // Custody persists before any physical operation.
-            recover_disk(project, disk)?
+            telemetry.record(
+                "read_confirmed",
+                json!({"disk":disk,
+                "operator_wait_ms":benchmark::milliseconds(waiting.take().unwrap().1.elapsed())}),
+            )?;
+            let started = Instant::now();
+            match recover_disk(project, disk) {
+                Ok(result) => {
+                    recovery_elapsed_ms = Some(benchmark::milliseconds(started.elapsed()));
+                    result
+                }
+                Err(error) => {
+                    telemetry.record(
+                        "recovery_failed",
+                        json!({"disk":disk,"phase":"acquisition",
+                        "elapsed_ms":benchmark::milliseconds(started.elapsed()),"error":error}),
+                    )?;
+                    return Err(error);
+                }
+            }
         };
         if result.disk != disk
             || !matches!(
@@ -290,7 +342,19 @@ where
         {
             return Err("Recovery returned a different disk or invalid terminal state".to_owned());
         }
-        verify(project, &result)?;
+        let verification = Instant::now();
+        if let Err(error) = verify(project, &result) {
+            telemetry.record(
+                "recovery_failed",
+                json!({"disk":disk,"phase":"verification",
+                "elapsed_ms":benchmark::milliseconds(verification.elapsed()),"error":error}),
+            )?;
+            return Err(error);
+        }
+        if let Some(elapsed_ms) = recovery_elapsed_ms {
+            telemetry.record("recovery_finished", json!({"disk":disk,"elapsed_ms":elapsed_ms,
+                "verification_ms":benchmark::milliseconds(verification.elapsed()),"outcome":benchmark::outcome(&result)}))?;
+        }
         journal.pending = Some(Pending {
             disk,
             result: Some(result.clone()),
@@ -310,6 +374,11 @@ where
         journal.completed.push(result.clone());
         journal.pending = None;
         save(&path, &journal)?;
+        telemetry.record(
+            "disk_committed",
+            json!({"disk":disk,"next_disk":next,
+            "numbering_resumed":numbering_resumed,"outcome":benchmark::outcome(&result)}),
+        )?;
         writeln!(output,
             "GW SWAP: disk {disk:03} saved ({}; {} missing, {} conflicting). Remove it. Next disk: {next:03}.",
             result.status, result.missing_lbas.len(), result.conflicting_lbas.len()
@@ -323,25 +392,43 @@ where
     } else {
         writeln!(output, "Physical work finished. Remove the floppy; processing saved files, conversions, audit and workbook...")
             .map_err(|e| e.to_string())?;
+        telemetry.record("downstream_started", json!({}))?;
+        let started = Instant::now();
         match process(project) {
             Ok(response) => {
                 attention |= response.exit_code != 0;
-                serde_json::from_str(&response.output)
-                    .unwrap_or_else(|_| json!({"detail":response.output}))
+                let detail = serde_json::from_str(&response.output)
+                    .unwrap_or_else(|_| json!({"detail":response.output}));
+                telemetry.record(
+                    "downstream_finished",
+                    json!({"elapsed_ms":benchmark::milliseconds(started.elapsed()),
+                    "exit_code":response.exit_code,"summary":detail}),
+                )?;
+                detail
             }
             Err(error) => {
                 attention = true;
+                telemetry.record(
+                    "downstream_finished",
+                    json!({"elapsed_ms":benchmark::milliseconds(started.elapsed()),
+                    "exit_code":2,"error":error}),
+                )?;
                 json!({"error":error,"acquisition_preserved":true})
             }
         }
     };
     let partial = results.iter().filter(|r| r.status != "acquired").count();
+    telemetry.finish(results.len(), project.current_disk_number())?;
+    let measured = benchmark::report(project)?;
+    let (benchmark_json, benchmark_csv) = benchmark::export(project, &measured)?;
     Ok(CliResponse {
         output: if options.json_output {
             json!({"project":root,"scanned":results.len(),"partial_this_session":partial,
                 "next_disk":project.current_disk_number(),"total_scanned":journal.completed.len(),
                 "resumed_advances":resumed_advances,"pending_disk":journal.pending.as_ref().map(|p| p.disk),
                 "disks":results,"processing":processing,
+                "benchmark":{"events":telemetry.path(),"summary":benchmark_json,"disks_csv":benchmark_csv,
+                    "unique_disks":measured.unique_committed_disks,"projected_136_feed_hours":measured.projected_136_feed_hours},
                 "source_media_access":"read_only","customer_delivery_certified":false})
             .to_string()
         } else {
@@ -359,10 +446,12 @@ where
                 )
             };
             format!(
-                "Greaseweazle scan stopped: {} disk(s) saved, {partial} partial this session. Next: {:03}. Total: {}.\nDownstream: {downstream}",
+                "Greaseweazle scan stopped: {} disk(s) saved, {partial} partial this session. Next: {:03}. Total: {}.\nDownstream: {downstream}\nPilot benchmark: {}\nPer-disk CSV: {}",
                 results.len(),
                 project.current_disk_number(),
-                journal.completed.len()
+                journal.completed.len(),
+                benchmark_json.display(),
+                benchmark_csv.display()
             )
         },
         exit_code: if attention { 3 } else { 0 },
@@ -402,6 +491,7 @@ mod tests {
             protected: true,
             policy: RecoveryPolicy::default(),
             count: None,
+            last_disk: None,
             acquisition_only: true,
             json_output: true,
         }
@@ -765,5 +855,111 @@ mod tests {
                 .current_disk_number(),
             7
         );
+    }
+
+    #[test]
+    fn pilot_136_disk_soak_records_yield_failure_and_resume_without_number_drift() {
+        let fixture = Fixture::new();
+        let mut project = fixture.project();
+        let mut opts = options();
+        opts.count = Some(60);
+        opts.last_disk = Some(136);
+        let confirmations = |first, last| {
+            (first..=last)
+                .map(|disk| format!("READ {disk:03}\n"))
+                .collect::<String>()
+        };
+        run_with_io(
+            &mut project,
+            &opts,
+            Cursor::new(confirmations(1, 60)),
+            &mut Vec::new(),
+            |p, disk| Ok(result(p, disk, disk % 11 == 0)),
+            |_, _| Ok(()),
+            skipped,
+        )
+        .unwrap();
+        assert_eq!(project.current_disk_number(), 61);
+        assert!(
+            run_with_io(
+                &mut project,
+                &opts,
+                Cursor::new(b"READ 061\n"),
+                &mut Vec::new(),
+                |_, _| Err("simulated disconnected board".to_owned()),
+                |_, _| Ok(()),
+                skipped
+            )
+            .is_err()
+        );
+        assert_eq!(project.current_disk_number(), 61);
+        opts.count = None;
+        run_with_io(
+            &mut project,
+            &opts,
+            Cursor::new(confirmations(61, 136)),
+            &mut Vec::new(),
+            |p, disk| Ok(result(p, disk, disk % 11 == 0)),
+            |_, _| Ok(()),
+            skipped,
+        )
+        .unwrap();
+        assert_eq!(project.current_disk_number(), 137);
+        assert_eq!(
+            load(&fixture.0.join(JOURNAL), &opts)
+                .unwrap()
+                .completed
+                .len(),
+            136
+        );
+        let measured = benchmark::report(&project).unwrap();
+        assert_eq!(measured.unique_committed_disks, 136);
+        assert_eq!(measured.confirmed_insertions, 137);
+        assert_eq!(measured.reported_physical_reads, 136);
+        assert_eq!(measured.timed_physical_jobs, 136);
+        assert_eq!(measured.status_counts["partial"], 12);
+        assert_eq!(measured.status_counts["acquired"], 124);
+        assert_eq!(measured.recovery_errors, 1);
+        assert_eq!(measured.incomplete_sessions, 1);
+        assert_eq!(measured.finished_sessions, 2);
+        let (_, csv) = benchmark::export(&project, &measured).unwrap();
+        assert_eq!(fs::read_to_string(csv).unwrap().lines().count(), 137);
+        let after = run_with_io(
+            &mut project,
+            &opts,
+            Cursor::new(b"READ 137\n"),
+            &mut Vec::new(),
+            no_read,
+            |_, _| panic!("target already reached"),
+            skipped,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&after.output).unwrap()["scanned"],
+            0
+        );
+    }
+
+    #[test]
+    fn older_journals_remain_compatible_but_a_pending_end_target_cannot_change() {
+        let fixture = Fixture::new();
+        let project = fixture.project();
+        let mut opts = options();
+        let path = fixture.0.join(JOURNAL);
+        let mut journal = load(&path, &opts).unwrap();
+        let mut old = serde_json::to_value(&journal).unwrap();
+        old.as_object_mut().unwrap().remove("last_disk");
+        fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(load(&path, &opts).unwrap().last_disk, None);
+        opts.last_disk = Some(136);
+        journal.last_disk = Some(136);
+        journal.pending = Some(Pending {
+            disk: 1,
+            result: Some(result(&project, 1, false)),
+        });
+        save(&path, &journal).unwrap();
+        assert_eq!(load(&path, &opts).unwrap().last_disk, Some(136));
+        opts.last_disk = Some(100);
+        assert!(matches!(load(&path, &opts), Err(e) if e.contains("same --last-disk")));
     }
 }

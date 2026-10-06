@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod batch_extraction;
+pub mod benchmark;
 pub mod cli;
 pub mod composite;
 pub mod conversion;

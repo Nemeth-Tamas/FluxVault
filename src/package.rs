@@ -539,6 +539,19 @@ mod tests {
         fs::write(flux_recovery.join("001_job.json"), b"internal").unwrap();
         fs::write(flux_recovery.join("001.lock"), b"").unwrap();
         fs::write(flux_recovery.join("001_attempt_001_provenance.json"), b"{}").unwrap();
+        fs::create_dir_all(project.join("Logs/Benchmark")).unwrap();
+        fs::write(
+            project.join("Logs/Benchmark/.fluxvault-benchmark-test.jsonl"),
+            b"internal metrics",
+        )
+        .unwrap();
+        fs::create_dir_all(project.join("Reports/Benchmark")).unwrap();
+        fs::write(project.join("Reports/Benchmark/Benchmark-test.json"), b"{}").unwrap();
+        fs::write(
+            project.join("Reports/Benchmark/Benchmark-test.csv"),
+            b"internal metrics",
+        )
+        .unwrap();
         fs::write(
             project.join("Extracted").join("001").join("customer.doc"),
             b"document",
@@ -618,6 +631,15 @@ mod tests {
         assert!(zip.by_name("Images/001.partial.img").is_err());
         assert!(zip.by_name("Flux/Recovery/001_job.json").is_err());
         assert!(zip.by_name("Flux/Recovery/001.lock").is_err());
+        assert!(
+            zip.by_name("Logs/Benchmark/.fluxvault-benchmark-test.jsonl")
+                .is_err()
+        );
+        assert!(
+            zip.by_name("Reports/Benchmark/Benchmark-test.json")
+                .is_err()
+        );
+        assert!(zip.by_name("Reports/Benchmark/Benchmark-test.csv").is_err());
         assert!(
             zip.by_name("Flux/Recovery/001_attempt_001_provenance.json")
                 .is_ok()

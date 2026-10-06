@@ -10,6 +10,7 @@ From a project folder (or any subfolder), for example:
 
 ```powershell
 fluxvault status
+fluxvault benchmark report
 fluxvault disk list
 fluxvault disk show 7 --details
 fluxvault recovery plan
@@ -87,6 +88,14 @@ On restart, a pending result is verified against the committed single-disk journ
 After feeding finishes, saved-image extraction/conversion/audit/workbook processing runs once automatically; `--acquisition-only` skips it. This serial tail is not concurrent background scheduling. A failed tail retains all acquisition evidence and numbering; rerun `process` or quit a resumed scan to retry it. Empty new scans do not launch downstream work. JSON stdout contains session results, `total_scanned`, `resumed_advances`, `pending_disk`, next number and processing details; prompts/progress go to stderr. Exit 3 indicates partial history, a pending job, or downstream attention, not an automatic delivery certificate.
 
 Mock-executable tests cover numbered confirmations, two-disk acquisition, disconnected-board failure, bounded partial recovery, restart on both sides of the numbering commit, changed-image refusal and cross-project contention. A separately running scan is terminated in the lock test; a new session then acquires the released reservation without starting a host tool. The guided batch itself still needs multi-disk hardware acceptance.
+
+### Measured pilot runs
+
+`greaseweazle scan --last-disk 136 --gw-drive B --source-write-protected` stops at an absolute numbered endpoint, including after restarts. `--count` remains a separate per-invocation cap; both can be used together. The end target is persisted with pending settings, and changing it for a pending job is refused. Existing scan journals without the new optional field remain readable.
+
+Each scan writes uniquely named, synced local JSONL events under `Logs/Benchmark` and creates new JSON/CSV snapshots under `Reports/Benchmark` at normal session completion. `benchmark report [--json]` re-exports saved telemetry without host/drive access. It includes configurations/executable fingerprint, confirmation waits, recovery/verification times, mean/median/p95 times, explicit partial/conflicting-sector outcomes, reported physical-read counts, failures, downstream summaries and incomplete sessions. Unique disk counts survive resumed commits. Exports contain no customer file contents and are excluded from customer packages; logs may contain private paths.
+
+The feed-only 136-disk projection is an observed-sample extrapolation, excluding failures, downstream work, inter-session downtime and some persistence overhead—not a six-hour production guarantee. The simulated 136-disk scan service test covers partial outcomes, an acquisition failure, persisted resume, numbering through 136 and automatic stopping before 137. No hardware throughput is inferred from mock tests. See [PILOT_136.md](PILOT_136.md) for setup, acceptance order and the data collection recipe.
 
 The final numbered image in `Images` has compatible acquisition metadata/logs and a hashed provenance map. Agreeing independent captures are labeled corroborated; sectors reported good in only one capture remain explicitly lower confidence. Conflicting/unreadable sectors are zero-filled and marked bad, never silently chosen or guessed. This is an immutable derived image, not an untouched raw capture or customer-delivery certification.
 
