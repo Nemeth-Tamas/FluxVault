@@ -909,7 +909,7 @@ fn cli_only_entry_point_and_greaseweazle_preview_need_no_hardware() {
 }
 
 #[test]
-fn native_fat12_cli_recovers_saved_partial_image_without_tools_and_reuses_it() {
+fn native_fat12_cli_recovers_missing_boot_without_tools_and_reuses_warned_result() {
     let root = std::env::temp_dir().join(format!(
         "fluxvault-cli-native-{}-{}",
         std::process::id(),
@@ -937,10 +937,11 @@ fn native_fat12_cli_recovers_saved_partial_image_without_tools_and_reuses_it() {
     image[entry + 26..entry + 28].copy_from_slice(&2u16.to_le_bytes());
     image[entry + 28..entry + 32].copy_from_slice(&5u32.to_le_bytes());
     image[33 * 512..33 * 512 + 5].copy_from_slice(b"hello");
+    image[..512].fill(0); // Disposable fixture only; no physical media.
     let source_sha = format!("{:x}", Sha256::digest(&image));
     fs::write(project.images_dir().join("001.img"), &image).unwrap();
     fs::write(project.logs_dir().join("001.log"), format!(
-        "BEGIN | disk=1\nGEOMETRY | bytes_per_sector=512 | total_sectors=2880\nBAD_SECTOR | LBA=34\nEND | status=PARTIAL | bytes=1474560 | sha256={source_sha}\n")).unwrap();
+        "BEGIN | disk=1\nGEOMETRY | bytes_per_sector=512 | total_sectors=2880\nBAD_SECTOR | LBA=0\nBAD_SECTOR | LBA=34\nEND | status=PARTIAL | bytes=1474560 | sha256={source_sha}\n")).unwrap();
     let first = invoke(&root, &["recovery", "extract", "1", "--json"], None);
     assert_eq!(
         first.status.code(),
@@ -952,6 +953,12 @@ fn native_fat12_cli_recovers_saved_partial_image_without_tools_and_reuses_it() {
     assert_eq!(json["physical_media_access"], false);
     assert_eq!(json["recovery"]["customer_delivery_certified"], false);
     assert_eq!(json["recovery"]["files"], 1);
+    assert_eq!(
+        json["recovery"]["layout_method"],
+        "inferred_standard_layout"
+    );
+    assert!(json["recovery"]["layout_warning"].is_string());
+    assert!(String::from_utf8_lossy(&first.stderr).contains("layout WARNING"));
     assert_eq!(json["recovery"]["source_sha256"], source_sha);
     let output = std::path::PathBuf::from(json["recovery"]["output_directory"].as_str().unwrap());
     assert_eq!(fs::read(output.join("GOOD.TXT")).unwrap(), b"hello");
@@ -959,6 +966,10 @@ fn native_fat12_cli_recovers_saved_partial_image_without_tools_and_reuses_it() {
     assert_eq!(second.status.code(), Some(3));
     let json: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
     assert_eq!(json["recovery"]["reused"], true);
+    assert!(json["recovery"]["layout_warning"].is_string());
+    let text = invoke(&root, &["recovery", "extract", "1"], None);
+    assert_eq!(text.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&text.stdout).contains("WARNING:"));
     assert!(!project.logs_dir().join("external-tools.jsonl").exists());
     assert_eq!(
         fs::read(project.images_dir().join("001.img")).unwrap(),

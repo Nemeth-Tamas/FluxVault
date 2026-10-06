@@ -1,6 +1,6 @@
 # FluxVault progress — 2026-10-06 offline preparation
 
-The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats and losslessly pack verified raw captures in the background. Existing projects retain their saved settings. This checkpoint uses saved captures only; the next hardware session should smoke-test the new defaults before scaling up.
+The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats and losslessly pack verified raw captures in the background. Native recovery now has a bounded missing-boot standard-layout fallback and precise skipped-file hole reports. Existing projects retain their saved settings. This checkpoint uses saved captures only; the next hardware session should smoke-test the new defaults before scaling up.
 
 ## How close?
 
@@ -8,12 +8,23 @@ The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finish
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 85% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented. This is engineering coverage, not proven equality of all historical reports/files. |
 | Single-Greaseweazle 136-disk benchmark readiness | approximately 90% | The real 20-disk chain passed; numbered/Enter swaps, limits, resume, telemetry, standard format handling and packed storage exist. New live defaults, nonstandard exceptions and long-run acceptance still need validation. |
-| Whole TODO list | 285 / 429 = 66.4% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
+| Whole TODO list | 289 / 433 = 66.7% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
 | Fully autonomous recovery/product ambition | approximately 60% | Routine scans and saved-file processing work. Severe filesystem damage/carving, automatic ambiguous-format continuation, continuous downstream scheduling and two-station custody/resource control are major remaining work. |
 
 These estimates do **not** mean 85% of customer files are recovered or that 90% of damaged disks are solvable. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
 
-## This batch
+## Damaged-filesystem starter checkpoint
+
+- Native generation 3 can consider a standard 720 KB/1.44 MB layout when boot metadata is unavailable, but requires matching readable FATs/root metadata and a size-consistent live root file. Contradictory surviving BPB fields are refused. Reports explicitly label the layout as an uncertified hypothesis, not reconstructed boot bytes or exhaustive proof against custom layouts.
+- Skipped files retain logical byte-offset/source-LBA holes, clipped final-sector lengths and unmapped tails. No partial payload, guessed source LBA or complete-file hash is invented.
+- Preserve prior native generations/operator files; warnings remain available on verified reuse in human CLI output and JSON. Existing partial/failed-extraction routing uses the new engine without additional scan policies.
+- Saved 005/007/009/012 preserve 34 identical file hashes/paths/extents after boot loss simulated **in memory only**. 017 is conservatively refused in that simulation because its populated root has no end marker; its readable original BPB continues recovering 15 complete files.
+- A copied historical 009 is now analyzed rather than failing at its missing BPB: 954 bad sectors, nine live-JPEG holes totaling 4,608 bytes, 30 deleted slots. No complete payload is claimed from that image. This is a diagnostic capability improvement, not an increase in proven recovered-file yield.
+- 219 regular automated tests passed, plus the explicitly run saved-pilot regression; eight other environment-dependent checks were not run. Formatting/all-target checking are clean and the release executable was rebuilt.
+
+Details and validation paths: [DAMAGED_FILESYSTEM_RECOVERY.md](DAMAGED_FILESYSTEM_RECOVERY.md). The engineering estimates above stay unchanged for this smaller foundational slice; continuous downstream processing is the next batch.
+
+## Previous offline preparation batch
 
 - Conservative IBM 1.44 MB/720 KB format discovery from immutable whole-disk flux, with saved candidate hashes/sector maps/decision reports. Explicit fixed formats/maps remain available. Ambiguity saves evidence and stops custody rather than guessing.
 - Persist selected format and automatic/fixed mode through recovery restart. Correctly distinguish per-profile decode attempt numbers, use the selected profile for comparisons/default re-decodes, and record actual format in telemetry.
@@ -24,7 +35,7 @@ These estimates do **not** mean 85% of customer files are recovered or that 90% 
 
 ## Real saved-evidence checks
 
-Verification: 209 automated tests passed (8 environment-dependent tests remain ignored), `cargo fmt`/all-target checking are clean, and the release executable was rebuilt. Final suites were rerun after the transient harness failure noted below.
+Prior preparation batch verification: 209 automated tests passed (8 environment-dependent tests were ignored), `cargo fmt`/all-target checking were clean, and the release executable was rebuilt. Final suites were rerun after the transient harness failure noted below. Current verification counts are in the damaged-filesystem checkpoint above.
 
 | Check | Result |
 | --- | --- |

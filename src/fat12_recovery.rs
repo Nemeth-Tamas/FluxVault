@@ -32,6 +32,8 @@ pub struct RecoveryReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct RecoveryResult {
     pub native_engine_version: u32,
+    pub layout_method: String,
+    pub layout_warning: Option<String>,
     pub disk: u32,
     pub attempt: u32,
     pub output_directory: PathBuf,
@@ -169,10 +171,13 @@ pub fn recover_attempt(
     }
     progress("Native FAT12: checking directories, FAT copies and intact file chains...");
     let analysis = fat12::analyze(&snapshot, &attempt.bad_sectors)?;
+    if let Some(warning) = &analysis.layout_evidence.warning {
+        progress(&format!("Native FAT12 layout WARNING: {warning}"));
+    }
     let report = RecoveryReport { schema_version:1, native_engine_version:fat12::RECOVERY_ENGINE_VERSION, method:"native_fat12_readable_chains".into(),
         source_image:image.file_name().unwrap_or_default().to_string_lossy().to_string(), source_sha256:source_sha256.clone(),
         disk, attempt:attempt.attempt_number, analysis,
-        warning:"Recovered bytes came only from acquisition-reported readable sectors. Long names require intact sequence/checksum/UTF-16/padding; invalid names use safe recorded short aliases. Missing directory regions and deleted/orphaned files are not reconstructed. Single-capture sector confidence is not upgraded. Complete file bytes do not certify complete disk/customer recovery.".into() };
+        warning:"Recovered bytes came only from acquisition-reported readable sectors. See layout_evidence: missing boot metadata may use an explicitly warned standard-layout hypothesis, never fabricated boot bytes or certified original geometry. Long names require intact sequence/checksum/UTF-16/padding; invalid names use safe recorded short aliases. Missing directory regions and deleted/orphaned files are not reconstructed. Single-capture sector confidence is not upgraded. Complete file bytes do not certify complete disk/customer recovery.".into() };
     let staging = extracted.join(format!(
         ".tmp-native-{disk:03}-{}-{}",
         std::process::id(),
@@ -218,6 +223,8 @@ fn result(
 ) -> RecoveryResult {
     RecoveryResult {
         native_engine_version: report.native_engine_version,
+        layout_method: report.analysis.layout_evidence.method.clone(),
+        layout_warning: report.analysis.layout_evidence.warning.clone(),
         disk: report.disk,
         attempt: report.attempt,
         output_directory,
@@ -511,7 +518,7 @@ mod tests {
     }
     #[test]
     fn partial_native_extraction_flows_through_batch_manifest_conversion_and_audit() {
-        let (project, _, bytes) = fixture(&[34]);
+        let (project, _, bytes) = fixture(&[0, 34]);
         let request = batch_extraction::BatchExtractionRequest {
             seven_zip_executable: project.root().join("must-not-be-invoked.exe"),
             images_directory: project.images_dir(),
@@ -580,7 +587,7 @@ mod tests {
         assert!(
             recovered
                 .output_directory
-                .ends_with("attempt_001_native_v2")
+                .ends_with("attempt_001_native_v3")
         );
         fs::remove_dir_all(project.root()).unwrap();
     }
@@ -628,7 +635,7 @@ mod tests {
         assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
         let upgraded = recover(&project, &attempt).unwrap();
         assert!(!upgraded.reused);
-        assert_eq!(upgraded.native_engine_version, 2);
+        assert_eq!(upgraded.native_engine_version, 3);
         assert_ne!(upgraded.output_directory, old);
         assert_eq!(fs::read(&old_report).unwrap(), old_bytes);
         assert_eq!(
@@ -729,17 +736,88 @@ mod tests {
         let mut archive = zip::ZipArchive::new(fs::File::open(package.zip_path).unwrap()).unwrap();
         assert!(
             archive
-                .by_name("Extracted/001/attempt_001_native_v2/Árvíztűrő.txt")
+                .by_name("Extracted/001/attempt_001_native_v3/Árvíztűrő.txt")
                 .is_ok()
         );
-        assert!(archive.by_name("Extracted/001/attempt_001_native_v2/System Volume Information/IndexerVolumeGuid").is_err());
+        assert!(archive.by_name("Extracted/001/attempt_001_native_v3/System Volume Information/IndexerVolumeGuid").is_err());
         assert!(
             archive
-                .by_name("Recovery/001/attempt_001_fat12_v2.json")
+                .by_name("Recovery/001/attempt_001_fat12_v3.json")
                 .is_ok()
         );
         drop(archive);
         fs::remove_dir_all(destination).unwrap();
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn missing_boot_recovery_is_managed_reusable_and_keeps_image_hash_and_attention() {
+        let (project, attempt, bytes) = fixture(&[0, 34]);
+        let recovered = recover(&project, &attempt).unwrap();
+        assert_eq!(recovered.files, 1);
+        assert_eq!(recovered.skipped_entries, 1);
+        assert_eq!(recovered.native_engine_version, 3);
+        let report: RecoveryReport =
+            serde_json::from_slice(&fs::read(&recovered.report_path).unwrap()).unwrap();
+        assert_eq!(
+            report.analysis.layout_evidence.method,
+            "inferred_standard_layout"
+        );
+        assert!(
+            !report.analysis.recovered_files[0]
+                .metadata_lbas
+                .contains(&0)
+        );
+        assert!(recover(&project, &attempt).unwrap().reused);
+        assert!(
+            extraction::verify_managed_extraction(&recovered.output_directory, &attempt.sha256)
+                .is_ok()
+        );
+        let audit = audit::run_audit(&project, &|_| {}).unwrap();
+        assert_eq!(audit.verified_disks, 0);
+        assert_eq!(audit.attention_disks, 1);
+        assert_eq!(
+            fs::read(project.images_dir().join(&attempt.image_file)).unwrap(),
+            bytes
+        );
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn version_two_generation_and_report_survive_layout_engine_upgrade() {
+        let (project, attempt, _) = fixture(&[34]);
+        let initial = recover(&project, &attempt).unwrap();
+        let old = project.extracted_dir().join("001/attempt_001_native_v2");
+        fs::rename(&initial.output_directory, &old).unwrap();
+        let mut report: serde_json::Value =
+            serde_json::from_slice(&fs::read(&initial.report_path).unwrap()).unwrap();
+        report["native_engine_version"] = serde_json::json!(2);
+        report["analysis"]
+            .as_object_mut()
+            .unwrap()
+            .remove("layout_evidence");
+        report["analysis"]
+            .as_object_mut()
+            .unwrap()
+            .remove("unrecovered_files");
+        let old_bytes = serde_json::to_vec_pretty(&report).unwrap();
+        fs::write(old.join(extraction::FAT12_REPORT_NAME), &old_bytes).unwrap();
+        extraction::write_native_managed_metadata(
+            &old,
+            &project.images_dir().join(&attempt.image_file),
+            &attempt.sha256,
+            hash(&old_bytes),
+        )
+        .unwrap();
+        let old_report = project.recovery_dir().join("001/attempt_001_fat12_v2.json");
+        fs::rename(&initial.report_path, &old_report).unwrap();
+        fs::write(&old_report, &old_bytes).unwrap();
+        let upgraded = recover(&project, &attempt).unwrap();
+        assert!(upgraded.output_directory.ends_with("attempt_001_native_v3"));
+        assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
+        assert_eq!(fs::read(old_report).unwrap(), old_bytes);
+        assert!(old.join("GOOD.TXT").is_file());
+        assert!(recover(&project, &attempt).unwrap().reused);
         fs::remove_dir_all(project.root()).unwrap();
     }
 }

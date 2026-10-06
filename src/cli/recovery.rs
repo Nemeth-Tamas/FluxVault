@@ -89,7 +89,7 @@ pub(super) fn run_advanced(
                     json!({"recovery":result,"manifest":inventory.path,"physical_media_access":false}).to_string()
                 } else {
                     format!(
-                        "Disk {disk_number:03}: {} complete files recovered{}; {} entries skipped; {} validated long names; {} short-name fallbacks.\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
+                        "Disk {disk_number:03}: {} complete files recovered{}; {} entries skipped; {} validated long names; {} short-name fallbacks.\nLayout: {}{}\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
                         result.files,
                         if result.reused {
                             " (verified result reused)"
@@ -99,6 +99,11 @@ pub(super) fn run_advanced(
                         result.skipped_entries,
                         result.validated_long_names,
                         result.name_fallbacks,
+                        result.layout_method,
+                        result
+                            .layout_warning
+                            .as_ref()
+                            .map_or(String::new(), |warning| format!("\nWARNING: {warning}")),
                         result.output_directory.display(),
                         result.report_path.display()
                     )

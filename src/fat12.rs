@@ -6,10 +6,37 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[path = "fat12_layout.rs"]
+mod layout_recovery;
+
 const SECTOR: usize = 512;
 const MAX_ENTRIES: usize = 16_384;
 pub const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
-pub const RECOVERY_ENGINE_VERSION: u32 = 2;
+pub const RECOVERY_ENGINE_VERSION: u32 = 3;
+
+/// An inferred standard layout is a bounded hypothesis, not recovered boot bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutEvidence {
+    pub method: String,
+    pub standard_profile: Option<String>,
+    pub boot_error: Option<String>,
+    pub source_lbas: Vec<u64>,
+    pub anchor_directory_offsets: Vec<usize>,
+    pub warning: Option<String>,
+}
+
+impl Default for LayoutEvidence {
+    fn default() -> Self {
+        Self {
+            method: "readable_boot_sector".into(),
+            standard_profile: None,
+            boot_error: None,
+            source_lbas: vec![0],
+            anchor_directory_offsets: Vec::new(),
+            warning: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layout {
@@ -58,13 +85,35 @@ pub struct Issue {
     pub reason: String,
 }
 
+/// Missing acquisition bytes, expressed in logical file order (not disk order).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileGap {
+    pub file_offset: usize,
+    pub bytes: usize,
+    pub source_lbas: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnrecoveredFile {
+    /// Allocation/name evidence only: sha256 is empty and no payload is exported.
+    pub record: FileRecord,
+    pub reason: String,
+    pub unreadable_ranges: Vec<FileGap>,
+    /// Allocation metadata could not locate this tail; no source LBA is invented.
+    pub unmapped_tail_bytes: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
     pub layout: Layout,
+    #[serde(default)]
+    pub layout_evidence: LayoutEvidence,
     pub bad_lbas: Vec<u64>,
     pub directory_gaps: Vec<u64>,
     pub recovered_files: Vec<FileRecord>,
     pub skipped: Vec<Issue>,
+    #[serde(default)]
+    pub unrecovered_files: Vec<UnrecoveredFile>,
     pub deleted_entries_not_recovered: usize,
     pub long_name_entries_not_used: usize,
     #[serde(default)]
@@ -87,7 +136,7 @@ impl Layout {
             );
         }
         if bad.contains(&0) {
-            return Err("Boot sector is unreadable; layout will not be guessed".into());
+            return Err("Boot sector is unreadable; BPB unavailable".into());
         }
         if word(image, 11) != 512 || image[510..512] != [0x55, 0xaa] || dword(image, 28) != 0 {
             return Err("Unsupported/invalid FAT12 boot sector (512-byte sectors, no partition offset required)".into());
@@ -246,13 +295,15 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
     if bad.len() != bad_lbas.len() || bad.iter().any(|lba| *lba >= (image.len() / SECTOR) as u64) {
         return Err("Invalid, duplicate or out-of-range bad-sector evidence".into());
     }
-    let layout = Layout::parse(image, &bad)?;
+    let (layout, layout_evidence) = layout_recovery::resolve(image, &bad)?;
     let mut result = Analysis {
         layout: layout.clone(),
+        layout_evidence: layout_evidence.clone(),
         bad_lbas: bad.into_iter().collect(),
         directory_gaps: Vec::new(),
         recovered_files: Vec::new(),
         skipped: Vec::new(),
+        unrecovered_files: Vec::new(),
         deleted_entries_not_recovered: 0,
         long_name_entries_not_used: 0,
         validated_long_names: Vec::new(),
@@ -267,7 +318,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             .map(|i| layout.root_start * SECTOR + i * 32)
             .collect(),
         ancestors: Vec::new(),
-        metadata: BTreeSet::from([0]),
+        metadata: layout_evidence.source_lbas.into_iter().collect(),
         depth: 0,
         namespace_keys: Vec::new(),
     }]);
@@ -498,6 +549,12 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             }
         });
         if let Some(reason) = reason {
+            result.unrecovered_files.push(UnrecoveredFile {
+                record: r.clone(),
+                reason: reason.clone(),
+                unreadable_ranges: file_gaps(&r.data_lbas, r.bytes, &bad),
+                unmapped_tail_bytes: r.bytes.saturating_sub(r.data_lbas.len() * SECTOR),
+            });
             result.skipped.push(Issue {
                 path: r.path.clone(),
                 reason,
@@ -509,7 +566,34 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
         }
     }
     result.recovered_files.sort_by(|a, b| a.path.cmp(&b.path));
+    result
+        .unrecovered_files
+        .sort_by(|a, b| a.record.path.cmp(&b.record.path));
     Ok(result)
+}
+
+fn file_gaps(lbas: &[u64], bytes: usize, bad: &BTreeSet<u64>) -> Vec<FileGap> {
+    let mut ranges: Vec<FileGap> = Vec::new();
+    for (i, lba) in lbas.iter().enumerate() {
+        let file_offset = i * SECTOR;
+        if file_offset >= bytes || !bad.contains(lba) {
+            continue;
+        }
+        let length = SECTOR.min(bytes - file_offset);
+        if let Some(previous) = ranges.last_mut()
+            && previous.file_offset + previous.bytes == file_offset
+        {
+            previous.bytes += length;
+            previous.source_lbas.push(*lba);
+        } else {
+            ranges.push(FileGap {
+                file_offset,
+                bytes: length,
+                source_lbas: vec![*lba],
+            });
+        }
+    }
+    ranges
 }
 
 pub(crate) fn file_bytes(image: &[u8], record: &FileRecord) -> Vec<u8> {
@@ -921,6 +1005,44 @@ pub(crate) mod tests {
         let missing_directory = analyze(&img, &[19]).unwrap();
         assert!(missing_directory.recovered_files.is_empty());
         assert_eq!(missing_directory.directory_gaps, vec![19]);
+    }
+
+    #[test]
+    fn skipped_file_ranges_follow_fragmented_file_order_and_clip_the_last_sector() {
+        let mut img = image();
+        entry(&mut img, 19 * SECTOR, b"DAMAGED TXT", 2, 1700, false);
+        for copy in 0..2 {
+            set_fat(&mut img, copy, 2, 5);
+            set_fat(&mut img, copy, 5, 3);
+            set_fat(&mut img, copy, 3, 7);
+            set_fat(&mut img, copy, 7, 0xfff);
+        }
+        let found = analyze(&img, &[33, 36, 38]).unwrap();
+        assert!(found.recovered_files.is_empty());
+        let file = &found.unrecovered_files[0];
+        assert!(file.record.sha256.is_empty());
+        assert_eq!(file.unmapped_tail_bytes, 0);
+        assert_eq!(file.unreadable_ranges.len(), 2);
+        assert_eq!(file.unreadable_ranges[0].file_offset, 0);
+        assert_eq!(file.unreadable_ranges[0].bytes, 1024);
+        assert_eq!(file.unreadable_ranges[0].source_lbas, vec![33, 36]);
+        assert_eq!(file.unreadable_ranges[1].file_offset, 1536);
+        assert_eq!(file.unreadable_ranges[1].bytes, 164);
+        assert_eq!(file.unreadable_ranges[1].source_lbas, vec![38]);
+    }
+
+    #[test]
+    fn incomplete_chain_records_unmapped_tail_without_inventing_source_sectors() {
+        let mut img = image();
+        file(&mut img, 19 * SECTOR, b"SHORT   TXT", 2, b"known prefix");
+        img[19 * SECTOR + 28..19 * SECTOR + 32].copy_from_slice(&1500u32.to_le_bytes());
+        let found = analyze(&img, &[]).unwrap();
+        assert!(found.recovered_files.is_empty());
+        let file = &found.unrecovered_files[0];
+        assert_eq!(file.record.data_lbas, vec![33]);
+        assert_eq!(file.unmapped_tail_bytes, 988);
+        assert!(file.unreadable_ranges.is_empty());
+        assert!(file.reason.contains("File size"));
     }
     #[test]
     fn deleted_long_name_and_device_names_never_become_unsafe_paths() {
