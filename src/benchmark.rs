@@ -160,6 +160,7 @@ pub struct BenchmarkReport {
     pub reported_physical_reads: u64,
     pub recovery_errors: usize,
     pub downstream_errors: usize,
+    pub downstream_attention: usize,
     pub recovery_seconds: f64,
     pub failed_recovery_seconds: f64,
     pub operator_wait_seconds: f64,
@@ -223,6 +224,7 @@ pub fn report(project: &ProjectState) -> Result<BenchmarkReport, String> {
         reported_physical_reads: 0,
         recovery_errors: 0,
         downstream_errors: 0,
+        downstream_attention: 0,
         recovery_seconds: 0.0,
         failed_recovery_seconds: 0.0,
         operator_wait_seconds: 0.0,
@@ -350,8 +352,10 @@ pub fn report(project: &ProjectState) -> Result<BenchmarkReport, String> {
                 }
                 "downstream_finished" => {
                     result.downstream_seconds += number(data, "elapsed_ms")? as f64 / 1000.0;
-                    if number(data, "exit_code")? != 0 {
-                        result.downstream_errors += 1;
+                    match number(data, "exit_code")? {
+                        0 => {}
+                        3 => result.downstream_attention += 1,
+                        _ => result.downstream_errors += 1,
                     }
                     result
                         .downstream_runs
@@ -548,7 +552,8 @@ mod tests {
         assert_eq!(measured.operator_wait_seconds, 3.0);
         assert_eq!(measured.downstream_seconds, 7.0);
         assert_eq!(measured.finished_session_seconds, 51.0);
-        assert_eq!(measured.downstream_errors, 1);
+        assert_eq!(measured.downstream_errors, 0);
+        assert_eq!(measured.downstream_attention, 1);
         assert_eq!(measured.status_counts["acquired"], 1);
         assert_eq!(measured.status_counts["partial"], 1);
         assert_eq!(measured.disks[1]["timing"]["recovery_ms"], 30000);
@@ -586,6 +591,25 @@ mod tests {
         assert_eq!(measured.unique_committed_disks, 0);
         assert_eq!(measured.projected_136_feed_hours, None);
         assert_eq!(measured.warnings.len(), 1);
+    }
+
+    #[test]
+    fn downstream_operation_failure_is_not_hidden_as_partial_attention() {
+        let fixture = Fixture::new();
+        let mut session = Session::start(&fixture.0, json!({})).unwrap();
+        for code in [0, 3, 2] {
+            session
+                .record(
+                    "downstream_finished",
+                    json!({"elapsed_ms":1000,"exit_code":code}),
+                )
+                .unwrap();
+        }
+        drop(session);
+        let measured = report(&fixture.0).unwrap();
+        assert_eq!(measured.downstream_errors, 1);
+        assert_eq!(measured.downstream_attention, 1);
+        assert_eq!(measured.downstream_seconds, 3.0);
     }
 
     #[test]

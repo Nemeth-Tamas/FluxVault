@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -138,8 +138,75 @@ pub(crate) fn save_snapshot(
     };
     let bytes = serde_json::to_vec_pretty(&snapshot)
         .map_err(|error| format!("Cannot serialize conversion state: {error}"))?;
-    fs::write(&path, bytes)
+    // Keep every completed state immutable before replacing the mutable cursor.
+    // A rejected reuse must not erase the only earlier source/output hash binding.
+    let history = reports_directory.join("ConversionHistory");
+    fs::create_dir_all(&history).map_err(|e| e.to_string())?;
+    if history.canonicalize().map_err(|e| e.to_string())?.parent()
+        != Some(
+            reports_directory
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .as_path(),
+        )
+    {
+        return Err("Conversion history escapes Reports".to_owned());
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let record = history.join(format!(
+        "ConversionState-{nonce}-{}.json",
+        std::process::id()
+    ));
+    if path.exists() {
+        if !fs::symlink_metadata(&path)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_file()
+        {
+            return Err("Unsafe conversion state path".to_owned());
+        }
+        let prior = fs::read(&path).map_err(|e| e.to_string())?;
+        let mut prior_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(history.join(format!(
+                "PreviousConversionState-{nonce}-{}.json",
+                std::process::id()
+            )))
+            .map_err(|e| e.to_string())?;
+        prior_file
+            .write_all(&prior)
+            .and_then(|_| prior_file.sync_all())
+            .map_err(|e| e.to_string())?;
+    }
+    let mut history_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(record)
+        .map_err(|e| e.to_string())?;
+    history_file
+        .write_all(&bytes)
+        .and_then(|_| history_file.sync_all())
+        .map_err(|e| e.to_string())?;
+    let temporary = path.with_file_name(format!(
+        ".fluxvault-conversion-state-{}-{nonce}-{}.partial.json",
+        std::process::id(),
+        TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| format!("Cannot reserve conversion state: {error}"))?;
+    file.write_all(&bytes)
+        .and_then(|_| file.sync_all())
         .map_err(|error| format!("Cannot save conversion state {}: {error}", path.display()))?;
+    drop(file);
+    fs::rename(&temporary, &path)
+        .map_err(|error| format!("Cannot commit conversion state: {error}"))?;
     Ok(path)
 }
 
@@ -232,17 +299,20 @@ pub(crate) fn run_conversion(
         );
     }
 
+    let _reservation = crate::conversion_lock::reserve(&request.planning.reports_directory)?;
     send_stage("Delivery eredetik és friss conversion plan készítése...");
-    let planning = conversion::build_conversion_plan(&request.planning, send_stage)?;
-    let selected_sources = request
-        .selected_sources
-        .as_ref()
-        .map(|sources| sources.iter().collect::<HashSet<_>>());
+    let planning = conversion::build_conversion_plan_reserved(&request.planning, send_stage)?;
+    let selected_sources = request.selected_sources.as_ref().map(|sources| {
+        sources
+            .iter()
+            .map(|path| path_identity(path))
+            .collect::<HashSet<_>>()
+    });
     if let Some(selected) = &selected_sources {
         let matched = planning
             .jobs
             .iter()
-            .filter(|job| selected.contains(&job.source_path))
+            .filter(|job| selected.contains(&path_identity(&job.source_path)))
             .count();
         if matched != selected.len() {
             return Err("Egy kiválasztott fájl már nincs a friss konverziós tervben; futtassa újra a teljes sort.".to_owned());
@@ -253,12 +323,17 @@ pub(crate) fn run_conversion(
         .reports_directory
         .parent()
         .ok_or("Conversion reports directory has no project parent")?;
-    let saved_result = if request.previous_result.is_none() {
-        load_snapshot(&request.planning.reports_directory, project_root).ok()
+    let saved_result = if request.previous_result.is_none()
+        && snapshot_path(&request.planning.reports_directory).exists()
+    {
+        Some(load_snapshot(
+            &request.planning.reports_directory,
+            project_root,
+        )?)
     } else {
         None
     };
-    let previous_rows: HashMap<&PathBuf, &JobResult> = request
+    let previous_rows: HashMap<PathBuf, &JobResult> = request
         .previous_result
         .as_deref()
         .or(saved_result.as_ref())
@@ -266,23 +341,40 @@ pub(crate) fn run_conversion(
             previous
                 .rows
                 .iter()
-                .map(|row| (&row.job.source_path, row))
+                .map(|row| (path_identity(&row.job.source_path), row))
                 .collect()
         })
         .unwrap_or_default();
     if let Some(selected) = &selected_sources
         && planning.jobs.iter().any(|job| {
-            selected.contains(&job.source_path)
-                && previous_rows.get(&job.source_path).is_none_or(|previous| {
-                    previous.job.source_sha256 != job.source_sha256
-                        || previous.job.modern_path != job.modern_path
-                        || previous.job.pdf_path != job.pdf_path
-                })
+            selected.contains(&path_identity(&job.source_path))
+                && previous_rows
+                    .get(&path_identity(&job.source_path))
+                    .is_none_or(|previous| {
+                        previous.job.source_sha256 != job.source_sha256
+                            || !same_path(&previous.job.modern_path, &job.modern_path)
+                            || !same_path(&previous.job.pdf_path, &job.pdf_path)
+                    })
         })
     {
         return Err("A kiválasztott fájl forrása vagy delivery útvonala megváltozott; a korábbi konverziós eredmény nem használható biztonságos újrapróbáláshoz.".to_owned());
     }
     let total = planning.jobs.len();
+    let estimates = planning
+        .jobs
+        .iter()
+        .map(|job| {
+            previous_rows
+                .get(&path_identity(&job.source_path))
+                .filter(|row| row.job.source_sha256 == job.source_sha256 && row.status() == "OK")
+                .map(|row| row.duration_seconds)
+                .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+                .unwrap_or_else(|| {
+                    1.0 + fs::metadata(&job.source_path).map_or(0, |m| m.len()) as f64 / 104_857.6
+                })
+        })
+        .collect::<Vec<_>>();
+    let order = balanced_job_order(&estimates);
     send_stage(&format!(
         "Régi Office fájlok átalakítása: {total} fájl, legfeljebb {} párhuzamos munkaszál...",
         request.workers
@@ -290,16 +382,20 @@ pub(crate) fn run_conversion(
     let rows = run_bounded(
         &planning.jobs,
         request.workers,
+        &order,
         |job| {
             let started = Instant::now();
             let selected = selected_sources
                 .as_ref()
-                .is_none_or(|sources| sources.contains(&job.source_path));
-            let previous = previous_rows.get(&job.source_path).copied().filter(|row| {
-                row.job.source_sha256 == job.source_sha256
-                    && row.job.modern_path == job.modern_path
-                    && row.job.pdf_path == job.pdf_path
-            });
+                .is_none_or(|sources| sources.contains(&path_identity(&job.source_path)));
+            let previous = previous_rows
+                .get(&path_identity(&job.source_path))
+                .copied()
+                .filter(|row| {
+                    row.job.source_sha256 == job.source_sha256
+                        && same_path(&row.job.modern_path, &job.modern_path)
+                        && same_path(&row.job.pdf_path, &job.pdf_path)
+                });
             let (modern, pdf) = if selected {
                 (
                     retry_transient_failure(|| {
@@ -400,6 +496,18 @@ pub(crate) fn run_conversion(
     Ok(result)
 }
 
+fn path_identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_owned())
+}
+
+fn same_path(first: &Path, second: &Path) -> bool {
+    first == second
+        || match (first.canonicalize(), second.canonicalize()) {
+            (Ok(first), Ok(second)) => first == second,
+            _ => false,
+        }
+}
+
 fn inspect_without_conversion(
     previous: Option<&OutputResult>,
     target: &Path,
@@ -464,12 +572,50 @@ fn retry_transient_failure(mut attempt: impl FnMut() -> OutputResult) -> OutputR
 }
 
 // Results arrive in completion order, but reports must retain the plan's stable order.
+/// Interleave one expensive job with three inexpensive jobs; idle workers claim from
+/// the shared queue, keeping long jobs running without hiding all small jobs behind them.
+fn balanced_job_order(estimates: &[f64]) -> Vec<usize> {
+    let mut ranked: Vec<_> = (0..estimates.len()).collect();
+    ranked.sort_by(|a, b| {
+        estimates[*b]
+            .total_cmp(&estimates[*a])
+            .then_with(|| a.cmp(b))
+    });
+    let mut order = Vec::with_capacity(ranked.len());
+    let (mut front, mut end) = (0, ranked.len());
+    while front < end {
+        order.push(ranked[front]);
+        front += 1;
+        for _ in 0..3 {
+            if front == end {
+                break;
+            }
+            end -= 1;
+            order.push(ranked[end]);
+        }
+    }
+    order
+}
+
 fn run_bounded<T: Sync, R: Send>(
     items: &[T],
     workers: usize,
+    order: &[usize],
     work: impl Fn(&T) -> R + Sync,
     on_complete: impl Fn(usize),
 ) -> Result<Vec<R>, String> {
+    if !(1..=16).contains(&workers) {
+        return Err("Conversion workers must be from 1 to 16".to_owned());
+    }
+    let mut seen = vec![false; items.len()];
+    if order.len() != items.len()
+        || order.iter().any(|index| {
+            seen.get_mut(*index)
+                .is_none_or(|claimed| std::mem::replace(claimed, true))
+        })
+    {
+        return Err("Conversion schedule must claim every job exactly once".to_owned());
+    }
     let mut results: Vec<Option<R>> = std::iter::repeat_with(|| None).take(items.len()).collect();
     if items.is_empty() {
         return Ok(Vec::new());
@@ -483,8 +629,9 @@ fn run_bounded<T: Sync, R: Send>(
             let work = &work;
             scope.spawn(move || {
                 loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(item) = items.get(index) else { break };
+                    let slot = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(&index) = order.get(slot) else { break };
+                    let item = &items[index];
                     if sender.send((index, work(item))).is_err() {
                         break;
                     }
@@ -961,6 +1108,93 @@ mod tests {
     }
 
     #[test]
+    fn equivalent_project_paths_reuse_bound_outputs_and_preserve_prior_snapshots_without_a_tool() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-bound-path-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("Extracted/001")).unwrap();
+        fs::write(
+            root.join("Extracted/001/sample.rtf"),
+            b"{\\rtf1 bound test}",
+        )
+        .unwrap();
+        let planning_request = ConversionPlanningRequest {
+            extracted_root: root.join("Extracted"),
+            converted_root: root.join("Converted"),
+            reports_directory: root.join("Reports"),
+        };
+        let planning = conversion::build_conversion_plan(&planning_request, &|_| {}).unwrap();
+        let job = planning.jobs[0].clone();
+        let mut zip = zip::ZipWriter::new(File::create(&job.modern_path).unwrap());
+        for name in ["[Content_Types].xml", "word/document.xml"] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"<test/>").unwrap();
+        }
+        zip.finish().unwrap();
+        fs::write(&job.pdf_path, b"%PDF-1.7\ntest\n%%EOF\n").unwrap();
+        let bound = |path: &Path| OutputResult {
+            state: OutputState::Ok,
+            detail: "Synthetic hash-bound fixture".to_owned(),
+            retryable: false,
+            retry_count: 0,
+            output_sha256: Some(conversion::sha256_file(path).unwrap()),
+        };
+        let previous = ConversionResult {
+            rows: vec![JobResult {
+                job: job.clone(),
+                modern: bound(&job.modern_path),
+                pdf: bound(&job.pdf_path),
+                duration_seconds: 1.0,
+            }],
+            planning,
+            ok: 1,
+            partial: 0,
+            failed: 0,
+            timed_out: 0,
+            reused_outputs: 0,
+            retried_outputs: 0,
+            issues: Vec::new(),
+            summary_path: root.join("Reports/ConversionSummary.csv"),
+            failures_path: root.join("Reports/ConversionFailures.txt"),
+        };
+        let state = save_snapshot(&planning_request.reports_directory, &root, &previous).unwrap();
+        let initial_state = fs::read(&state).unwrap();
+        let request = ConversionRequest {
+            planning: ConversionPlanningRequest {
+                extracted_root: planning_request.extracted_root.canonicalize().unwrap(),
+                converted_root: planning_request.converted_root.canonicalize().unwrap(),
+                reports_directory: planning_request.reports_directory.canonicalize().unwrap(),
+            },
+            libreoffice_executable: std::env::current_exe().unwrap(),
+            command_audit_path: root.join("audit.jsonl"),
+            timeout_seconds: 45,
+            workers: 12,
+            selected_sources: None,
+            previous_result: None,
+        };
+        let reused = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(reused.ok, 1);
+        assert_eq!(reused.reused_outputs, 2);
+        assert!(!request.command_audit_path.exists());
+        assert!(
+            fs::read_dir(root.join("Reports/ConversionHistory"))
+                .unwrap()
+                .any(|entry| fs::read(entry.unwrap().path()).unwrap() == initial_state)
+        );
+        fs::write(&state, b"broken state").unwrap();
+        assert!(
+            run_conversion(&request, &|_| {}, &|_, _| {})
+                .unwrap_err()
+                .contains("Invalid saved conversion state")
+        );
+        assert_eq!(fs::read(&state).unwrap(), b"broken state");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn unsafe_timeout_and_permanent_failure_are_not_retried() {
         for first in [
             OutputResult {
@@ -1159,6 +1393,7 @@ mod tests {
         let results = run_bounded(
             &jobs,
             4,
+            &(0..jobs.len()).collect::<Vec<_>>(),
             |job| {
                 let running = active.fetch_add(1, Ordering::SeqCst) + 1;
                 peak.fetch_max(running, Ordering::SeqCst);
@@ -1183,6 +1418,76 @@ mod tests {
             libreoffice_output_path(Path::new("out"), Path::new("Dr. Anka.doc"), "docx").unwrap(),
             PathBuf::from("out").join("Dr. Anka.docx")
         );
+    }
+
+    #[test]
+    fn balanced_schedule_interleaves_slow_and_small_jobs_and_claims_each_once() {
+        let estimates = [1000.0, 900.0, 800.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let order = balanced_job_order(&estimates);
+        assert_eq!(&order[..5], &[0, 3, 4, 5, 1]);
+        let jobs: Vec<_> = (0..estimates.len()).collect();
+        let calls: Vec<_> = jobs.iter().map(|_| AtomicUsize::new(0)).collect();
+        let results = run_bounded(
+            &jobs,
+            12,
+            &order,
+            |job| {
+                assert_eq!(calls[*job].fetch_add(1, Ordering::SeqCst), 0);
+                *job
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(results, jobs);
+        assert!(calls.iter().all(|calls| calls.load(Ordering::SeqCst) == 1));
+        assert!(balanced_job_order(&[]).is_empty());
+        for invalid in [vec![0; jobs.len()], vec![0], vec![usize::MAX; jobs.len()]] {
+            assert!(
+                run_bounded(
+                    &jobs,
+                    12,
+                    &invalid,
+                    |_| panic!("invalid schedule ran"),
+                    |_| {}
+                )
+                .is_err()
+            );
+        }
+        for workers in [0, 17] {
+            assert!(
+                run_bounded(
+                    &jobs,
+                    workers,
+                    &order,
+                    |_| panic!("invalid workers ran"),
+                    |_| {}
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn balanced_queue_keeps_short_jobs_flowing_while_a_long_job_is_running() {
+        use std::sync::{Arc, Barrier};
+        let gate = Arc::new(Barrier::new(2));
+        let order = balanced_job_order(&[1000.0, 1.0, 2.0, 3.0, 4.0]);
+        let jobs = [0, 1, 2, 3, 4];
+        let results = run_bounded(
+            &jobs,
+            2,
+            &order,
+            |job| {
+                if *job == 0 || *job == 4 {
+                    // Long job cannot complete until the other worker finishes three small jobs.
+                    gate.wait();
+                }
+                *job
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(results, jobs);
     }
 
     #[test]
@@ -1255,6 +1560,29 @@ mod tests {
         let second = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
         assert_eq!(second.ok, 4);
         assert_eq!(second.reused_outputs, 8);
+        let mut canonical_request = request.clone();
+        canonical_request.planning.extracted_root =
+            request.planning.extracted_root.canonicalize().unwrap();
+        canonical_request.planning.converted_root =
+            request.planning.converted_root.canonicalize().unwrap();
+        canonical_request.planning.reports_directory =
+            request.planning.reports_directory.canonicalize().unwrap();
+        let canonical = run_conversion(&canonical_request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(canonical.ok, 4);
+        assert_eq!(canonical.reused_outputs, 8);
+        assert_eq!(
+            fs::read_to_string(&request.command_audit_path)
+                .unwrap()
+                .lines()
+                .count(),
+            8
+        );
+        assert!(
+            fs::read_dir(request.planning.reports_directory.join("ConversionHistory"))
+                .unwrap()
+                .count()
+                >= 3
+        );
 
         let selected_job = second.planning.jobs[0].clone();
         let unselected_job = second.planning.jobs[1].clone();

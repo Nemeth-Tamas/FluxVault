@@ -8,9 +8,11 @@ mod media_reservation;
 mod office;
 mod recovery;
 mod scan;
+mod terminal;
 
 use std::{
     env,
+    io::IsTerminal,
     path::{Path, PathBuf},
 };
 
@@ -44,6 +46,8 @@ Usage:
   fluxvault status [--project PATH] Show project status
   fluxvault benchmark report [--project PATH]
                                     Export recorded pilot timings and recovery outcomes offline
+  fluxvault storage benchmark N [--project PATH]
+                                    Measure verified lossless capture compression; no evidence changed
   fluxvault project show [--project PATH]
                                     Show saved project metadata
   fluxvault disk list [--project PATH]
@@ -56,7 +60,8 @@ Usage:
   fluxvault drive probe --drive A:  Read-only 512-byte media and protection probe
   fluxvault acquire --drive A: --disk N [--retries N] --write-blocker-verified
                                     Read-only image; requires independently verified hardware
-  fluxvault scan [--last-disk N]     Guided Greaseweazle scan; reuses saved project settings
+  fluxvault scan [--last-disk N] [--no-verify] [--conversion-workers N]
+                                    Guided Greaseweazle scan; reuses saved project settings
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
                                     Guided read-only multi-disk loop; type READ for each disk
   fluxvault tools check [--project PATH]
@@ -135,9 +140,9 @@ Options:
   --write-blocker-verified          Operator asserts separate hardware protection test
   --source DIR                      External recovered-files folder for DMDE import
   --dmde-log FILE                   Matching DMDE log for recovery import
-  --conversion-workers N            Parallel Office files during process (1-16; default 4)
+  --conversion-workers N            Parallel Office jobs (1-16; default 4); scan saves this setting
   --details                        Include bad-sector LBAs and evidence paths in disk show
-  --gw-drive A|B                   Greaseweazle drive (default A, not a Windows drive letter)
+  --gw-drive A|B                   GW selector (capture/recover default A; scan saved/B; not Windows A:)
   --profile NAME                   IBM 1.44 MB or 720 KB flux profile
   --profile-map FILE               Known per-disk formats for mixed-format GW scans
   --revs N                         Raw-flux revolutions per track (1-10; default 3)
@@ -145,6 +150,8 @@ Options:
   --source-write-protected         Confirm the source floppy's physical tab is protected
   --policy FILE                    JSON recovery policy for greaseweazle recover/scan
   --acquisition-only               Skip downstream processing after recovery
+  --no-verify                      GW scan: Enter confirms displayed disk; skips label typing ONLY
+  --color auto|always|never         GW scan cues (default auto; respects NO_COLOR)
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
 
 #[derive(Debug)]
@@ -205,12 +212,22 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut recovery_policy: Option<PathBuf> = None;
     let mut profile_map_path: Option<PathBuf> = None;
     let mut acquisition_only = false;
+    let mut no_verify = false;
+    let mut color_mode = None;
     let mut positional = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" => json_output = true,
             "--details" => details = true,
+            "--no-verify" => no_verify = true,
+            "--color" => {
+                index += 1;
+                color_mode = Some(terminal::ColorMode::parse(
+                    args.get(index)
+                        .ok_or("--color requires auto, always, or never")?,
+                )?);
+            }
             "--gw-drive" => {
                 index += 1;
                 let value = args.get(index).ok_or("--gw-drive requires A or B")?;
@@ -359,17 +376,6 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         index += 1;
     }
 
-    if conversion_workers.is_some()
-        && positional.first().map(String::as_str) != Some("process")
-        && positional.first().map(String::as_str) != Some("finalize")
-        && !(positional.len() >= 2
-            && positional[0] == "conversion"
-            && matches!(positional[1].as_str(), "run" | "retry"))
-    {
-        return Err(
-            "--conversion-workers is only valid with process or conversion run/retry".to_owned(),
-        );
-    }
     if details && !(positional.len() == 3 && positional[0] == "disk" && positional[1] == "show") {
         return Err("--details is only valid with disk show N".to_owned());
     }
@@ -389,6 +395,19 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "recover";
     let gw_scan =
         positional.len() == 2 && positional[0] == "greaseweazle" && positional[1] == "scan";
+    if (no_verify || color_mode.is_some()) && !gw_scan {
+        return Err("--no-verify and --color are only valid with Greaseweazle scan".to_owned());
+    }
+    if conversion_workers.is_some()
+        && !gw_scan
+        && positional.first().map(String::as_str) != Some("process")
+        && positional.first().map(String::as_str) != Some("finalize")
+        && !(positional.len() >= 2
+            && positional[0] == "conversion"
+            && matches!(positional[1].as_str(), "run" | "retry"))
+    {
+        return Err("--conversion-workers is only valid with scan, process, finalize or conversion run/retry".to_owned());
+    }
     if profile_map_path.is_some() && !gw_scan {
         return Err("--profile-map is only valid with greaseweazle scan".to_owned());
     }
@@ -445,6 +464,25 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut needs_attention = false;
     let output = match positional.first().map(String::as_str) {
         Some("help") if positional.len() == 1 => Ok(HELP.to_owned()),
+        Some("storage")
+            if positional.len() == 3 && positional[1] == "benchmark" && destination.is_none() =>
+        {
+            let disk = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or("storage benchmark requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let result =
+                crate::flux_storage::benchmark(&project, disk, |stage| eprintln!("{stage}"))?;
+            if json_output {
+                Ok(serde_json::to_string(&result).map_err(|e| e.to_string())?)
+            } else {
+                Ok(format!("Lossless capture benchmark: disk {disk:03}, attempt {:03} (largest verified capture; not a whole-project estimate).\n{}\nSource unchanged. No files compressed in place; no physical media access.", result.capture_attempt,
+                    result.measurements.iter().map(|m| format!("ZIP/Deflate {}: {:.2} MiB -> {:.2} MiB ({:.1}% saved); {:.2}s compression, {:.2}s roundtrip verification; SHA-256 MATCH", m.level, m.source_bytes as f64 / 1048576.0, m.compressed_bytes as f64 / 1048576.0, m.saved_percent, m.compression_seconds, m.verification_seconds)).collect::<Vec<_>>().join("\n")))
+            }
+        }
         Some("benchmark")
             if positional.len() == 2 && positional[1] == "report" && destination.is_none() =>
         {
@@ -460,10 +498,12 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 )
             } else {
                 Ok(format!(
-                    "Pilot benchmark: {} unique disk(s), {} timed physical job(s), {} recovery error(s).\nFinished sessions: {}; incomplete/active sessions: {}.\nSummary: {}\nPer-disk CSV: {}\nFeed-only 136-disk projection: {} (observed sample, not a production guarantee).",
+                    "Pilot benchmark: {} unique disk(s), {} timed physical job(s), {} recovery error(s).\nDownstream: {} operation error(s), {} partial/attention run(s).\nFinished sessions: {}; incomplete/active sessions: {}.\nSummary: {}\nPer-disk CSV: {}\nFeed-only 136-disk projection: {} (observed sample, not a production guarantee).",
                     result.unique_committed_disks,
                     result.timed_physical_jobs,
                     result.recovery_errors,
+                    result.downstream_errors,
+                    result.downstream_attention,
                     result.finished_sessions,
                     result.incomplete_sessions,
                     summary.display(),
@@ -594,6 +634,17 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                         last_disk: last_disk.or_else(|| saved.as_ref().and_then(|s| s.last_disk)),
                         acquisition_only,
                         json_output,
+                        no_verify,
+                        color: color_mode.unwrap_or_default().enabled(
+                            std::io::stderr().is_terminal(),
+                            env::var_os("NO_COLOR").is_some(),
+                            env::var("TERM").is_ok_and(|term| term == "dumb"),
+                        ),
+                        conversion_workers: conversion_workers.unwrap_or_else(|| {
+                            saved
+                                .as_ref()
+                                .map_or(DEFAULT_CONVERSION_WORKERS, |s| s.conversion_workers)
+                        }),
                     },
                 );
             }
@@ -1947,6 +1998,42 @@ mod tests {
                     "2".to_owned()
                 ],
                 Path::new("."),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn scan_only_custody_and_color_options_cannot_silently_modify_other_commands() {
+        for command in ["process", "acquire", "status", "help"] {
+            for flag in ["--no-verify", "--color"] {
+                let mut args = vec![command.to_owned(), flag.to_owned()];
+                if flag == "--color" {
+                    args.push("always".to_owned());
+                }
+                assert!(
+                    run(&args, Path::new("."))
+                        .unwrap_err()
+                        .contains("only valid with Greaseweazle scan")
+                );
+            }
+        }
+        assert!(
+            run(
+                &["scan".to_owned(), "--color".to_owned(), "oops".to_owned()],
+                Path::new(".")
+            )
+            .is_err()
+        );
+        assert!(
+            run(
+                &[
+                    "scan".to_owned(),
+                    "--drive".to_owned(),
+                    "A:".to_owned(),
+                    "--no-verify".to_owned()
+                ],
+                Path::new(".")
             )
             .is_err()
         );

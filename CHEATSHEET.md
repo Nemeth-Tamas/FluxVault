@@ -9,6 +9,14 @@
 
 **Everyday short command:** the installer now provides `fv` as well as `fluxvault`. `fv scan` runs the Greaseweazle loop using saved project settings; enter just the displayed number (`004`), or `QUIT`. See [Policies without homework](POLICIES.md) for optional expert controls. Explicit `scan --drive A:` remains the guarded USB workflow.
 
+**Even less typing (opt-in):** `fv scan --no-verify` lets you press **Enter after each swap** instead of typing the number. Check the label yourself: the warning means label typing is skipped, not that hashes or read-only protections are disabled. `QUIT` still stops; add the flag each time you want this mode.
+
+**At a glance:** cyan **WAITING FOR YOU / INSERT**, green **DONE / REMOVE / INSERT**, amber **PARTIAL SAVED**, red **FAILED**. Every cue also has a large plain-text banner. After the last disk, **BATCH FINISHED** means remove it; the saved next number is not an insertion request. `--color never` disables colors.
+
+**Conversion workers:** `fv scan --conversion-workers 12` saves twelve workers for that project's scan tail. Default is four; 1–16 are supported. Idle workers take the next queued file; more workers can use more RAM and may not be faster. For saved files alone: `fv process --conversion-workers 12`.
+
+**Capture size experiment:** `fv storage benchmark 7` measures lossless compression on a saved capture of disk 007 and verifies exact decompression. It does not change any captures.
+
 ## 1. Get to a working prompt
 
 The current built executable is in the repository. To use it from any folder as `fluxvault`, run this once from PowerShell:

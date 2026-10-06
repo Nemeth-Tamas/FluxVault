@@ -1,4 +1,4 @@
-//! Guided Greaseweazle custody loop. Only an explicit numbered confirmation can read media.
+//! Guided Greaseweazle custody loop. Each disk requires a numbered or opt-in Enter confirmation.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,7 +18,11 @@ use crate::{
     project::ProjectState,
 };
 
-use super::{CliResponse, flux, media_reservation::GreaseweazleReservation};
+use super::{
+    CliResponse, flux,
+    media_reservation::GreaseweazleReservation,
+    terminal::{self, Cue},
+};
 
 const JOURNAL: &str = ".fluxvault-gw-scan.json";
 const LOCK: &str = ".fluxvault-gw-scan.lock";
@@ -33,6 +37,9 @@ pub(super) struct ScanOptions {
     pub last_disk: Option<u32>,
     pub acquisition_only: bool,
     pub json_output: bool,
+    pub no_verify: bool,
+    pub color: bool,
+    pub conversion_workers: usize,
 }
 
 impl ScanOptions {
@@ -43,6 +50,7 @@ impl ScanOptions {
     }
 
     fn validate(&self) -> Result<(), String> {
+        validate_workers(self.conversion_workers)?;
         if !self.protected {
             return Err(
                 "Scan requires --source-write-protected; check the physical tab on every disk"
@@ -60,6 +68,17 @@ impl ScanOptions {
         validate_profiles(&self.profile_map)?;
         self.policy.validate()
     }
+}
+
+fn default_conversion_workers() -> usize {
+    crate::conversion_run::DEFAULT_CONVERSION_WORKERS
+}
+
+fn validate_workers(workers: usize) -> Result<(), String> {
+    if !(1..=16).contains(&workers) {
+        return Err("Scan conversion workers must be from 1 to 16".to_owned());
+    }
+    Ok(())
 }
 
 fn validate_profiles(profiles: &BTreeMap<u32, String>) -> Result<(), String> {
@@ -169,6 +188,8 @@ struct Journal {
     policy: RecoveryPolicy,
     #[serde(default)]
     last_disk: Option<u32>,
+    #[serde(default = "default_conversion_workers")]
+    conversion_workers: usize,
     pending: Option<Pending>,
     completed: Vec<RecoveryResult>,
 }
@@ -179,6 +200,7 @@ pub(super) struct SavedDefaults {
     pub drive: char,
     pub policy: RecoveryPolicy,
     pub last_disk: Option<u32>,
+    pub conversion_workers: usize,
 }
 
 pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefaults>, String> {
@@ -194,12 +216,14 @@ pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefau
     }
     validate_profiles(&journal.profile_map)?;
     journal.policy.validate()?;
+    validate_workers(journal.conversion_workers)?;
     Ok(Some(SavedDefaults {
         profile: GreaseweazleProfile::parse(&journal.profile)?,
         profile_map: journal.profile_map,
         drive: journal.drive,
         policy: journal.policy,
         last_disk: journal.last_disk,
+        conversion_workers: journal.conversion_workers,
     }))
 }
 
@@ -246,7 +270,7 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
                 .map_err(|e| format!("Invalid recovery result: {e}"))
         },
         flux_recovery::verify_completed_result,
-        flux::process_saved,
+        |project| flux::process_saved_with_workers(project, options.conversion_workers),
     )
 }
 
@@ -309,11 +333,13 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
             drive: options.drive,
             policy: options.policy.clone(),
             last_disk: options.last_disk,
+            conversion_workers: options.conversion_workers,
             pending: None,
             completed: Vec::new(),
         }
     };
     validate_profiles(&journal.profile_map)?;
+    validate_workers(journal.conversion_workers)?;
     let ids = journal
         .completed
         .iter()
@@ -345,6 +371,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
     journal.drive = options.drive;
     journal.policy = options.policy.clone();
     journal.last_disk = options.last_disk;
+    journal.conversion_workers = options.conversion_workers;
     Ok(journal)
 }
 
@@ -378,7 +405,8 @@ where
         "profile_map":options.profile_map,
         "drive":options.drive,"policy":options.policy,"count":options.count,
         "acquisition_only":options.acquisition_only,"start_disk":project.current_disk_number(),
-        "last_disk":options.last_disk}),
+        "last_disk":options.last_disk,"conversion_workers":options.conversion_workers,
+        "identity_confirmation":if options.no_verify {"enter_only"} else {"numbered"}}),
     )?;
     let mut results = Vec::new();
     let mut resumed_advances = 0usize;
@@ -427,9 +455,39 @@ where
             if waiting.as_ref().is_none_or(|(number, _)| *number != disk) {
                 waiting = Some((disk, Instant::now()));
             }
-            writeln!(output,
-                "GW {}: insert floppy {disk:03}, check its write-protect hole is OPEN. Type {disk:03} to confirm and read it, or QUIT: [format {}]", options.drive, profile.argument()
-            ).map_err(|e| e.to_string())?;
+            if options.no_verify {
+                terminal::banner(
+                    output,
+                    options.color,
+                    Cue::Attention,
+                    "WARNING: --no-verify / LABEL CONFIRMATION SKIPPED",
+                    "Enter assigns the displayed number. Check the label and OPEN protection hole.\nRead-only access and all image/hash/provenance verification remain ON.",
+                )?;
+            }
+            terminal::banner(
+                output,
+                options.color,
+                Cue::Action,
+                &format!("GW {} / WAITING FOR YOU / INSERT {disk:03}", options.drive),
+                &format!(
+                    "Check disk label {disk:03} and OPEN write-protect hole. Format: {}",
+                    profile.argument()
+                ),
+            )?;
+            if options.no_verify {
+                writeln!(
+                    output,
+                    "Press Enter after inserting {disk:03}, or type QUIT:"
+                )
+                .map_err(|e| e.to_string())?;
+            } else {
+                writeln!(
+                    output,
+                    "Type {disk:03} to confirm and read it, or QUIT: [format {}]",
+                    profile.argument()
+                )
+                .map_err(|e| e.to_string())?;
+            }
             output.flush().map_err(|e| e.to_string())?;
             let mut answer = String::new();
             if input.read_line(&mut answer).map_err(|e| e.to_string())? == 0 {
@@ -446,10 +504,10 @@ where
                 [verb, number] if verb.eq_ignore_ascii_case("READ") => number.parse::<u32>().ok(),
                 _ => None,
             };
-            if number != Some(disk) {
+            if number != Some(disk) && !(options.no_verify && words.is_empty()) {
                 writeln!(
                     output,
-                    "No read started. Type the displayed disk number {disk:03}, or QUIT."
+                    "No read started. Confirm the displayed disk number {disk:03}, or QUIT."
                 )
                 .map_err(|e| e.to_string())?;
                 continue;
@@ -467,7 +525,15 @@ where
             telemetry.record(
                 "read_confirmed",
                 json!({"disk":disk,"profile":profile.argument(),
+                "identity_confirmation":if options.no_verify && words.is_empty() {"enter_only"} else {"numbered"},
                 "operator_wait_ms":benchmark::milliseconds(waiting.take().unwrap().1.elapsed())}),
+            )?;
+            terminal::banner(
+                output,
+                options.color,
+                Cue::Action,
+                &format!("READING {disk:03} / DO NOT REMOVE"),
+                "READ ONLY. Swap only after the saved-result cue.",
             )?;
             let started = Instant::now();
             match recover_disk(project, disk) {
@@ -480,6 +546,13 @@ where
                         "recovery_failed",
                         json!({"disk":disk,"phase":"acquisition",
                         "elapsed_ms":benchmark::milliseconds(started.elapsed()),"error":error}),
+                    )?;
+                    terminal::banner(
+                        output,
+                        options.color,
+                        Cue::Error,
+                        &format!("READ FAILED {disk:03} / NUMBER NOT ADVANCED"),
+                        "Evidence retained. No automatic next-disk read; inspect the error before retrying.",
                     )?;
                     return Err(error);
                 }
@@ -499,6 +572,13 @@ where
                 "recovery_failed",
                 json!({"disk":disk,"phase":"verification",
                 "elapsed_ms":benchmark::milliseconds(verification.elapsed()),"error":error}),
+            )?;
+            terminal::banner(
+                output,
+                options.color,
+                Cue::Error,
+                &format!("VERIFICATION FAILED {disk:03} / NUMBER NOT ADVANCED"),
+                "Saved evidence did not pass integrity checks. No next-disk read started.",
             )?;
             return Err(error);
         }
@@ -530,10 +610,41 @@ where
             json!({"disk":disk,"profile":profile.argument(),"next_disk":next,
             "numbering_resumed":numbering_resumed,"outcome":benchmark::outcome(&result)}),
         )?;
-        writeln!(output,
-            "GW SWAP: disk {disk:03} saved ({}; {} missing, {} conflicting). Remove it. Next disk: {next:03}.",
-            result.status, result.missing_lbas.len(), result.conflicting_lbas.len()
-        ).map_err(|e| e.to_string())?;
+        let capped = options.last_disk.is_some_and(|last| disk >= last)
+            || options
+                .count
+                .is_some_and(|limit| results.len() + 1 >= limit);
+        let action = if capped {
+            format!("REMOVE {disk:03} / BATCH FINISHED / NO NEXT INSERTION")
+        } else {
+            format!("REMOVE {disk:03} / INSERT {next:03}")
+        };
+        terminal::banner(
+            output,
+            options.color,
+            if result.status == "acquired" {
+                Cue::Success
+            } else {
+                Cue::Attention
+            },
+            &format!(
+                "GW SWAP / {} {disk:03} / {action}",
+                if result.status == "acquired" {
+                    "DONE"
+                } else {
+                    "PARTIAL SAVED"
+                }
+            ),
+            &format!(
+                "{}; {} missing, {} conflicting. {}. Image and evidence verification passed.",
+                result.status,
+                result.missing_lbas.len(),
+                result.conflicting_lbas.len(),
+                recovery_elapsed_ms
+                    .map(|ms| format!("Read/decode: {:.1}s", ms as f64 / 1000.0))
+                    .unwrap_or_else(|| "Resumed saved evidence".to_owned())
+            ),
+        )?;
         results.push(result);
     }
     let mut attention =
@@ -541,8 +652,16 @@ where
     let processing = if options.acquisition_only || journal.completed.is_empty() {
         json!({"skipped":true})
     } else {
-        writeln!(output, "Physical work finished. Remove the floppy; processing saved files, conversions, audit and workbook...")
-            .map_err(|e| e.to_string())?;
+        terminal::banner(
+            output,
+            options.color,
+            Cue::Action,
+            "FEEDING FINISHED / REMOVE THE FLOPPY",
+            &format!(
+                "Processing saved files only: extraction, conversion ({} workers), audit and workbook. No more insertions requested.",
+                options.conversion_workers
+            ),
+        )?;
         telemetry.record("downstream_started", json!({}))?;
         let started = Instant::now();
         match process(project) {
@@ -569,6 +688,26 @@ where
         }
     };
     let partial = results.iter().filter(|r| r.status != "acquired").count();
+    terminal::banner(
+        output,
+        options.color,
+        if attention {
+            Cue::Attention
+        } else {
+            Cue::Success
+        },
+        if attention {
+            "SCAN FINISHED / PARTIAL OR ATTENTION RESULTS"
+        } else {
+            "SCAN FINISHED / CLEAN RESULTS"
+        },
+        &format!(
+            "This session: {} saved, {partial} partial. Project: {} saved. See Reports for results.\nNo floppy insertion requested; resume cursor is {:03}.",
+            results.len(),
+            journal.completed.len(),
+            project.current_disk_number()
+        ),
+    )?;
     telemetry.finish(results.len(), project.current_disk_number())?;
     let measured = benchmark::report(project)?;
     let (benchmark_json, benchmark_csv) = benchmark::export(project, &measured)?;
@@ -578,6 +717,8 @@ where
                 "next_disk":project.current_disk_number(),"total_scanned":journal.completed.len(),
                 "resumed_advances":resumed_advances,"pending_disk":journal.pending.as_ref().map(|p| p.disk),
                 "disks":results,"processing":processing,
+                "identity_confirmation":if options.no_verify {"enter_only"} else {"numbered"},
+                "conversion_workers":options.conversion_workers,
                 "benchmark":{"events":telemetry.path(),"summary":benchmark_json,"disks_csv":benchmark_csv,
                     "unique_disks":measured.unique_committed_disks,"projected_136_feed_hours":measured.projected_136_feed_hours},
                 "source_media_access":"read_only","customer_delivery_certified":false})
@@ -597,10 +738,10 @@ where
                 )
             };
             format!(
-                "Greaseweazle scan stopped: {} disk(s) saved, {partial} partial this session. Next: {:03}. Total: {}.\nDownstream: {downstream}\nPilot benchmark: {}\nPer-disk CSV: {}",
+                "Greaseweazle feeding finished: {} disk(s) saved this session ({partial} partial). Project total: {}.\nResume cursor: {:03} (not an insertion request).\nDownstream: {downstream}\nPilot benchmark: {}\nPer-disk CSV: {}",
                 results.len(),
-                project.current_disk_number(),
                 journal.completed.len(),
+                project.current_disk_number(),
                 benchmark_json.display(),
                 benchmark_csv.display()
             )
@@ -646,6 +787,154 @@ mod tests {
             last_disk: None,
             acquisition_only: true,
             json_output: true,
+            no_verify: false,
+            color: false,
+            conversion_workers: default_conversion_workers(),
+        }
+    }
+
+    #[test]
+    fn enter_only_is_explicit_audited_not_persisted_and_still_verifies_every_result() {
+        let fixture = Fixture::new();
+        let mut project = fixture.project();
+        let mut opts = options();
+        opts.no_verify = true;
+        opts.color = true;
+        opts.last_disk = Some(2);
+        opts.conversion_workers = 12;
+        let mut reads = Vec::new();
+        let mut verified = Vec::new();
+        let mut output = Vec::new();
+        let response = run_with_io(
+            &mut project,
+            &opts,
+            Cursor::new(b"999\n\n\r\n\n"),
+            &mut output,
+            |p, disk| {
+                reads.push(disk);
+                Ok(result(p, disk, disk == 2))
+            },
+            |_, result| {
+                verified.push(result.disk);
+                Ok(())
+            },
+            skipped,
+        )
+        .unwrap();
+        assert_eq!(reads, [1, 2]);
+        assert_eq!(verified, [1, 2]);
+        assert_eq!(project.current_disk_number(), 3);
+        let summary: serde_json::Value = serde_json::from_str(&response.output).unwrap();
+        assert_eq!(summary["identity_confirmation"], "enter_only");
+        assert_eq!(summary["conversion_workers"], 12);
+        assert!(!response.output.contains('\x1b'));
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("WARNING: --no-verify"));
+        assert!(output.contains("WAITING FOR YOU / INSERT 001"));
+        assert!(output.contains("PARTIAL SAVED 002"));
+        assert!(output.contains("REMOVE 002 / BATCH FINISHED / NO NEXT INSERTION"));
+        assert!(!output.contains("INSERT 003"));
+        assert!(output.contains('\x1b'));
+        let saved = saved_defaults(&project).unwrap().unwrap();
+        assert_eq!(saved.conversion_workers, 12);
+        let journal = fs::read_to_string(fixture.0.join(JOURNAL)).unwrap();
+        assert!(!journal.contains("no_verify"));
+        let measured = benchmark::report(&project).unwrap();
+        assert_eq!(
+            measured.session_configurations[0]["data"]["configuration"]["identity_confirmation"],
+            "enter_only"
+        );
+        assert_eq!(
+            measured.session_configurations[0]["data"]["configuration"]["conversion_workers"],
+            12
+        );
+    }
+
+    #[test]
+    fn eof_never_confirms_and_default_mode_rejects_blank_input() {
+        let fixture = Fixture::new();
+        let mut project = fixture.project();
+        for enter_only in [false, true] {
+            let mut opts = options();
+            opts.no_verify = enter_only;
+            run_with_io(
+                &mut project,
+                &opts,
+                Cursor::new(b""),
+                &mut Vec::new(),
+                no_read,
+                |_, _| panic!("nothing to verify"),
+                skipped,
+            )
+            .unwrap();
+        }
+        run_with_io(
+            &mut project,
+            &options(),
+            Cursor::new(b"\n \r\nQUIT\n"),
+            &mut Vec::new(),
+            no_read,
+            |_, _| panic!("blank input is not custody by default"),
+            skipped,
+        )
+        .unwrap();
+        assert_eq!(project.current_disk_number(), 1);
+        assert!(!fixture.0.join(JOURNAL).exists());
+    }
+
+    #[test]
+    fn enter_only_never_bypasses_evidence_verification_or_advances_a_failed_result() {
+        let fixture = Fixture::new();
+        let mut project = fixture.project();
+        let mut opts = options();
+        opts.no_verify = true;
+        let error = run_with_io(
+            &mut project,
+            &opts,
+            Cursor::new(b"\n\n"),
+            &mut Vec::new(),
+            |p, disk| Ok(result(p, disk, false)),
+            |_, _| Err("Changed image hash".to_owned()),
+            skipped,
+        )
+        .unwrap_err();
+        assert!(error.contains("Changed image hash"));
+        assert_eq!(project.current_disk_number(), 1);
+        assert!(
+            load(&fixture.0.join(JOURNAL), &opts)
+                .unwrap()
+                .pending
+                .is_some()
+        );
+        assert!(
+            load(&fixture.0.join(JOURNAL), &opts)
+                .unwrap()
+                .completed
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn legacy_scan_settings_default_workers_and_invalid_saved_workers_are_refused() {
+        let fixture = Fixture::new();
+        let project = fixture.project();
+        let path = fixture.0.join(JOURNAL);
+        let journal = load(&path, &options()).unwrap();
+        let mut value = serde_json::to_value(journal).unwrap();
+        value.as_object_mut().unwrap().remove("conversion_workers");
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            saved_defaults(&project)
+                .unwrap()
+                .unwrap()
+                .conversion_workers,
+            4
+        );
+        for workers in [0, 17] {
+            value["conversion_workers"] = json!(workers);
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(saved_defaults(&project).is_err());
+            assert!(load(&path, &options()).is_err());
         }
     }
     fn result(project: &ProjectState, disk: u32, partial: bool) -> RecoveryResult {

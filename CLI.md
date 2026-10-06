@@ -4,7 +4,24 @@
 
 The installer provides both `fluxvault.exe` and the identical short alias `fv.exe`. `fv init`, `fv status`, and `fv scan` work from the project folder. Plain `scan` uses Greaseweazle; explicit `scan --drive A:` (or USB protection/retry flags) retains the existing guarded USB workflow.
 
-GW scans reuse saved project-journal defaults for omitted profile, profile map, selector, policy and end target; explicit expert arguments override them, subject to pending-job consistency checks. Fresh projects currently default to selector B, ibm.1440, the normal built-in policy and no endpoint. Per-disk numbered input asserts label/protection checks, so a separate `--source-write-protected` flag is unnecessary for this guided loop; individual capture/recover still require it. `004` or `4` confirms disk 004; `QUIT`/`Q` stops. Empty/wrong-number input does not read. Legacy `READ 004` remains accepted. See [POLICIES.md](POLICIES.md).
+GW scans reuse saved project-journal defaults for omitted profile, profile map, selector, policy, end target and conversion worker count; explicit expert arguments override them, subject to pending-job consistency checks. Fresh projects currently default to selector B, ibm.1440, the normal built-in policy, four conversion workers and no endpoint. Per-disk numbered input asserts label/protection checks, so a separate `--source-write-protected` flag is unnecessary for this guided loop; individual capture/recover still require it. `004` or `4` confirms disk 004; `QUIT`/`Q` stops. Empty/wrong-number input does not read by default. Legacy `READ 004` remains accepted. See [POLICIES.md](POLICIES.md).
+
+```powershell
+fv scan --conversion-workers 12
+fv scan --no-verify
+fv scan --color never
+fv storage benchmark 7
+```
+
+`--no-verify` is an explicit **label-typing shortcut**, not a verification bypass: at every swap, check the displayed number against the physical label and the open write-protect hole, then press Enter. A prominent warning appears at every prompt; hashes, saved evidence, read-only access and restart guards remain enabled. Wrong typed numbers still refuse the read, EOF is never a confirmation, and `QUIT` still stops. The shortcut is **not saved**; supply it on every invocation where wanted. It applies only to Greaseweazle scanning, not USB or offline processing.
+
+Large ASCII banners distinguish **WAITING FOR YOU**, **READING / DO NOT REMOVE**, **DONE / REMOVE / INSERT**, **PARTIAL SAVED** and final processing/results. The endpoint says **BATCH FINISHED**, not insert the next cursor. Automatic color decorates stderr only when it is a terminal, unless `NO_COLOR` is set or `TERM=dumb`; `--color always`/`never` override detection. JSON/stdout remains undecorated even with forced stderr color.
+
+`scan --conversion-workers N` accepts 1–16, persists the choice at the next custody commit and uses it for the saved-file tail; plain `scan` then inherits it. Conversion uses isolated LibreOffice profiles and a shared balanced queue, not fixed per-worker batches. Initial scheduling interleaves estimated long jobs with short jobs using matching prior successful durations or file size; reports remain in stable plan order. A project lock prevents concurrent conversion/planning writes. Four remains the conservative default; more workers are not guaranteed to be faster.
+
+Saved conversion state is atomically replaced, with immutable current/prior snapshots retained in `Reports/ConversionHistory` for audit. Equivalent DOS/canonical Windows paths no longer invalidate source/output hash bindings. Changed outputs, changed sources and malformed snapshots are still refused; history is internal, not customer delivery content.
+
+`storage benchmark N` uses saved evidence only: it selects the largest complete hash-verified SCP capture for that disk, measures lossless ZIP/Deflate levels 1 and 6 and verifies byte-identical decompression. Samples are capped at 128 MiB; compressed data is discarded from memory after measuring. It does **not** pack, delete or alter captures. Saved 007 measured 77.16% smaller at level 6; measure other captures before extrapolating. Customer ZIP packages now use actual lossless Deflate compression; automatic compression of working raw captures is separate planned work.
 
 The runner treats explicit `Command Failed:`/`ERROR:`/`Fatal Error:` output as operation failure even if the host exits zero. In particular, `No Index` preserves failed metadata and gives reseating guidance rather than a misleading missing-SCP error. A resumed empty first capture (no raw artifact or completed raw record/decode) may restart its elapsed acquisition budget after explicit custody confirmation; old budget starts and failed attempt files are retained. Any full/partial raw evidence blocks that reset. Completed disks/cursor are preserved.
 

@@ -121,6 +121,15 @@ pub(crate) fn build_conversion_plan(
     request: &ConversionPlanningRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ConversionPlanningResult, String> {
+    let _reservation = crate::conversion_lock::reserve(&request.reports_directory)?;
+    build_conversion_plan_reserved(request, send_stage)
+}
+
+/// Caller owns the project conversion lock for the entire conversion run.
+pub(crate) fn build_conversion_plan_reserved(
+    request: &ConversionPlanningRequest,
+    send_stage: &impl Fn(&str),
+) -> Result<ConversionPlanningResult, String> {
     if !request.extracted_root.is_dir() {
         return Err(format!(
             "Az Extracted mappa nem található: {}",

@@ -26,12 +26,21 @@ pub(super) struct RecoveryOptions {
 }
 
 pub(super) fn process_saved(project: &ProjectState) -> Result<CliResponse, String> {
+    process_saved_with_workers(project, crate::conversion_run::DEFAULT_CONVERSION_WORKERS)
+}
+
+pub(super) fn process_saved_with_workers(
+    project: &ProjectState,
+    workers: usize,
+) -> Result<CliResponse, String> {
     super::run(
         &[
             "process".to_owned(),
             "--project".to_owned(),
             project.root().display().to_string(),
             "--json".to_owned(),
+            "--conversion-workers".to_owned(),
+            workers.to_string(),
         ],
         project.root(),
     )

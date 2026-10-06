@@ -343,7 +343,9 @@ fn write_and_verify(
     stage: &impl Fn(&str),
 ) -> Result<(usize, u64), String> {
     let mut zip = ZipWriter::new(output);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .compression_level(Some(6));
     let mut rows = Vec::with_capacity(files.len());
     for (index, item) in files.iter().enumerate() {
         stage(&format!(
@@ -572,6 +574,12 @@ mod tests {
         fs::create_dir_all(&windows_metadata).unwrap();
         fs::write(windows_metadata.join("IndexerVolumeGuid"), b"OS metadata").unwrap();
         fs::write(project.join("Reports").join("EvidenceAudit.csv"), b"audit").unwrap();
+        fs::create_dir_all(project.join("Reports/ConversionHistory")).unwrap();
+        fs::write(
+            project.join("Reports/ConversionHistory/ConversionState-test.json"),
+            b"internal state",
+        )
+        .unwrap();
         fs::write(
             project
                 .join("Reports")
@@ -611,6 +619,10 @@ mod tests {
         assert_eq!(result.total_bytes, 25);
         assert!(result.sha256_path.is_file());
         let mut zip = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
+        assert_eq!(
+            zip.by_name("Images/001.img").unwrap().compression(),
+            CompressionMethod::Deflated
+        );
         assert!(zip.by_name("Images/001.img").is_ok());
         assert!(zip.by_name("Extracted/001/customer.doc").is_ok());
         assert!(zip.by_name("Reports/EvidenceAudit.csv").is_ok());
@@ -624,6 +636,10 @@ mod tests {
                 .is_err()
         );
         assert!(zip.by_name("Reports/private-working-note.txt").is_err());
+        assert!(
+            zip.by_name("Reports/ConversionHistory/ConversionState-test.json")
+                .is_err()
+        );
         assert!(
             zip.by_name("Extracted/001/System Volume Information/IndexerVolumeGuid")
                 .is_err()

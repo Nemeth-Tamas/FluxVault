@@ -25,6 +25,98 @@ fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
     child.wait_with_output().unwrap()
 }
 
+#[test]
+fn enter_only_scan_is_explicit_colored_json_clean_and_saved_workers_survive_restart() {
+    let root = std::env::temp_dir().join(format!(
+        "fv-enter-scan-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &[
+                "tools",
+                "set",
+                "greaseweazle",
+                env!("CARGO_BIN_EXE_mock_gw")
+            ],
+            false
+        )
+        .status
+        .success()
+    );
+    let first = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &[
+            "scan",
+            "--last-disk",
+            "2",
+            "--no-verify",
+            "--conversion-workers",
+            "12",
+            "--color",
+            "always",
+            "--acquisition-only",
+            "--json",
+        ],
+        false,
+        Some(b"999\n\n\r\n\n"),
+        &[],
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let summary: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(summary["scanned"], 2);
+    assert_eq!(summary["next_disk"], 3);
+    assert_eq!(summary["conversion_workers"], 12);
+    assert_eq!(summary["identity_confirmation"], "enter_only");
+    let output = String::from_utf8_lossy(&first.stderr);
+    assert!(output.contains("WARNING: --no-verify"));
+    assert!(output.contains("DONE 002 / REMOVE 002 / BATCH FINISHED"));
+    assert!(output.contains('\x1b'));
+    assert!(!output.contains("INSERT 003"));
+    assert!(!first.stdout.contains(&0x1b));
+    let second = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &["scan", "--acquisition-only", "--json"],
+        true,
+        Some(b"\n"),
+        &[],
+    );
+    assert_eq!(second.status.code(), Some(0));
+    let summary: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(summary["scanned"], 0);
+    assert_eq!(summary["conversion_workers"], 12);
+    assert_eq!(summary["identity_confirmation"], "numbered");
+    assert!(!second.stderr.contains(&0x1b));
+    assert!(!String::from_utf8_lossy(&second.stderr).contains("WARNING: --no-verify"));
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn invoke_with_mock_gw(cwd: &Path, app_data: &Path, args: &[&str], device_missing: bool) -> Output {
     invoke_mock_with_input(cwd, app_data, args, device_missing, None, &[])
 }
