@@ -8,6 +8,7 @@ pub mod dmde_logs;
 pub mod external_tools;
 pub mod extraction;
 pub mod fat12;
+mod fat12_names;
 pub mod fat12_recovery;
 pub mod floppy;
 pub mod flux_capture;

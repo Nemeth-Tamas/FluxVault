@@ -18,16 +18,22 @@ const INVENTORY_FILE_NAME: &str = ".fluxvault-inventory.json";
 pub(crate) const FAT12_REPORT_NAME: &str = ".fluxvault-fat12.json";
 
 /// Numbered managed attempts outrank legacy output; native is the same attempt's fallback.
-pub(crate) fn managed_directory_order(path: &Path) -> (u32, bool, String) {
+pub(crate) fn managed_directory_order(path: &Path) -> (u32, u32, String) {
     let name = path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let native = name.ends_with("_native");
-    let base = name.strip_suffix("_native").unwrap_or(&name);
-    let number = base
+    let native = if name.ends_with("_native") {
+        1
+    } else {
+        name.rsplit_once("_native_v")
+            .and_then(|(_, v)| v.parse().ok())
+            .unwrap_or(0)
+    };
+    let number = name
         .strip_prefix("attempt_")
+        .and_then(|n| n.split('_').next())
         .and_then(|n| n.parse().ok())
         .unwrap_or(0);
     (number, native, name)
@@ -147,6 +153,17 @@ pub fn inspect_extraction_presence(
     } else {
         format!("attempt_{attempt_number:03}_native")
     });
+    let current_native_directory = disk_directory.join(if attempt_number == 0 {
+        format!("legacy_native_v{}", crate::fat12::RECOVERY_ENGINE_VERSION)
+    } else {
+        format!(
+            "attempt_{attempt_number:03}_native_v{}",
+            crate::fat12::RECOVERY_ENGINE_VERSION
+        )
+    });
+    if current_native_directory.is_dir() {
+        return inspect_candidate_directory(&current_native_directory);
+    }
     if native_directory.is_dir() {
         return inspect_candidate_directory(&native_directory);
     }
@@ -1065,5 +1082,13 @@ fn managed_order_does_not_let_legacy_native_hide_a_later_attempt() {
     assert!(
         managed_directory_order(Path::new("attempt_001_native"))
             > managed_directory_order(Path::new("attempt_001"))
+    );
+    assert!(
+        managed_directory_order(Path::new("attempt_001_native_v2"))
+            > managed_directory_order(Path::new("attempt_001_native"))
+    );
+    assert!(
+        managed_directory_order(Path::new("attempt_002"))
+            > managed_directory_order(Path::new("attempt_001_native_v2"))
     );
 }

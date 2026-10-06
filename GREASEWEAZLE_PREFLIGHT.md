@@ -65,4 +65,18 @@ No floppy was inserted or read for these checks. The existing WinWord 1 derived 
 
 The parser reached an intact directory end marker before the bad root-directory sector (LBA 24); its report therefore has no traversed directory gap. The bad LBA remains explicit in acquisition/native evidence and audit. This recovers the currently reachable files, not proof that no deleted/orphaned files or other data were lost. No filenames/bytes were guessed, no existing extraction was replaced, and no new raw capture was requested.
 
-The 22 files include 21 installer files and one 76-byte Windows `IndexerVolumeGuid` artifact, recovered under its recorded 8.3 path `SYSTEM~1/INDEXE~1`. Validated long-name reconstruction and identifying/excluding OS metadata through those names are still future work; do not interpret 22 as 22 customer-authored files. The fresh comparison project is `C:\Users\User\Desktop\FluxVault-Test\Native-WinWord-Validation-b00fdb628f334dcdad274a15720cc1f7`; earlier development output is preserved separately in the original test project.
+The first-generation 22 files include 21 installer files and one 76-byte Windows `IndexerVolumeGuid` artifact, recovered under its recorded 8.3 path `SYSTEM~1/INDEXE~1`. At that checkpoint, validated long names and identifying OS metadata through those names were still future work. Do not interpret 22 as 22 customer-authored files. The comparison project is `C:\Users\User\Desktop\FluxVault-Test\Native-WinWord-Validation-b00fdb628f334dcdad274a15720cc1f7`; earlier development output is preserved separately in the original test project.
+
+### Native long-name generation 2 — 2026-10-06
+
+The saved image above was reused, with no physical drive access.
+
+| Check | Observed result |
+| --- | --- |
+| Non-overwriting upgrade | Published `legacy_native_v2` and `attempt_000_fat12_v2.json`; first-generation extraction marker/report hashes unchanged |
+| Original names | Two long-name associations validated; `System Volume Information/IndexerVolumeGuid` restored; no name fallbacks |
+| Independent cross-check | All 22 relative paths **and** file SHA-256 values match 7-Zip extraction |
+| Fresh project `process` | 22 forensic files, 21 installer delivery originals; Windows metadata not mirrored |
+| Repeat processing | Verified reuse, 21 delivery-map rows, source SHA-256 unchanged, partial audit/workbook retained for LBA 24 |
+
+Fresh processing project: `C:\Users\User\Desktop\FluxVault-Test\Native-LFN-WinWord-8ed96b6bdaca4de79c4e83906844c5d5`. Earlier delivery mirrors in older test projects were not deleted; safe automatic retirement of obsolete managed mirrors remains planned. Synthetic tests additionally cover Unicode names, malformed VFAT slots, alias/path collisions, fragmented directories, ASCII short-name case flags, inventory/provenance integrity, old-schema reuse and OS metadata exclusion from verified packages.

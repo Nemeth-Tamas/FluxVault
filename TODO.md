@@ -10,7 +10,7 @@
 
 > **Greaseweazle-only priority (2026-10-05):** USB is optional. On the working Mitsumi drive (straight cable, selector B), start fast, decode preserved raw evidence, and escalate only problem areas within time/media-stress limits. Routine drive/ribbon swapping is not part of the workflow. `greaseweazle recover N` now implements a bounded single-disk slice and dispatches saved-image processing; automatic format discovery, damaged-filesystem extraction, the guided GW batch loop, and production scheduling remain open. See `CHAT_TO_CHAT_GREASEWEAZLE.md` for the hardware handoff and `GREASEWEAZLE_PREFLIGHT.md` for live results.
 
-> **Native recovery checkpoint (2026-10-06):** Saved partial FAT12 images now automatically yield independently intact files through native readable-chain extraction. The saved WinWord 1 capture produced 22 files / 1,208,710 bytes, with unchanged source hash and the unreadable sector still flagged. This replaces manual extraction for that bounded case, not full DMDE capability: missing boot/directory reconstruction, long filenames, deleted/orphaned chains, carving, automatic format discovery and production scheduling remain open.
+> **Native recovery checkpoint (2026-10-06):** Saved partial FAT12 images now automatically yield independently intact files through native readable-chain extraction. The saved WinWord 1 capture produced 22 forensic files / 1,208,710 bytes, with unchanged source hash and the unreadable sector still flagged. Native generation 2 validates long names, preserves ASCII short-name case flags, and excludes identified Windows metadata from new delivery plans (21 installer originals). This replaces manual extraction for that bounded case, not full DMDE capability: missing boot/directory reconstruction, deleted/orphaned chains, carving, automatic format discovery and production scheduling remain open.
 
 ## 0. Development contract / project rules
 
@@ -150,6 +150,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Run project-wide batch extraction/recovery routing and emit script-compatible summary/review lists.
 - [x] Automatically try native FAT12 readable-chain extraction for partial images, failed 7-Zip extraction/listing, or zero-file results; retain partial status, immutable backups, and legacy report compatibility.
 - [x] Publish native files into separate `attempt_NNN_native`/`legacy_native` managed folders with source/file/provenance hashes; verify unchanged files and reports before reuse or delivery mirroring, without replacing existing extraction/manual recovery.
+  - [x] Preserve earlier native generations during engine upgrades: publish current output into `attempt_NNN_native_v2`/`legacy_native_v2`, with a separate versioned report; prefer the latest engine generation for the same numbered acquisition and verify reuse.
 - [x] Emit `RecoveryExceptions.txt` alongside legacy `BrokenForDMDE.txt`; unresolved cases are exceptions, not instructions to do manual DMDE as the default workflow.
 - [x] Route these cases to Recovery instead of pretending success:
   - [x] non-clean image / unreadable sectors;
@@ -189,8 +190,11 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
   - [x] Traverse intact root/subdirectory entries and fragmented FAT12 file chains from hash-checked saved images with complete acquisition maps; skip unreadable directory sectors and recover intact reachable files beyond those gaps.
   - [x] Consult every readable FAT copy; refuse disagreement, loops, invalid sizes, cross-linked ownership, unsafe/duplicate paths and unreadable file content rather than guessing or exporting zero-filled files.
   - [x] Record per-file data/metadata LBAs, cluster links, FAT-copy sources, raw short-name bytes and DOS timestamps; bind this report to the managed inventory and retain partial audit status.
-  - [ ] Reconstruct missing boot/directory metadata and validated long filenames from sufficient recorded evidence; the current parser requires a readable BPB and uses safe 8.3 names (escaping non-ASCII OEM bytes).
-  - [ ] Use validated long names to identify/exclude Windows OS metadata from delivery, without guessing that every `SYSTEM~1` alias is `System Volume Information`. The saved WinWord fixture has one such 76-byte artifact among its 22 reachable files.
+  - [x] Recover intact VFAT UTF-16 long names only after sequence, short-alias checksum, slot type/cluster, length, padding, UTF-16 and safe-path validation; otherwise retain the recorded short alias with a reason. Record raw name units/entry offsets and name-sector provenance, including fragmented directories.
+  - [x] Preserve FAT short-name ASCII lowercase flags without guessing OEM encoding; refuse long-name/short-alias and conservative Unicode case collisions in both files and ancestor directories.
+  - [ ] Reconstruct missing boot/directory metadata from sufficient recorded evidence; the current parser still requires a readable BPB and intact reachable entries.
+  - [x] Use validated long names to identify/exclude Windows OS metadata from new delivery plans/packages, while keeping forensic extraction/inventory; never guess that every `SYSTEM~1` alias is `System Volume Information`.
+  - [ ] Automatically quarantine obsolete, hash-proven managed delivery mirrors when recovery naming/source generations improve; preserve changed/operator files and audit each retirement. Old delivery copies are currently left untouched, including earlier short-alias mirrors.
 - [ ] Use both FAT copies, boot-sector/BPB evidence, root-directory entries, cluster chains, file sizes, and cross-attempt sector provenance to reconstruct damaged filesystems without arbitrary byte guessing.
 - [ ] Add automatic deleted/orphaned cluster-chain recovery where FAT12 evidence supports it, clearly labeling confidence and recovery method.
 - [ ] Add signature-based file carving as an automatic fallback for unreconstructable filesystems, preserving raw offsets and labeling filenames/paths as reconstructed.
@@ -382,6 +386,8 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [x] Native FAT12 fixtures cover fragmented chains, directory gaps, FAT-copy fallback/conflicts, FAT entries crossing sector boundaries, loops/cross-links, unsafe paths and 701-bad-sector recovery of an independently intact file.
 - [x] Native service/CLI tests cover hash/map refusal, immutable source/manual preservation, inventory/report tampering, verified reuse and partial files flowing through batch extraction, manifests, delivery mirroring and audit with no hardware.
 - [x] Preserve valid DOS installer underscores and escape-prefix uniqueness; select managed generations numerically so legacy native output cannot hide a later numbered extraction.
+- [x] VFAT name fixtures cover Unicode/surrogate pairs, exact 13-unit boundaries, padding/type/checksum errors, directory gaps/deleted entries, fragmented-directory slots, unsafe names, alias/Unicode collisions and ASCII short-name case flags.
+- [x] Native generation upgrade test preserves first-generation files/reports/schema compatibility; OS metadata remains forensic but is omitted from new delivery mirrors and verified packages.
 - [x] Validate native recovery on the saved WinWord 1 Greaseweazle image: 22 intact files, unchanged image hash, zero new physical reads, repeat reuse and downstream partial audit/workbook.
 - [x] Integration test for 7-Zip adapter.
 - [x] Integration test for LibreOffice adapter when installed.

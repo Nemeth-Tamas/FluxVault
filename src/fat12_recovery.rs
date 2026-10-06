@@ -18,6 +18,8 @@ use std::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryReport {
     pub schema_version: u32,
+    #[serde(default)]
+    pub native_engine_version: u32,
     pub method: String,
     pub source_image: String,
     pub source_sha256: String,
@@ -29,6 +31,7 @@ pub struct RecoveryReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RecoveryResult {
+    pub native_engine_version: u32,
     pub disk: u32,
     pub attempt: u32,
     pub output_directory: PathBuf,
@@ -37,6 +40,8 @@ pub struct RecoveryResult {
     pub files: usize,
     pub bytes: u64,
     pub skipped_entries: usize,
+    pub validated_long_names: usize,
+    pub name_fallbacks: usize,
     pub directory_gaps: Vec<u64>,
     pub reused: bool,
     pub customer_delivery_certified: bool,
@@ -126,13 +131,20 @@ pub fn recover_attempt(
     lock.try_lock()
         .map_err(|_| "Native recovery already running for this disk")?;
     let folder = if attempt.attempt_number == 0 {
-        "legacy_native".to_owned()
+        format!("legacy_native_v{}", fat12::RECOVERY_ENGINE_VERSION)
     } else {
-        format!("attempt_{:03}_native", attempt.attempt_number)
+        format!(
+            "attempt_{:03}_native_v{}",
+            attempt.attempt_number,
+            fat12::RECOVERY_ENGINE_VERSION
+        )
     };
     let output = disk_directory.join(folder);
-    let report_path =
-        recovery_disk.join(format!("attempt_{:03}_fat12.json", attempt.attempt_number));
+    let report_path = recovery_disk.join(format!(
+        "attempt_{:03}_fat12_v{}.json",
+        attempt.attempt_number,
+        fat12::RECOVERY_ENGINE_VERSION
+    ));
     if output.exists() {
         let output = output.canonicalize().map_err(|e| e.to_string())?;
         if output.parent() != Some(disk_directory.as_path()) {
@@ -147,6 +159,7 @@ pub fn recover_attempt(
         expected_bad.sort_unstable();
         if report.disk != disk
             || report.attempt != attempt.attempt_number
+            || report.native_engine_version != fat12::RECOVERY_ENGINE_VERSION
             || report.analysis.bad_lbas != expected_bad
         {
             return Err("Native recovery evidence/settings changed; reuse refused".into());
@@ -156,10 +169,10 @@ pub fn recover_attempt(
     }
     progress("Native FAT12: checking directories, FAT copies and intact file chains...");
     let analysis = fat12::analyze(&snapshot, &attempt.bad_sectors)?;
-    let report = RecoveryReport { schema_version:1, method:"native_fat12_readable_chains".into(),
+    let report = RecoveryReport { schema_version:1, native_engine_version:fat12::RECOVERY_ENGINE_VERSION, method:"native_fat12_readable_chains".into(),
         source_image:image.file_name().unwrap_or_default().to_string_lossy().to_string(), source_sha256:source_sha256.clone(),
         disk, attempt:attempt.attempt_number, analysis,
-        warning:"Recovered bytes came only from acquisition-reported readable sectors. Missing directory regions, deleted/orphaned files and long names are not reconstructed. Single-capture sector confidence is not upgraded. Complete file bytes do not certify complete disk/customer recovery.".into() };
+        warning:"Recovered bytes came only from acquisition-reported readable sectors. Long names require intact sequence/checksum/UTF-16/padding; invalid names use safe recorded short aliases. Missing directory regions and deleted/orphaned files are not reconstructed. Single-capture sector confidence is not upgraded. Complete file bytes do not certify complete disk/customer recovery.".into() };
     let staging = extracted.join(format!(
         ".tmp-native-{disk:03}-{}-{}",
         std::process::id(),
@@ -187,10 +200,12 @@ pub fn recover_attempt(
         .map_err(|e| format!("Native staging retained; cannot publish: {e}"))?;
     save_report_copy(&report_path, &serialized)?;
     progress(&format!(
-        "Native FAT12: {} complete files recovered; {} entries skipped; {} directory sectors unavailable",
+        "Native FAT12: {} complete files recovered; {} entries skipped; {} directory sectors unavailable; {} validated long names; {} name fallbacks",
         report.analysis.recovered_files.len(),
         report.analysis.skipped.len(),
-        report.analysis.directory_gaps.len()
+        report.analysis.directory_gaps.len(),
+        report.analysis.validated_long_names.len(),
+        report.analysis.name_fallbacks.len()
     ));
     Ok(result(&report, output, report_path, false))
 }
@@ -202,6 +217,7 @@ fn result(
     reused: bool,
 ) -> RecoveryResult {
     RecoveryResult {
+        native_engine_version: report.native_engine_version,
         disk: report.disk,
         attempt: report.attempt,
         output_directory,
@@ -215,6 +231,8 @@ fn result(
             .map(|file| file.bytes as u64)
             .sum(),
         skipped_entries: report.analysis.skipped.len(),
+        validated_long_names: report.analysis.validated_long_names.len(),
+        name_fallbacks: report.analysis.name_fallbacks.len(),
         directory_gaps: report.analysis.directory_gaps.clone(),
         reused,
         customer_delivery_certified: false,
@@ -559,7 +577,169 @@ mod tests {
             fs::read(old.join("old.txt")).unwrap(),
             b"previous extraction"
         );
-        assert!(recovered.output_directory.ends_with("attempt_001_native"));
+        assert!(
+            recovered
+                .output_directory
+                .ends_with("attempt_001_native_v2")
+        );
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+    #[test]
+    fn upgrading_native_generation_preserves_old_files_reports_and_schema_compatibility() {
+        let (project, attempt, _) = fixture(&[34]);
+        let initial = recover(&project, &attempt).unwrap();
+        let old = project.extracted_dir().join("001/attempt_001_native");
+        fs::rename(&initial.output_directory, &old).unwrap();
+        let mut report: serde_json::Value =
+            serde_json::from_slice(&fs::read(&initial.report_path).unwrap()).unwrap();
+        report
+            .as_object_mut()
+            .unwrap()
+            .remove("native_engine_version");
+        report["analysis"]
+            .as_object_mut()
+            .unwrap()
+            .remove("validated_long_names");
+        report["analysis"]
+            .as_object_mut()
+            .unwrap()
+            .remove("name_fallbacks");
+        report["analysis"]["recovered_files"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("long_name");
+        report["analysis"]["recovered_files"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("short_name_case_flags");
+        let old_bytes = serde_json::to_vec_pretty(&report).unwrap();
+        fs::write(old.join(extraction::FAT12_REPORT_NAME), &old_bytes).unwrap();
+        extraction::write_native_managed_metadata(
+            &old,
+            &project.images_dir().join(&attempt.image_file),
+            &attempt.sha256,
+            hash(&old_bytes),
+        )
+        .unwrap();
+        let old_report = project.recovery_dir().join("001/attempt_001_fat12.json");
+        fs::rename(&initial.report_path, &old_report).unwrap();
+        fs::write(&old_report, &old_bytes).unwrap();
+        let old_marker = fs::read(old.join(".fluxvault-extraction.json")).unwrap();
+        assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
+        let upgraded = recover(&project, &attempt).unwrap();
+        assert!(!upgraded.reused);
+        assert_eq!(upgraded.native_engine_version, 2);
+        assert_ne!(upgraded.output_directory, old);
+        assert_eq!(fs::read(&old_report).unwrap(), old_bytes);
+        assert_eq!(
+            fs::read(old.join(".fluxvault-extraction.json")).unwrap(),
+            old_marker
+        );
+        assert_eq!(
+            fs::read(old.join("GOOD.TXT")).unwrap(),
+            b"known intact bytes"
+        );
+        assert!(recover(&project, &attempt).unwrap().reused);
+        let presence =
+            extraction::inspect_extraction_presence(&project.extracted_dir(), 1, 1).unwrap();
+        assert!(
+            matches!(presence, ExtractionPresence::Automatic { output_directory, .. } if output_directory == upgraded.output_directory || output_directory.canonicalize().unwrap() == upgraded.output_directory)
+        );
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+    #[test]
+    fn validated_os_metadata_stays_forensic_but_is_excluded_from_delivery() {
+        let (project, _, mut bytes) = fixture(&[34]);
+        let root = 19 * 512;
+        bytes[root..33 * 512].fill(0);
+        let folder_alias = b"SYSTEM~1   ";
+        let at =
+            fat12::tests::long_name(&mut bytes, root, folder_alias, "System Volume Information");
+        fat12::tests::entry(&mut bytes, at, folder_alias, 4, 0, true);
+        for copy in 0..2 {
+            fat12::tests::set_fat(&mut bytes, copy, 4, 0xfff);
+        }
+        let file_alias = b"INDEXE~1   ";
+        let at = fat12::tests::long_name(&mut bytes, 35 * 512, file_alias, "IndexerVolumeGuid");
+        fat12::tests::file(&mut bytes, at, file_alias, 5, b"Windows metadata");
+        let at =
+            fat12::tests::long_name(&mut bytes, root + 3 * 32, b"DOCUME~1TXT", "Árvíztűrő.txt");
+        fat12::tests::file(&mut bytes, at, b"DOCUME~1TXT", 2, b"customer text");
+        let sha = hash(&bytes);
+        fs::write(project.images_dir().join("001_attempt_001.img"), &bytes).unwrap();
+        let metadata_path = project.images_dir().join("001_attempt_001.json");
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&metadata_path).unwrap()).unwrap();
+        metadata["sha256"] = serde_json::json!(sha);
+        fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+        let log = project.logs_dir().join("001_attempt_001.log");
+        let mut text = fs::read_to_string(&log).unwrap();
+        let original_sha = text.rsplit("sha256=").next().unwrap().trim().to_owned();
+        text = text.replace(&original_sha, &sha);
+        fs::write(log, text).unwrap();
+        let attempt = imaging::load_attempts_for_disk(&project.images_dir(), 1)
+            .unwrap()
+            .remove(0);
+        let recovered = recover(&project, &attempt).unwrap();
+        assert_eq!(recovered.files, 2);
+        assert_eq!(recovered.validated_long_names, 3);
+        assert!(
+            recovered
+                .output_directory
+                .join("System Volume Information/IndexerVolumeGuid")
+                .is_file()
+        );
+        assert_eq!(
+            fs::read(recovered.output_directory.join("Árvíztűrő.txt")).unwrap(),
+            b"customer text"
+        );
+        let plan = conversion::build_conversion_plan(&planning(&project), &|_| {}).unwrap();
+        assert_eq!(plan.mirrored_files, 1);
+        assert!(project.converted_dir().join("001/Árvíztűrő.txt").is_file());
+        assert!(
+            !project
+                .converted_dir()
+                .join("001/System Volume Information")
+                .exists()
+        );
+        let audit = audit::run_audit(&project, &|_| {}).unwrap();
+        assert_eq!(audit.attention_disks, 1);
+        let audit: serde_json::Value =
+            serde_json::from_slice(&fs::read(audit.json_path).unwrap()).unwrap();
+        assert_eq!(audit["disks"][0]["extracted_files"], 2);
+        assert_eq!(audit["disks"][0]["extracted_hashes_verified"], true);
+        assert_eq!(
+            fs::read(project.images_dir().join("001_attempt_001.img")).unwrap(),
+            bytes
+        );
+        let destination = project.root().with_file_name(format!(
+            "{}-delivery",
+            project.root().file_name().unwrap().to_string_lossy()
+        ));
+        fs::create_dir(&destination).unwrap();
+        let package = crate::package::build_package(
+            &crate::package::PackageRequest {
+                project_root: project.root().to_path_buf(),
+                destination: destination.clone(),
+                project_name: "native long names".into(),
+            },
+            &|_| {},
+        )
+        .unwrap();
+        let mut archive = zip::ZipArchive::new(fs::File::open(package.zip_path).unwrap()).unwrap();
+        assert!(
+            archive
+                .by_name("Extracted/001/attempt_001_native_v2/Árvíztűrő.txt")
+                .is_ok()
+        );
+        assert!(archive.by_name("Extracted/001/attempt_001_native_v2/System Volume Information/IndexerVolumeGuid").is_err());
+        assert!(
+            archive
+                .by_name("Recovery/001/attempt_001_fat12_v2.json")
+                .is_ok()
+        );
+        drop(archive);
+        fs::remove_dir_all(destination).unwrap();
         fs::remove_dir_all(project.root()).unwrap();
     }
 }

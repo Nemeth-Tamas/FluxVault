@@ -1,5 +1,7 @@
 //! Conservative, image-only FAT12 traversal. Unknown bytes are never file data.
 //! Layout/entry reference: https://threadx.io/releases/6.5.1/filex/main/chapter3.html
+pub use crate::fat12_names::LongNameEvidence;
+use crate::fat12_names::PendingName;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -7,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 const SECTOR: usize = 512;
 const MAX_ENTRIES: usize = 16_384;
 pub const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
+pub const RECOVERY_ENGINE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layout {
@@ -33,7 +36,11 @@ pub struct FatLink {
 pub struct FileRecord {
     pub path: String,
     pub short_name_hex: String,
+    #[serde(default)]
+    pub short_name_case_flags: u8,
     pub name_method: String,
+    #[serde(default)]
+    pub long_name: Option<LongNameEvidence>,
     pub bytes: usize,
     pub sha256: String,
     pub directory_entry_offset: usize,
@@ -60,6 +67,10 @@ pub struct Analysis {
     pub skipped: Vec<Issue>,
     pub deleted_entries_not_recovered: usize,
     pub long_name_entries_not_used: usize,
+    #[serde(default)]
+    pub validated_long_names: Vec<LongNameEvidence>,
+    #[serde(default)]
+    pub name_fallbacks: Vec<Issue>,
     pub crosslinked_clusters: Vec<u16>,
     pub customer_delivery_certified: bool,
 }
@@ -220,11 +231,13 @@ struct Directory {
     ancestors: Vec<u16>,
     metadata: BTreeSet<u64>,
     depth: usize,
+    namespace_keys: Vec<String>,
 }
 struct Candidate {
     record: FileRecord,
     ancestors: Vec<u16>,
     issue: Option<String>,
+    namespace_keys: Vec<String>,
 }
 
 /// Return only complete file records. Callers may materialize bytes with file_bytes.
@@ -242,6 +255,8 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
         skipped: Vec::new(),
         deleted_entries_not_recovered: 0,
         long_name_entries_not_used: 0,
+        validated_long_names: Vec::new(),
+        name_fallbacks: Vec::new(),
         crosslinked_clusters: Vec::new(),
         customer_delivery_certified: false,
     };
@@ -254,6 +269,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
         ancestors: Vec::new(),
         metadata: BTreeSet::from([0]),
         depth: 0,
+        namespace_keys: Vec::new(),
     }]);
     let mut directory_seen = BTreeSet::new();
     let mut owners: BTreeMap<u16, BTreeSet<String>> = BTreeMap::new();
@@ -263,6 +279,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
     let mut chain_visits = 0usize;
     let mut paths = BTreeMap::<String, usize>::new();
     while let Some(dir) = queue.pop_front() {
+        let mut pending_name = PendingName::default();
         for at in dir.offsets {
             entries_seen += 1;
             if entries_seen > MAX_ENTRIES {
@@ -273,6 +290,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             let lba = (at / SECTOR) as u64;
             if bad.contains(&lba) {
                 gaps.insert(lba);
+                pending_name.clear();
                 continue;
             }
             let entry = &image[at..at + 32];
@@ -281,27 +299,60 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             } // Only an intact end marker ends this directory.
             if entry[0] == 0xe5 {
                 result.deleted_entries_not_recovered += 1;
+                pending_name.clear();
                 continue;
             }
             if entry[11] == 0x0f {
                 result.long_name_entries_not_used += 1;
+                pending_name.push(at, entry);
                 continue;
             }
             if entry[11] & 8 != 0 {
+                pending_name.clear();
                 continue;
             } // volume label
             if entry[..11] == *b".          " || entry[..11] == *b"..         " {
+                pending_name.clear();
                 continue;
             }
-            let short = short_name(&entry[..11]);
-            let path = if dir.path.is_empty() {
-                short
-            } else {
-                format!("{}/{short}", dir.path)
+            let short = short_name_with_case(&entry[..11], entry[12]);
+            let child_path = |name: &str| {
+                if dir.path.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{}/{name}", dir.path)
+                }
             };
-            *paths.entry(path.to_lowercase()).or_default() += 1;
+            let alias_path = child_path(&short);
+            let long_name = match pending_name.take(&entry[..11]) {
+                Ok(name) => name,
+                Err(reason) => {
+                    result.name_fallbacks.push(Issue {
+                        path: alias_path.clone(),
+                        reason,
+                    });
+                    None
+                }
+            };
+            let path = child_path(
+                long_name
+                    .as_ref()
+                    .map_or(short.as_str(), |name| name.name.as_str()),
+            );
+            let mut namespace_keys = dir.namespace_keys.clone();
+            namespace_keys.push(path.to_uppercase());
+            *paths.entry(path.to_uppercase()).or_default() += 1;
+            if path.to_uppercase() != alias_path.to_uppercase() {
+                *paths.entry(alias_path.to_uppercase()).or_default() += 1;
+                namespace_keys.push(alias_path.to_uppercase());
+            }
             let mut metadata = dir.metadata.clone();
             metadata.insert(lba);
+            if let Some(name) = &long_name {
+                result.long_name_entries_not_used -= name.entry_offsets.len();
+                result.validated_long_names.push(name.clone());
+                metadata.extend(name.entry_offsets.iter().map(|at| (at / SECTOR) as u64));
+            }
             if entry[11] & 0xc0 != 0 || word(entry, 20) != 0 {
                 result.skipped.push(Issue {
                     path,
@@ -367,6 +418,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
                     ancestors,
                     metadata,
                     depth: dir.depth + 1,
+                    namespace_keys,
                 });
                 continue;
             }
@@ -396,8 +448,14 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
                 record: FileRecord {
                     path,
                     short_name_hex: hex(&entry[..11]),
-                    name_method: "8.3; non-ASCII OEM bytes escaped, long names not reconstructed"
-                        .into(),
+                    short_name_case_flags: entry[12],
+                    name_method: if long_name.is_some() {
+                        "VFAT UTF-16; sequence/checksum/padding validated"
+                    } else {
+                        "8.3; unsafe/non-ASCII OEM bytes escaped; no valid long name"
+                    }
+                    .into(),
+                    long_name,
                     bytes: size,
                     sha256: String::new(),
                     directory_entry_offset: at,
@@ -410,6 +468,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
                 },
                 ancestors: dir.ancestors.clone(),
                 issue,
+                namespace_keys,
             });
         }
     }
@@ -429,10 +488,11 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
                 .any(|c| crosslinks.contains(c))
             {
                 Some("Cross-linked file/directory allocation; ownership ambiguous".into())
-            } else if paths[&r.path.to_lowercase()] > 1 {
-                Some("Case-insensitive duplicate path; neither entry selected".into())
-            } else if ambiguous_parent(&r.path, &paths) {
-                Some("Directory path has duplicate owners".into())
+            } else if candidate.namespace_keys.iter().any(|key| paths[key] > 1) {
+                Some(
+                    "Case-insensitive file/directory name or short-alias ownership is ambiguous"
+                        .into(),
+                )
             } else {
                 None
             }
@@ -452,20 +512,6 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
     Ok(result)
 }
 
-fn ambiguous_parent(path: &str, paths: &BTreeMap<String, usize>) -> bool {
-    let mut parent = path;
-    while let Some((prefix, _)) = parent.rsplit_once('/') {
-        if paths
-            .get(&prefix.to_lowercase())
-            .is_some_and(|count| *count > 1)
-        {
-            return true;
-        }
-        parent = prefix;
-    }
-    false
-}
-
 pub(crate) fn file_bytes(image: &[u8], record: &FileRecord) -> Vec<u8> {
     record
         .data_lbas
@@ -480,6 +526,17 @@ pub(crate) fn file_bytes(image: &[u8], record: &FileRecord) -> Vec<u8> {
 }
 
 /// Each name stays one safe path component. Escape, don't guess OEM encoding.
+fn short_name_with_case(raw: &[u8], flags: u8) -> String {
+    let mut display = raw.to_vec();
+    if flags & 0x08 != 0 {
+        display[..8].make_ascii_lowercase();
+    }
+    if flags & 0x10 != 0 {
+        display[8..].make_ascii_lowercase();
+    }
+    short_name(&display)
+}
+
 fn short_name(raw: &[u8]) -> String {
     let part = |bytes: &[u8]| {
         let end = bytes.iter().rposition(|b| *b != b' ').map_or(0, |i| i + 1);
@@ -511,8 +568,9 @@ fn short_name(raw: &[u8]) -> String {
     if name.is_empty()
         || name.starts_with('.')
         || [
-            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4",
+            "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+            "LPT7", "LPT8", "LPT9",
         ]
         .contains(&stem.as_str())
     {
@@ -574,6 +632,168 @@ pub(crate) mod tests {
         }
         let begin = (33 + cluster as usize - 2) * 512;
         image[begin..begin + bytes.len()].copy_from_slice(bytes);
+    }
+    pub fn long_name(image: &mut [u8], at: usize, alias: &[u8; 11], name: &str) -> usize {
+        let slots = crate::fat12_names::tests::slots(alias, name);
+        for (i, slot) in slots.iter().enumerate() {
+            image[at + i * 32..at + (i + 1) * 32].copy_from_slice(slot);
+        }
+        at + slots.len() * 32
+    }
+    #[test]
+    fn long_names_preserve_unicode_nested_paths_and_name_sector_provenance() {
+        let mut img = image();
+        let alias = b"FOLDER~1   ";
+        let at = long_name(&mut img, 19 * 512, alias, "Hosszú nevű mappa");
+        entry(&mut img, at, alias, 2, 0, true);
+        for copy in 0..2 {
+            set_fat(&mut img, copy, 2, 0xfff);
+        }
+        let alias = b"DOCUME~1TXT";
+        let at = long_name(&mut img, 33 * 512, alias, "Árvíztűrő dokumentum.txt");
+        file(&mut img, at, alias, 3, b"known bytes");
+        let found = analyze(&img, &[]).unwrap();
+        let record = &found.recovered_files[0];
+        assert_eq!(record.path, "Hosszú nevű mappa/Árvíztűrő dokumentum.txt");
+        assert_eq!(found.validated_long_names.len(), 2);
+        assert_eq!(found.long_name_entries_not_used, 0);
+        assert!(record.metadata_lbas.contains(&19));
+        assert!(record.metadata_lbas.contains(&33));
+        assert_eq!(
+            record.long_name.as_ref().unwrap().short_name_hex,
+            hex(alias)
+        );
+        assert_eq!(file_bytes(&img, record), b"known bytes");
+    }
+    #[test]
+    fn directory_gap_or_deleted_entry_breaks_long_name_association() {
+        let mut img = image();
+        // Fill the known prefix so traversal reaches the sector boundary.
+        for at in (19 * 512..20 * 512 - 32).step_by(32) {
+            img[at] = 0xe5;
+        }
+        let alias = b"BOUND~1 TXT";
+        let at = long_name(&mut img, 20 * 512 - 32, alias, "Boundary.txt");
+        file(&mut img, at, alias, 2, b"known");
+        let known = analyze(&img, &[]).unwrap();
+        assert_eq!(known.recovered_files[0].path, "Boundary.txt");
+        assert!(known.recovered_files[0].metadata_lbas.contains(&19));
+        let missing = analyze(&img, &[19]).unwrap();
+        assert_eq!(missing.recovered_files[0].path, "BOUND~1.TXT");
+        assert!(missing.validated_long_names.is_empty());
+        // A deleted record between the long and short entries also breaks association.
+        let mut img = image();
+        let at = long_name(&mut img, 19 * 512, alias, "Boundary.txt");
+        img[at] = 0xe5;
+        file(&mut img, at + 32, alias, 2, b"known");
+        assert_eq!(
+            analyze(&img, &[]).unwrap().recovered_files[0].path,
+            "BOUND~1.TXT"
+        );
+    }
+    #[test]
+    fn long_names_cross_fragmented_directory_clusters_in_logical_order() {
+        let mut img = image();
+        entry(&mut img, 19 * 512, b"FOLDER     ", 2, 0, true);
+        for copy in 0..2 {
+            set_fat(&mut img, copy, 2, 4);
+            set_fat(&mut img, copy, 4, 0xfff);
+        }
+        for at in (33 * 512..34 * 512 - 32).step_by(32) {
+            img[at] = 0xe5;
+        }
+        let alias = b"FRAGME~1TXT";
+        let slots = crate::fat12_names::tests::slots(alias, "Fragmented filename.txt");
+        assert_eq!(slots.len(), 2);
+        img[34 * 512 - 32..34 * 512].copy_from_slice(&slots[0]);
+        img[35 * 512..35 * 512 + 32].copy_from_slice(&slots[1]);
+        file(&mut img, 35 * 512 + 32, alias, 3, b"intact");
+        let found = analyze(&img, &[]).unwrap();
+        assert_eq!(
+            found.recovered_files[0].path,
+            "FOLDER/Fragmented filename.txt"
+        );
+        assert_eq!(
+            found.recovered_files[0]
+                .long_name
+                .as_ref()
+                .unwrap()
+                .entry_offsets,
+            vec![34 * 512 - 32, 35 * 512]
+        );
+    }
+    #[test]
+    fn malformed_long_name_keeps_intact_file_under_alias_and_records_reason() {
+        let mut img = image();
+        let alias = b"SAFE    TXT";
+        let at = long_name(&mut img, 19 * 512, alias, "../../escape.txt");
+        file(&mut img, at, alias, 2, b"safe bytes");
+        let found = analyze(&img, &[]).unwrap();
+        assert_eq!(found.recovered_files[0].path, "SAFE.TXT");
+        assert_eq!(found.name_fallbacks.len(), 1);
+        assert!(found.name_fallbacks[0].reason.contains("Unsafe"));
+        assert!(found.recovered_files[0].long_name.is_none());
+    }
+    #[test]
+    fn long_name_alias_collisions_refuse_files_and_ambiguous_directory_children() {
+        let mut img = image();
+        let alias = b"ALIAS   TXT";
+        let at = long_name(&mut img, 19 * 512, alias, "First file.txt");
+        file(&mut img, at, alias, 2, b"first");
+        let at = long_name(&mut img, at + 32, alias, "Second file.txt");
+        file(&mut img, at, alias, 3, b"second");
+        assert!(analyze(&img, &[]).unwrap().recovered_files.is_empty());
+        let mut img = image();
+        let alias = b"FOLDER~1   ";
+        let at = long_name(&mut img, 19 * 512, alias, "First directory");
+        entry(&mut img, at, alias, 2, 0, true);
+        let at = long_name(&mut img, at + 32, alias, "Second directory");
+        entry(&mut img, at, alias, 3, 0, true);
+        for copy in 0..2 {
+            set_fat(&mut img, copy, 2, 0xfff);
+            set_fat(&mut img, copy, 3, 0xfff);
+        }
+        file(&mut img, 33 * 512, b"FIRST   TXT", 4, b"first");
+        file(&mut img, 34 * 512, b"SECOND  TXT", 5, b"second");
+        assert!(analyze(&img, &[]).unwrap().recovered_files.is_empty());
+    }
+    #[test]
+    fn unicode_case_and_long_name_to_short_alias_collisions_are_refused() {
+        let mut img = image();
+        let at = long_name(&mut img, 19 * 512, b"FIRST   TXT", "Σ.txt");
+        file(&mut img, at, b"FIRST   TXT", 2, b"first");
+        let at = long_name(&mut img, at + 32, b"SECOND  TXT", "ς.txt");
+        file(&mut img, at, b"SECOND  TXT", 3, b"second");
+        assert!(analyze(&img, &[]).unwrap().recovered_files.is_empty());
+        let mut img = image();
+        let at = long_name(&mut img, 19 * 512, b"FIRST   TXT", "Second.txt");
+        file(&mut img, at, b"FIRST   TXT", 2, b"first");
+        file(&mut img, at + 32, b"SECOND  TXT", 3, b"second");
+        assert!(analyze(&img, &[]).unwrap().recovered_files.is_empty());
+        assert!(short_name(b"CONIN$  TXT").starts_with("_FAT_"));
+    }
+    #[test]
+    fn short_name_case_flags_preserve_ascii_case_without_guessing_oem_encoding() {
+        let mut img = image();
+        file(&mut img, 19 * 512, b"READ_ME TXT", 2, b"data");
+        for (flags, expected) in [
+            (0, "READ_ME.TXT"),
+            (0x08, "read_me.TXT"),
+            (0x10, "READ_ME.txt"),
+            (0x18, "read_me.txt"),
+        ] {
+            img[19 * 512 + 12] = flags;
+            let found = analyze(&img, &[]).unwrap();
+            assert_eq!(found.recovered_files[0].path, expected);
+            assert_eq!(found.recovered_files[0].short_name_hex, hex(b"READ_ME TXT"));
+            assert_eq!(found.recovered_files[0].short_name_case_flags, flags);
+        }
+        img[19 * 512] = 0x82;
+        assert!(
+            analyze(&img, &[]).unwrap().recovered_files[0]
+                .path
+                .starts_with("_x82")
+        );
     }
     #[test]
     fn fragmented_file_exact_bytes_and_sector_provenance() {
