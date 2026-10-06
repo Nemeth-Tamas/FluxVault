@@ -13,7 +13,7 @@ use crate::{
     project::ProjectState,
 };
 
-use super::CliResponse;
+use super::{CliResponse, media_reservation::GreaseweazleReservation};
 
 pub(super) struct RecoveryOptions {
     pub disk: u32,
@@ -25,9 +25,36 @@ pub(super) struct RecoveryOptions {
     pub json_output: bool,
 }
 
+pub(super) fn process_saved(project: &ProjectState) -> Result<CliResponse, String> {
+    super::run(
+        &[
+            "process".to_owned(),
+            "--project".to_owned(),
+            project.root().display().to_string(),
+            "--json".to_owned(),
+        ],
+        project.root(),
+    )
+}
+
 pub(super) fn recover(
     project: &ProjectState,
     options: RecoveryOptions,
+) -> Result<CliResponse, String> {
+    if !options.protected {
+        return Err(
+            "Recovery requires --source-write-protected after checking the physical tab".to_owned(),
+        );
+    }
+    options.policy.validate()?;
+    let reservation = GreaseweazleReservation::acquire()?;
+    recover_reserved(project, options, &reservation)
+}
+
+pub(super) fn recover_reserved(
+    project: &ProjectState,
+    options: RecoveryOptions,
+    _reservation: &GreaseweazleReservation,
 ) -> Result<CliResponse, String> {
     let RecoveryOptions {
         disk,
@@ -63,15 +90,7 @@ pub(super) fn recover(
         json!({"skipped":true})
     } else {
         eprintln!("Acquisition saved. Processing project files and reports...");
-        match super::run(
-            &[
-                "process".to_owned(),
-                "--project".to_owned(),
-                project.root().display().to_string(),
-                "--json".to_owned(),
-            ],
-            project.root(),
-        ) {
+        match process_saved(project) {
             Ok(response) => {
                 attention |= response.exit_code != 0;
                 serde_json::from_str(&response.output)
@@ -134,6 +153,7 @@ pub(super) fn capture(
     if !source_write_protected {
         return Err("Raw capture requires --source-write-protected after checking the floppy's physical write-protect tab; this assertion does not prove the hardware blocks writes".to_owned());
     }
+    let _reservation = GreaseweazleReservation::acquire()?;
     let profile = match profile_override {
         Some(profile) => profile,
         None => infer_profile(project, disk_number)?,

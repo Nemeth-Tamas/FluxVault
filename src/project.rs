@@ -1,5 +1,7 @@
 use std::{
     fs,
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -125,12 +127,29 @@ impl ProjectState {
 
         let project_file = self.root.join(PROJECT_FILE_NAME);
 
-        fs::write(&project_file, json).map_err(|error| {
-            format!(
-                "Nem sikerült menteni a projektfájlt {}: {error}",
-                project_file.display()
-            )
-        })?;
+        if fs::symlink_metadata(&project_file).is_ok_and(|m| !m.file_type().is_file()) {
+            return Err("Project metadata must be a regular file".to_owned());
+        }
+        // A crash must not leave a truncated project.json while scan numbering advances.
+        let temporary = self.root.join(format!(
+            ".fluxvault-project-{}-{}.partial.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_nanos()
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|e| e.to_string())?;
+        file.write_all(json.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        drop(file);
+        fs::rename(&temporary, &project_file)
+            .map_err(|e| format!("Cannot commit project metadata: {e}"))?;
 
         Ok(())
     }
@@ -143,8 +162,13 @@ impl ProjectState {
         if disk_number == 0 {
             return Err("Disk number must be positive".to_owned());
         }
+        let previous = self.metadata.clone();
         self.metadata.current_disk_number = disk_number;
-        self.save_metadata()
+        if let Err(error) = self.save_metadata() {
+            self.metadata = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn name(&self) -> &str {
@@ -194,4 +218,72 @@ fn current_unix_ms() -> Result<u64, String> {
         .map_err(|error| format!("Rendszeridő hiba: {error}"))?;
 
     u64::try_from(duration.as_millis()).map_err(|_| "A rendszeridő értéke túl nagy.".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temporary_root() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "fluxvault-project-atomic-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn atomic_numbering_preserves_metadata_schema_and_reopens_cleanly() {
+        let root = temporary_root();
+        let mut project = ProjectState::create_without_session(root.clone()).unwrap();
+        let created = project.metadata.created_unix_ms;
+        let name = project.name().to_owned();
+        project
+            .set_current_disk_number_without_session(136)
+            .unwrap();
+        let reopened = ProjectState::open_without_session(root.clone()).unwrap();
+        assert_eq!(reopened.current_disk_number(), 136);
+        assert_eq!(reopened.metadata.created_unix_ms, created);
+        assert_eq!(reopened.name(), name);
+        assert_eq!(reopened.metadata.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("partial")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_numbering_commit_keeps_old_file_and_restores_in_memory_cursor() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = temporary_root();
+        let mut project = ProjectState::create_without_session(root.clone()).unwrap();
+        let path = root.join(PROJECT_FILE_NAME);
+        let original = fs::read(&path).unwrap();
+        // Allow metadata/read access, but deny rename/delete while the handle is held.
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        assert!(project.set_current_disk_number_without_session(2).is_err());
+        assert_eq!(project.current_disk_number(), 1);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        drop(held);
+        project.set_current_disk_number_without_session(2).unwrap();
+        assert_eq!(
+            ProjectState::open_without_session(root.clone())
+                .unwrap()
+                .current_disk_number(),
+            2
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -2,6 +2,12 @@
 
 Date: 2026-10-05
 
+## Development checkpoint: 2026-10-06
+
+`greaseweazle scan --gw-drive B --source-write-protected [--count N]` is now the guided GW-only feeding command. It prompts `READ NNN`/`QUIT`, runs bounded recovery for each disk, persists custody/completed results, reconciles interrupted numbering after offline evidence verification, and automatically runs the saved-file processing chain when feeding ends. Project metadata commits are atomic. The CLI holds a per-user cross-project Greaseweazle reservation for scan/recover/capture/info; termination releases it automatically. See `CHEATSHEET.md` and `CLI.md` for operator/resume details.
+
+The new batch behavior has mock/unit/executable coverage; the existing single-disk Mitsumi live results remain the hardware baseline. Next priorities are bounded format discovery, multi-disk live acceptance, isolated/coalesced background downstream work, and deeper damaged-filesystem recovery. The scan currently processes its downstream tail after feeding, not concurrently. Source-media writes remain forbidden.
+
 This file is a handoff from the current ChatGPT session to the next development session.
 
 ## What the user wants

@@ -552,6 +552,61 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .and_then(|_| file.sync_all())
         .map_err(|e| e.to_string())
 }
+
+/// Recheck a published batch result without invoking a host tool or reading media.
+pub(crate) fn verify_completed_result(
+    project: &ProjectState,
+    result: &RecoveryResult,
+) -> Result<(), String> {
+    let flux = flux_capture::project_flux_dir(project)?;
+    let dir = flux
+        .join("Recovery")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if dir.parent() != Some(flux.as_path()) {
+        return Err("Recovery directory escapes Flux".to_owned());
+    }
+    let state = dir.join(format!("{:03}_job.json", result.disk));
+    if !fs::symlink_metadata(&state)
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_file()
+    {
+        return Err("Unsafe recovery journal".to_owned());
+    }
+    let job: Journal = serde_json::from_slice(&fs::read(state).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Invalid recovery journal: {e}"))?;
+    let saved = job
+        .result
+        .as_ref()
+        .ok_or("Recovery result was not committed")?;
+    if job.schema_version != 1
+        || job.disk != result.disk
+        || saved.disk != result.disk
+        || saved.image != result.image
+        || saved.image_sha256 != result.image_sha256
+        || saved.provenance != result.provenance
+        || saved.provenance_sha256 != result.provenance_sha256
+        || saved.status != result.status
+        || saved.missing_lbas != result.missing_lbas
+        || saved.conflicting_lbas != result.conflicting_lbas
+    {
+        return Err("Batch result disagrees with committed recovery evidence".to_owned());
+    }
+    job.policy.validate()?;
+    aggregate(
+        project,
+        result.disk,
+        GreaseweazleProfile::parse(&job.profile)?,
+        &job.stages,
+    )?;
+    if hash_path(&result.image)? != result.image_sha256
+        || hash_path(&result.provenance)? != result.provenance_sha256
+    {
+        return Err("Completed recovery output changed; disk numbering not advanced".to_owned());
+    }
+    Ok(())
+}
 fn save_journal(path: &Path, j: &Journal) -> Result<(), String> {
     let tmp = path.with_extension(format!(
         "{}-{}.partial.json",

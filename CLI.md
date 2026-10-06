@@ -24,6 +24,7 @@ fluxvault tools show
 fluxvault greaseweazle preview
 fluxvault greaseweazle info
 fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
+fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
 fluxvault greaseweazle capture 7 --gw-drive A --source-write-protected
 fluxvault greaseweazle decode 7
 fluxvault greaseweazle status 7
@@ -68,7 +69,24 @@ fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 
 No USB scan is required. `recover` defaults to **ibm.1440**, not automatic format discovery; use `--profile ibm.720` for verified 720 KB media. Confirm disk number and physical protection before starting. Default passes are Fast (2 revolutions, 0 retries), Normal (3, 2), Recovery (5, 3), Detective (8, 5). It stops on a complete reported map, two consecutive non-improving passes, four passes, or the 600-second acquisition ceiling (downstream file processing has separate limits). Later passes read problem cylinders plus two clean control cylinders, both heads, with the fixed profile. No routine drive swapping or speculative byte repair.
 
-Raw captures and decodes remain separately hashed. A durable per-disk journal in `Flux/Recovery` reuses a saved whole-disk decode when available, resumes saved raw evidence after decode failure, and verifies completed artifacts on repeat invocation instead of reading again. A per-project/disk lock blocks duplicate jobs for that disk; this is **not a multi-station scheduler**. Do not run simultaneous commands against one physical Greaseweazle. Matching controls help detect disk swaps but cannot prove identity.
+Raw captures and decodes remain separately hashed. A durable per-disk journal in `Flux/Recovery` reuses a saved whole-disk decode when available, resumes saved raw evidence after decode failure, and verifies completed artifacts on repeat invocation instead of reading again. A per-project/disk lock blocks duplicate jobs for that disk. CLI `scan`, `recover`, `capture`, and `info` share an OS-held reservation at `%APPDATA%\FluxVault\.fluxvault-greaseweazle.lock`, across projects using that settings location. It releases when the owning process exits; the remaining lock file is harmless. Direct `gw.exe`, separate Windows users/settings locations, and library consumers are outside this CLI reservation. Matching controls help detect disk swaps but cannot prove identity.
+
+### Guided Greaseweazle-only batch
+
+```powershell
+fluxvault disk select 1
+fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
+```
+
+Use the project's next unscanned number (or a fresh project). Each swap requires `READ NNN`, with the displayed number; bare `READ`, a different number, or arbitrary input starts no read. `QUIT`/`Q` or end-of-input stops feeding. `--count N` is a positive cap on results finalized this invocation, including resumed numbering commits. Explicit `--gw-drive` is required. `--profile`, `--policy`, and `--acquisition-only` have the same meaning as for single-disk recovery; the default format remains ibm.1440. Every inserted disk must have its physical write-protect tab set.
+
+Each disk uses the existing bounded recovery service. A verified terminal result—including partial/unrecoverable-within-policy—advances the project number. Operation failure keeps it selected. Numbered custody, pending result and completion history are atomically recorded in the internal project-root `.fluxvault-gw-scan.json`; an OS-held `.fluxvault-gw-scan.lock` prevents duplicate project scans. Control files and partial metadata commits are excluded from packages. Do not manually edit the journal or change disk selection from another session.
+
+On restart, a pending result is verified against the committed single-disk journal, raw/decoded evidence and published hashes before reconciling the cursor. A cursor at either the pending disk or its next number is accepted; it advances only once without a physical read. An interrupted job with no recorded result asks for the same numbered custody confirmation, then lets the single-disk journal resume/reuse evidence. Different pending settings, changed published bytes, invalid identities or cursor disagreement refuse further reads.
+
+After feeding finishes, saved-image extraction/conversion/audit/workbook processing runs once automatically; `--acquisition-only` skips it. This serial tail is not concurrent background scheduling. A failed tail retains all acquisition evidence and numbering; rerun `process` or quit a resumed scan to retry it. Empty new scans do not launch downstream work. JSON stdout contains session results, `total_scanned`, `resumed_advances`, `pending_disk`, next number and processing details; prompts/progress go to stderr. Exit 3 indicates partial history, a pending job, or downstream attention, not an automatic delivery certificate.
+
+Mock-executable tests cover numbered confirmations, two-disk acquisition, disconnected-board failure, bounded partial recovery, restart on both sides of the numbering commit, changed-image refusal and cross-project contention. A separately running scan is terminated in the lock test; a new session then acquires the released reservation without starting a host tool. The guided batch itself still needs multi-disk hardware acceptance.
 
 The final numbered image in `Images` has compatible acquisition metadata/logs and a hashed provenance map. Agreeing independent captures are labeled corroborated; sectors reported good in only one capture remain explicitly lower confidence. Conflicting/unreadable sectors are zero-filled and marked bad, never silently chosen or guessed. This is an immutable derived image, not an untouched raw capture or customer-delivery certification.
 
@@ -121,4 +139,4 @@ Saved-image validation on 2026-10-06 recovered **22 forensic files / 1,208,710 b
 
 `finalize --destination PATH` combines saved-image processing and package verification in one command. It requires at least one image and an existing destination outside the project. If recovery, conversion, or audit still needs attention, it reports that status and does **not** create a package. A successfully verified archival ZIP is still not a certification that every original customer byte was recovered.
 
-The CLI has a guided USB disk-change loop and bounded single-disk Greaseweazle-only recovery. A guided Greaseweazle batch loop, automatic format discovery, full damaged-filesystem extraction, crash-safe production scheduling, and concurrent two-drive workflow remain open. Windows protection reporting has varied across test disks; the positive 007 result does not settle independent hardware write-protection validation. Track these in [TODO.md](TODO.md).
+The CLI has guided USB and Greaseweazle disk-change loops and bounded single-disk Greaseweazle-only recovery. Automatic format discovery, full damaged-filesystem extraction, background production scheduling, and concurrent two-drive workflow remain tracked in [TODO.md](TODO.md).
