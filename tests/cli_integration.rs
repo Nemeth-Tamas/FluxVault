@@ -65,6 +65,65 @@ fn cli_only_entry_point_and_greaseweazle_preview_need_no_hardware() {
 }
 
 #[test]
+fn native_fat12_cli_recovers_saved_partial_image_without_tools_and_reuses_it() {
+    let root = std::env::temp_dir().join(format!(
+        "fluxvault-cli-native-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let project = fluxvault::project::ProjectState::create_without_session(root.clone()).unwrap();
+    let mut image = vec![0; 2880 * 512];
+    image[11..13].copy_from_slice(&512u16.to_le_bytes());
+    image[13] = 1;
+    image[14..16].copy_from_slice(&1u16.to_le_bytes());
+    image[16] = 2;
+    image[17..19].copy_from_slice(&224u16.to_le_bytes());
+    image[19..21].copy_from_slice(&2880u16.to_le_bytes());
+    image[22..24].copy_from_slice(&9u16.to_le_bytes());
+    image[510..512].copy_from_slice(&[0x55, 0xaa]);
+    for start in [512, 10 * 512] {
+        image[start..start + 5].copy_from_slice(&[0xf0, 0xff, 0xff, 0xff, 0x0f]);
+    }
+    let entry = 19 * 512;
+    image[entry..entry + 11].copy_from_slice(b"GOOD    TXT");
+    image[entry + 11] = 0x20;
+    image[entry + 26..entry + 28].copy_from_slice(&2u16.to_le_bytes());
+    image[entry + 28..entry + 32].copy_from_slice(&5u32.to_le_bytes());
+    image[33 * 512..33 * 512 + 5].copy_from_slice(b"hello");
+    let source_sha = format!("{:x}", Sha256::digest(&image));
+    fs::write(project.images_dir().join("001.img"), &image).unwrap();
+    fs::write(project.logs_dir().join("001.log"), format!(
+        "BEGIN | disk=1\nGEOMETRY | bytes_per_sector=512 | total_sectors=2880\nBAD_SECTOR | LBA=34\nEND | status=PARTIAL | bytes=1474560 | sha256={source_sha}\n")).unwrap();
+    let first = invoke(&root, &["recovery", "extract", "1", "--json"], None);
+    assert_eq!(
+        first.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(json["physical_media_access"], false);
+    assert_eq!(json["recovery"]["customer_delivery_certified"], false);
+    assert_eq!(json["recovery"]["files"], 1);
+    assert_eq!(json["recovery"]["source_sha256"], source_sha);
+    let output = std::path::PathBuf::from(json["recovery"]["output_directory"].as_str().unwrap());
+    assert_eq!(fs::read(output.join("GOOD.TXT")).unwrap(), b"hello");
+    let second = invoke(&root, &["recovery", "extract", "1", "--json"], None);
+    assert_eq!(second.status.code(), Some(3));
+    let json: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(json["recovery"]["reused"], true);
+    assert!(!project.logs_dir().join("external-tools.jsonl").exists());
+    assert_eq!(
+        fs::read(project.images_dir().join("001.img")).unwrap(),
+        image
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn flux_status_verifies_saved_hashes_without_a_drive_or_host_tool() {
     let root = std::env::temp_dir().join(format!(
         "fluxvault-cli-flux-status-{}-{}",

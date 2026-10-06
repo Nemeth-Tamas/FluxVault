@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::{
     composite::{self, CompositeRequest, CompositeSource},
-    imaging,
+    fat12_recovery, imaging,
     manifest::{self, ManifestRequest},
     manual_recovery_import::{self, ManualRecoveryImportRequest},
     project::ProjectState,
@@ -56,6 +56,54 @@ pub(super) fn run_advanced(
         .filter(|number| *number > 0)
         .ok_or("recovery command requires a positive disk number")?;
     match positional[1].as_str() {
+        "extract" => {
+            let statistics = imaging::load_project_statistics(&project.images_dir())?;
+            let disk = statistics
+                .disks
+                .iter()
+                .find(|d| d.disk_number == disk_number)
+                .ok_or("Disk has no saved images")?;
+            let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
+            let attempt = attempts
+                .iter()
+                .find(|a| a.attempt_number == disk.best_attempt_number)
+                .ok_or("Selected attempt missing")?;
+            let result = fat12_recovery::recover_attempt(
+                &project.images_dir(),
+                &project.extracted_dir(),
+                &project.recovery_dir(),
+                disk_number,
+                attempt,
+                &|s| eprintln!("{s}"),
+            )?;
+            let inventory = manifest::build_manifest(
+                &ManifestRequest {
+                    extracted_root: project.extracted_dir(),
+                    images_directory: project.images_dir(),
+                    reports_directory: project.reports_dir(),
+                },
+                &|s| eprintln!("{s}"),
+            )?;
+            Ok(CliResponse {
+                output: if json_output {
+                    json!({"recovery":result,"manifest":inventory.path,"physical_media_access":false}).to_string()
+                } else {
+                    format!(
+                        "Disk {disk_number:03}: {} complete files recovered{}; {} entries skipped.\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
+                        result.files,
+                        if result.reused {
+                            " (verified result reused)"
+                        } else {
+                            ""
+                        },
+                        result.skipped_entries,
+                        result.output_directory.display(),
+                        result.report_path.display()
+                    )
+                },
+                exit_code: 3,
+            })
+        }
         "composite" => {
             let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
             if attempts.len() < 2 {

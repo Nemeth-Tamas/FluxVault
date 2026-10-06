@@ -200,7 +200,7 @@ fn latest_managed_directory(disk_directory: &Path) -> Result<Option<PathBuf>, St
         .map(|entry| entry.path())
         .filter(|path| path.is_dir() && path.join(EXTRACTION_MARKER).is_file())
         .collect::<Vec<_>>();
-    candidates.sort();
+    candidates.sort_by_key(|path| extraction::managed_directory_order(path));
     Ok(candidates.pop())
 }
 

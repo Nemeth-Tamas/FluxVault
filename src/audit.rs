@@ -143,13 +143,22 @@ pub(crate) fn run_audit(
             summary.disk_number,
             attempt.attempt_number,
         );
+        let mut recovery_attention = false;
         match presence {
             Ok(ExtractionPresence::Automatic {
-                output_directory, ..
+                output_directory,
+                recovery_attention: native_attention,
+                ..
             }) => {
+                recovery_attention = native_attention;
                 match extraction::verify_managed_extraction(&output_directory, &actual_image_hash) {
                     Ok((files, bytes)) => {
-                        record.extraction_status = "VERIFIED".to_owned();
+                        record.extraction_status = if native_attention {
+                            "PARTIAL_VERIFIED_FILES"
+                        } else {
+                            "VERIFIED"
+                        }
+                        .to_owned();
                         record.extracted_files = files;
                         record.extracted_bytes = bytes;
                         record.extracted_hashes_verified = true;
@@ -208,16 +217,25 @@ pub(crate) fn run_audit(
         };
         if record.image_hash_verified
             && !attempt.attention_required
+            && !recovery_attention
             && record.extracted_hashes_verified
             && record.extracted_files > 0
             && conversion_ok
         {
             record.evidence_status = "IMAGE_FILES_CONVERSIONS_VERIFIED".to_owned();
             record.issue.clear();
-        } else if attempt.attention_required {
+        } else if attempt.attention_required || recovery_attention {
             record.evidence_status = "PARTIAL_IMAGE_READ".to_owned();
             if record.issue.is_empty() {
-                record.issue = format!("{} unresolved sectors", record.bad_sectors);
+                record.issue = format!(
+                    "{} unresolved sectors{}",
+                    record.bad_sectors,
+                    if recovery_attention {
+                        "; native recovery does not certify complete filesystem recovery"
+                    } else {
+                        ""
+                    }
+                );
             }
         } else if record.extracted_files == 0 && record.issue.is_empty() {
             record.issue = "No recovered files are recorded.".to_owned();

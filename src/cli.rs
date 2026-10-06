@@ -91,6 +91,8 @@ Usage:
                                     Build/reuse an evidence-checked image composite
   fluxvault recovery fat N [--project PATH]
                                     Reconstruct only provable mirrored FAT sectors
+  fluxvault recovery extract N [--project PATH]
+                                    Recover intact FAT12 files from saved damaged images
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
   fluxvault conversion plan [--project PATH]
@@ -1020,7 +1022,10 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             if destination.is_none()
                 && ((positional.len() == 2 && positional[1] == "queue")
                     || (positional.len() == 3
-                        && matches!(positional[1].as_str(), "composite" | "fat" | "import"))) =>
+                        && matches!(
+                            positional[1].as_str(),
+                            "composite" | "fat" | "import" | "extract"
+                        ))) =>
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
@@ -1320,7 +1325,10 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 disk_number,
                 &|stage| eprintln!("{stage}"),
             )?;
-            needs_attention = matches!(result.status, "recovery" | "in_progress");
+            needs_attention = matches!(
+                result.status,
+                "recovery" | "in_progress" | "partial_recovered"
+            );
             if json_output {
                 Ok(json!({
                     "disk": result.disk_number,

@@ -55,6 +55,7 @@ pub struct ConversionJob {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecoveryMethod {
     Filesystem,
+    NativeFat12,
     DmdeFilesystem,
     Signature,
 }
@@ -63,6 +64,9 @@ impl RecoveryMethod {
     fn label(self) -> &'static str {
         match self {
             Self::Filesystem => "Filesystem recovery",
+            Self::NativeFat12 => {
+                "Native FAT12 readable-chain recovery; filesystem completeness unverified"
+            }
             Self::DmdeFilesystem => "DMDE filesystem recovery; artifact folders removed",
             Self::Signature => "Signature recovered; original filename unavailable",
         }
@@ -164,13 +168,18 @@ pub(crate) fn build_conversion_plan(
         };
         included_disks += 1;
         let floppy = format!("{disk_number:03}");
+        let native_recovery = content_root.join(EXTRACTION_MARKER).is_file()
+            && crate::extraction::verify_native_extraction(&content_root)?;
 
         for source in files {
             let forensic_path = source
                 .strip_prefix(&content_root)
                 .map_err(|error| format!("Forensic relatívútvonal-hiba: {error}"))?;
             let forensic_text = forensic_path.to_string_lossy().replace('/', "\\");
-            let (mut delivery_relative, recovery_method) = clean_delivery_path(forensic_path)?;
+            let (mut delivery_relative, mut recovery_method) = clean_delivery_path(forensic_path)?;
+            if native_recovery {
+                recovery_method = RecoveryMethod::NativeFat12;
+            }
             let original_delivery_relative = delivery_relative.clone();
 
             let source_sha256 = sha256_file(&source)?;
@@ -306,7 +315,7 @@ fn selected_recovered_files(
         .map(|entry| entry.path())
         .filter(|path| path.is_dir() && path.join(EXTRACTION_MARKER).is_file())
         .collect::<Vec<_>>();
-    managed.sort();
+    managed.sort_by_key(|path| crate::extraction::managed_directory_order(path));
     let Some(directory) = managed.pop() else {
         return Ok(None);
     };

@@ -10,6 +10,7 @@ use chrono::Local;
 use crate::{
     dmde_logs::DmdeLogStatus,
     extraction::{self, ExtractionPresence, ExtractionRequest},
+    fat12_recovery,
     imaging::{self, AttemptSummary},
     legacy_logs::ArchiverLogStatus,
     manifest::{self, ManifestRequest, ManifestResult},
@@ -161,7 +162,23 @@ pub(crate) fn run_single_disk_extraction(
         BatchDisposition::Recovery => {
             let reason = recovery_reason(attempt, &presence);
             backup(&reason)?;
-            ("recovery", reason, 0, false)
+            match native_recovery(request, disk_number, attempt, send_stage) {
+                Ok(result) => (
+                    "partial_recovered",
+                    format!(
+                        "{reason}; {} complete files recovered natively, {} entries skipped; disk remains partial",
+                        result.files, result.skipped_entries
+                    ),
+                    result.files,
+                    result.reused,
+                ),
+                Err(error) => (
+                    "recovery",
+                    format!("{reason}; native recovery unavailable: {error}"),
+                    0,
+                    false,
+                ),
+            }
         }
         BatchDisposition::Extract => {
             let extraction_request = ExtractionRequest {
@@ -183,12 +200,44 @@ pub(crate) fn run_single_disk_extraction(
                 Ok(_) => {
                     let reason = "Readable image produced zero recovered files".to_owned();
                     backup(&reason)?;
-                    ("recovery", reason, 0, false)
+                    match native_recovery(request, disk_number, attempt, send_stage) {
+                        Ok(result) => (
+                            "partial_recovered",
+                            format!(
+                                "{reason}; {} complete files recovered natively; completeness remains unverified",
+                                result.files
+                            ),
+                            result.files,
+                            result.reused,
+                        ),
+                        Err(error) => (
+                            "recovery",
+                            format!("{reason}; native recovery unavailable: {error}"),
+                            0,
+                            false,
+                        ),
+                    }
                 }
                 Err(error) => {
                     let reason = format!("FAT listing/extraction failed: {error}");
                     backup(&reason)?;
-                    ("recovery", reason, 0, false)
+                    match native_recovery(request, disk_number, attempt, send_stage) {
+                        Ok(result) => (
+                            "partial_recovered",
+                            format!(
+                                "{reason}; {} complete files recovered natively; completeness remains unverified",
+                                result.files
+                            ),
+                            result.files,
+                            result.reused,
+                        ),
+                        Err(native_error) => (
+                            "recovery",
+                            format!("{reason}; native recovery unavailable: {native_error}"),
+                            0,
+                            false,
+                        ),
+                    }
                 }
             }
         }
@@ -298,6 +347,15 @@ pub(crate) fn run_batch_extraction(
                     send_stage,
                     &mut row,
                 );
+                try_native_row(
+                    request,
+                    disk_number,
+                    attempt,
+                    send_stage,
+                    &mut row,
+                    &mut extracted_disks,
+                    &mut reused_disks,
+                );
                 broken.push(row.clone());
             }
             BatchDisposition::Extract => {
@@ -326,9 +384,8 @@ pub(crate) fn run_batch_extraction(
                     Ok(_) => {
                         row.status = "MANUAL".to_owned();
                         row.reason =
-                            "Readable image produced zero recovered files; operator review required"
+                            "Readable image produced zero recovered files; recovery required"
                                 .to_owned();
-                        zero_file_disks += 1;
                         let backup_reason = row.reason.clone();
                         ensure_backup(
                             request,
@@ -338,6 +395,16 @@ pub(crate) fn run_batch_extraction(
                             send_stage,
                             &mut row,
                         );
+                        try_native_row(
+                            request,
+                            disk_number,
+                            attempt,
+                            send_stage,
+                            &mut row,
+                            &mut extracted_disks,
+                            &mut reused_disks,
+                        );
+                        zero_file_disks += usize::from(!row.extracted);
                         broken.push(row.clone());
                     }
                     Err(error) => {
@@ -351,6 +418,15 @@ pub(crate) fn run_batch_extraction(
                             &backup_reason,
                             send_stage,
                             &mut row,
+                        );
+                        try_native_row(
+                            request,
+                            disk_number,
+                            attempt,
+                            send_stage,
+                            &mut row,
+                            &mut extracted_disks,
+                            &mut reused_disks,
                         );
                         broken.push(row.clone());
                     }
@@ -376,7 +452,13 @@ pub(crate) fn run_batch_extraction(
     write_summary(&summary_path, &rows)?;
     write_list(
         &broken_path,
-        "FLOPPIES REQUIRING MANUAL DMDE WORK",
+        "FLOPPIES WITH UNRESOLVED RECOVERY EXCEPTIONS (LEGACY DMDE LIST NAME)",
+        &broken,
+        true,
+    )?;
+    write_list(
+        &request.reports_directory.join("RecoveryExceptions.txt"),
+        "FLOPPIES WITH UNRESOLVED RECOVERY EXCEPTIONS",
         &broken,
         true,
     )?;
@@ -448,7 +530,60 @@ fn classify_attempt(attempt: &AttemptSummary, presence: &ExtractionPresence) -> 
         return BatchDisposition::Recovery;
     }
 
+    if matches!(
+        presence,
+        ExtractionPresence::Automatic {
+            recovery_attention: true,
+            ..
+        }
+    ) {
+        return BatchDisposition::Recovery;
+    }
+
     BatchDisposition::Extract
+}
+
+fn native_recovery(
+    request: &BatchExtractionRequest,
+    disk: u32,
+    attempt: &AttemptSummary,
+    stage: &impl Fn(&str),
+) -> Result<fat12_recovery::RecoveryResult, String> {
+    fat12_recovery::recover_attempt(
+        &request.images_directory,
+        &request.extracted_root,
+        &request.recovery_root,
+        disk,
+        attempt,
+        stage,
+    )
+}
+
+fn try_native_row(
+    request: &BatchExtractionRequest,
+    disk: u32,
+    attempt: &AttemptSummary,
+    stage: &impl Fn(&str),
+    row: &mut SummaryRow,
+    extracted: &mut usize,
+    reused: &mut usize,
+) {
+    match native_recovery(request, disk, attempt, stage) {
+        Ok(result) => {
+            row.status = "PARTIAL: NATIVE RECOVERY".to_owned();
+            row.reason = format!(
+                "{}; native FAT12 recovered {} complete files, skipped {} entries; report: {}",
+                row.reason,
+                result.files,
+                result.skipped_entries,
+                result.report_path.display()
+            );
+            row.extracted = result.files > 0;
+            *extracted += usize::from(result.files > 0);
+            *reused += usize::from(result.reused);
+        }
+        Err(error) => row.reason = format!("{}; native recovery unavailable: {error}", row.reason),
+    }
 }
 
 fn select_best_attempt(attempts: &[AttemptSummary], best_number: u32) -> Option<&AttemptSummary> {
@@ -479,6 +614,15 @@ fn base_row(disk_number: u32, attempt: &AttemptSummary) -> SummaryRow {
 }
 
 fn recovery_reason(attempt: &AttemptSummary, presence: &ExtractionPresence) -> String {
+    if matches!(
+        presence,
+        ExtractionPresence::Automatic {
+            recovery_attention: true,
+            ..
+        }
+    ) {
+        return "Native recovery present; disk/filesystem completeness remains unverified".into();
+    }
     if let ExtractionPresence::InvalidAutomatic { detail, .. } = presence {
         return format!("Invalid managed extraction: {detail}");
     }

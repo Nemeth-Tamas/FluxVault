@@ -49,3 +49,20 @@ fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 ```
 
 No USB scan is required. See [CHEATSHEET.md](CHEATSHEET.md) for the operator loop and [CLI.md](CLI.md) for policy/resume limits. A repeated completed job is reused, not physically reread. For a fresh hardware test, use a separate project or expert `capture`.
+
+## Saved-image native recovery check — 2026-10-06
+
+No floppy was inserted or read for these checks. The existing WinWord 1 derived image above was used unchanged.
+
+| Check | Observed result |
+| --- | --- |
+| `recovery extract 1` | 22 complete reachable FAT12 files, 1,208,710 bytes; no skipped reachable entries |
+| Source preservation | Image SHA-256 still `4031e5011e0b14dbba8ae30d1e38594c06d72bb869280cb0ead16143502049eb` |
+| Native provenance | `Recovery/001/attempt_001_fat12.json`; per-file hashes, data/metadata LBAs and FAT-copy/chain evidence |
+| `process` | Verified/reused native extraction; refreshed file manifest, mirrored delivery originals, audit and Hungarian XLSX; no Office candidates |
+| Audit | 22 file hashes verified, `PARTIAL_VERIFIED_FILES`; disk still `PARTIAL_IMAGE_READ`, one unreadable sector, no customer-delivery certification |
+| Independent file-byte cross-check | Fresh legacy-layout copy of the same image/log: all 22 file SHA-256 values and total bytes match independent 7-Zip extraction; DOS installer underscores such as `.EX_` preserved |
+
+The parser reached an intact directory end marker before the bad root-directory sector (LBA 24); its report therefore has no traversed directory gap. The bad LBA remains explicit in acquisition/native evidence and audit. This recovers the currently reachable files, not proof that no deleted/orphaned files or other data were lost. No filenames/bytes were guessed, no existing extraction was replaced, and no new raw capture was requested.
+
+The 22 files include 21 installer files and one 76-byte Windows `IndexerVolumeGuid` artifact, recovered under its recorded 8.3 path `SYSTEM~1/INDEXE~1`. Validated long-name reconstruction and identifying/excluding OS metadata through those names are still future work; do not interpret 22 as 22 customer-authored files. The fresh comparison project is `C:\Users\User\Desktop\FluxVault-Test\Native-WinWord-Validation-b00fdb628f334dcdad274a15720cc1f7`; earlier development output is preserved separately in the original test project.

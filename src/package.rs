@@ -271,6 +271,7 @@ fn is_customer_report(name: &str, latest_workbook: Option<&str>) -> bool {
         "evidenceaudit.csv",
         "evidenceaudit.json",
         "offlinerecoverydecisions.json",
+        "recoveryexceptions.txt",
     ];
     EXACT.contains(&normalized.as_str())
         || (normalized.starts_with("finalaudit")
@@ -645,5 +646,16 @@ mod tests {
         );
         assert!(result.unwrap_err().contains("outside"));
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn customer_reports_include_native_recovery_exceptions_not_internal_markers() {
+        assert!(is_customer_report("RecoveryExceptions.txt", None));
+        assert!(!is_customer_report("private-recovery-note.txt", None));
+        assert!(!should_exclude(Path::new(
+            "Recovery/001/attempt_001_fat12.json"
+        )));
+        assert!(should_exclude(Path::new(
+            "Extracted/001/attempt_001_native/.fluxvault-fat12.json"
+        )));
     }
 }

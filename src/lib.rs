@@ -7,6 +7,8 @@ pub mod conversion_run;
 pub mod dmde_logs;
 pub mod external_tools;
 pub mod extraction;
+pub mod fat12;
+pub mod fat12_recovery;
 pub mod floppy;
 pub mod flux_capture;
 pub mod flux_recovery;

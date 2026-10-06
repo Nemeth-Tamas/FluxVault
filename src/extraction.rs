@@ -15,6 +15,23 @@ use crate::external_tools;
 const EXTRACTION_SCHEMA_VERSION: u32 = 1;
 const MARKER_FILE_NAME: &str = ".fluxvault-extraction.json";
 const INVENTORY_FILE_NAME: &str = ".fluxvault-inventory.json";
+pub(crate) const FAT12_REPORT_NAME: &str = ".fluxvault-fat12.json";
+
+/// Numbered managed attempts outrank legacy output; native is the same attempt's fallback.
+pub(crate) fn managed_directory_order(path: &Path) -> (u32, bool, String) {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let native = name.ends_with("_native");
+    let base = name.strip_suffix("_native").unwrap_or(&name);
+    let number = base
+        .strip_prefix("attempt_")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    (number, native, name)
+}
 
 #[derive(Debug, Clone)]
 pub struct ExtractionRequest {
@@ -55,6 +72,7 @@ pub enum ExtractionPresence {
         file_count: usize,
         total_bytes: u64,
         source_sha256: String,
+        recovery_attention: bool,
     },
     ManualRecovery {
         output_directory: PathBuf,
@@ -75,6 +93,8 @@ struct ExtractionMarker {
     extracted_unix_ms: u64,
     file_count: usize,
     total_bytes: u64,
+    #[serde(default)]
+    native_recovery_report_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +142,15 @@ pub fn inspect_extraction_presence(
         disk_directory.join(format!("attempt_{attempt_number:03}"))
     };
 
+    let native_directory = disk_directory.join(if attempt_number == 0 {
+        "legacy_native".to_owned()
+    } else {
+        format!("attempt_{attempt_number:03}_native")
+    });
+    if native_directory.is_dir() {
+        return inspect_candidate_directory(&native_directory);
+    }
+
     if expected_directory.is_dir() {
         return inspect_candidate_directory(&expected_directory);
     }
@@ -139,6 +168,19 @@ pub fn inspect_extraction_presence(
     }
 
     Ok(ExtractionPresence::Missing { expected_directory })
+}
+
+/// Native files must retain their source-bound inventory and recovery report before delivery.
+pub(crate) fn verify_native_extraction(directory: &Path) -> Result<bool, String> {
+    let marker: ExtractionMarker = serde_json::from_slice(
+        &fs::read(directory.join(".fluxvault-extraction.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if marker.native_recovery_report_sha256.is_none() {
+        return Ok(false);
+    }
+    verify_managed_extraction(directory, &marker.source_sha256)?;
+    Ok(true)
 }
 
 /// Re-hash all managed files before an extraction is trusted or reused.
@@ -202,6 +244,33 @@ pub(crate) fn verify_managed_extraction(
             ));
         }
     }
+    if let Some(expected) = &marker.native_recovery_report_sha256 {
+        let report_path = output_directory.join(FAT12_REPORT_NAME);
+        if !sha256_file(&report_path)?.eq_ignore_ascii_case(expected) {
+            return Err("Native recovery provenance changed".to_owned());
+        }
+        let report: crate::fat12_recovery::RecoveryReport =
+            serde_json::from_slice(&fs::read(&report_path).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("Invalid native recovery provenance: {e}"))?;
+        if report.schema_version != 1
+            || report.source_sha256 != expected_source_sha256
+            || report.method != "native_fat12_readable_chains"
+            || report.analysis.recovered_files.len() != actual.len()
+        {
+            return Err("Native recovery provenance does not match managed extraction".to_owned());
+        }
+        for (file, native) in actual.iter().zip(&report.analysis.recovered_files) {
+            if file.relative_path != native.path
+                || file.bytes != native.bytes as u64
+                || file.sha256 != native.sha256
+            {
+                return Err(format!(
+                    "Native file provenance differs: {}",
+                    file.relative_path
+                ));
+            }
+        }
+    }
     Ok((actual.len(), total_bytes))
 }
 
@@ -222,6 +291,7 @@ fn inspect_candidate_directory(path: &Path) -> Result<ExtractionPresence, String
                 file_count: marker.file_count,
                 total_bytes: marker.total_bytes,
                 source_sha256: marker.source_sha256,
+                recovery_attention: marker.native_recovery_report_sha256.is_some(),
             }),
             Err(error) => Ok(ExtractionPresence::InvalidAutomatic {
                 output_directory: path.to_path_buf(),
@@ -461,6 +531,7 @@ pub(crate) fn run_extraction(
         extracted_unix_ms: current_unix_ms(),
         file_count,
         total_bytes,
+        native_recovery_report_sha256: None,
     };
 
     if let Err(error) = write_json(
@@ -544,6 +615,46 @@ fn reuse_existing_extraction(
     })
 }
 
+/// Native recovery shares the same per-file integrity contract as 7-Zip.
+pub(crate) fn write_native_managed_metadata(
+    directory: &Path,
+    image: &Path,
+    source_sha256: &str,
+    report_sha256: String,
+) -> Result<(usize, u64), String> {
+    let files = inventory_files(directory)?;
+    let file_count = files.len();
+    let total_bytes = files.iter().map(|file| file.bytes).sum();
+    let source_image = image
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let inventory = ExtractionInventory {
+        schema_version: EXTRACTION_SCHEMA_VERSION,
+        source_image: source_image.clone(),
+        source_sha256: source_sha256.to_owned(),
+        files,
+    };
+    let marker = ExtractionMarker {
+        schema_version: EXTRACTION_SCHEMA_VERSION,
+        source_image,
+        source_sha256: source_sha256.to_owned(),
+        extracted_unix_ms: current_unix_ms(),
+        file_count,
+        total_bytes,
+        native_recovery_report_sha256: Some(report_sha256),
+    };
+    write_json(
+        &directory.join(INVENTORY_FILE_NAME),
+        &inventory,
+        "native inventory",
+    )?;
+    write_json(&directory.join(MARKER_FILE_NAME), &marker, "native marker")?;
+    verify_managed_extraction(directory, source_sha256)?;
+    Ok((file_count, total_bytes))
+}
+
 #[cfg(test)]
 fn parse_attempt_name(image_path: &Path) -> Result<(u32, u32), String> {
     let stem = image_path
@@ -608,7 +719,11 @@ fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String> {
             if path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name == MARKER_FILE_NAME || name == INVENTORY_FILE_NAME)
+                .is_some_and(|name| {
+                    name == MARKER_FILE_NAME
+                        || name == INVENTORY_FILE_NAME
+                        || name == FAT12_REPORT_NAME
+                })
             {
                 continue;
             }
@@ -778,6 +893,7 @@ mod tests {
             extracted_unix_ms: 0,
             file_count: 1,
             total_bytes: data.len() as u64,
+            native_recovery_report_sha256: None,
         };
         fs::write(
             root.join(INVENTORY_FILE_NAME),
@@ -868,6 +984,7 @@ mod tests {
             extracted_unix_ms: 1,
             file_count: 2,
             total_bytes: 42,
+            native_recovery_report_sha256: None,
         };
         write_json(
             &output_directory.join(MARKER_FILE_NAME),
@@ -932,4 +1049,21 @@ mod tests {
         );
         fs::remove_dir_all(case_root).expect("test output cleanup should succeed");
     }
+}
+#[test]
+fn managed_order_does_not_let_legacy_native_hide_a_later_attempt() {
+    let mut paths = [
+        "legacy_native",
+        "attempt_999_native",
+        "attempt_1000",
+        "attempt_001",
+        "legacy",
+    ]
+    .map(PathBuf::from);
+    paths.sort_by_key(|p| managed_directory_order(p));
+    assert_eq!(paths.last().unwrap(), Path::new("attempt_1000"));
+    assert!(
+        managed_directory_order(Path::new("attempt_001_native"))
+            > managed_directory_order(Path::new("attempt_001"))
+    );
 }

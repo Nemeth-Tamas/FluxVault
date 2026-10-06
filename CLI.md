@@ -18,6 +18,7 @@ fluxvault recovery compare 7
 fluxvault recovery backup 7
 fluxvault recovery composite 7
 fluxvault recovery fat 7
+fluxvault recovery extract 7
 fluxvault tools check
 fluxvault tools show
 fluxvault greaseweazle preview
@@ -71,7 +72,7 @@ Raw captures and decodes remain separately hashed. A durable per-disk journal in
 
 The final numbered image in `Images` has compatible acquisition metadata/logs and a hashed provenance map. Agreeing independent captures are labeled corroborated; sectors reported good in only one capture remain explicitly lower confidence. Conflicting/unreadable sectors are zero-filled and marked bad, never silently chosen or guessed. This is an immutable derived image, not an untouched raw capture or customer-delivery certification.
 
-By default `recover` runs the project-wide `process` chain afterward (recovery/extraction, conversion, audit, workbook). `--acquisition-only` skips it. Unresolved partial images can still be withheld from extraction; native damaged-filesystem recovery/carving remains open. Repeat invocation can retry downstream processing with zero new physical reads, even with the board disconnected. Completed jobs do not start a new recovery budget; `capture` remains the expert path for a deliberately new attempt.
+By default `recover` runs the project-wide `process` chain afterward (recovery/extraction, conversion, audit, workbook). `--acquisition-only` skips it. Partial FAT12 images now automatically get native readable-chain extraction when their saved evidence establishes a complete sector map; unknown maps or unsupported layouts remain exceptions. Repeat invocation can retry downstream processing with zero new physical reads, even with the board disconnected. Completed jobs do not start a new recovery budget; `capture` remains the expert path for a deliberately new attempt.
 
 `--policy C:\path\to\policy.json` accepts this structure:
 
@@ -99,6 +100,22 @@ Limits: 1–8 passes, 30–1800 seconds, 1–3 non-improving passes, 1–10 revo
 Failed or interrupted offline decodes retain a numbered `.partial.json` attempt record (and any partial image). `greaseweazle status N` shows these as needing attention, and the next decode uses a new number instead of overwriting the failed attempt.
 
 Office/PDF reuse requires both a matching saved source hash and a matching saved output hash, even after a restart. An older valid-looking output with no saved binding is preserved and reported as an issue rather than silently claimed as current conversion evidence. `conversion issues` reloads saved issues on every invocation.
+
+### Native file recovery from damaged saved images
+
+```powershell
+fluxvault recovery extract 7
+```
+
+This command needs no physical disk or external extraction tool. `extract disk N`, `extract all`, and `process` also try the same native fallback automatically for partial images, failed extraction/listing, or zero-file extraction. Those wider commands still require their normal external tools.
+
+Native recovery requires a hash-matching image, a recognized completed acquisition log/map, readable boot-sector geometry, and a supported unpartitioned FAT12 volume (512-byte sectors, at most 4 MiB). It traverses intact directory entries and FAT chains, including fragmented files and nested directories. A readable FAT copy can supply an entry missing from the other; readable copies that disagree are refused. Missing directory sectors, chain cycles, cross-links, size mismatches and unreadable file content are recorded rather than guessed.
+
+Files are published separately under `Extracted/NNN/attempt_NNN_native` (or `legacy_native`), preserving earlier extraction/manual recovery. Provenance is in `Recovery/NNN/attempt_NNN_fat12.json`, with source hash, per-file hashes, content/metadata LBAs, allocation links, skipped entries and directory gaps. The internal report and files are hash-bound to the managed inventory and rechecked before reuse/delivery mirroring. Existing differing files/reports are not silently replaced.
+
+The current slice uses 8.3 filenames; non-ASCII OEM bytes are escaped with their raw bytes retained in provenance. It does **not** reconstruct long filenames, deleted/orphaned files, missing boot metadata or carve files. Complete recovered file bytes are not a claim that the entire disk or customer job was recovered; single-capture confidence is not upgraded. `recovery extract` returns attention code **3**, including successful reuse. Batch recovery exceptions appear in `RecoveryExceptions.txt`; `BrokenForDMDE.txt` remains a compatibility filename, not a mandatory manual-DMDE instruction.
+
+Saved-image validation on 2026-10-06 recovered **22 files / 1,208,710 bytes** from WinWord 1, preserved the original image SHA-256, reused them through `process`, and retained partial audit status for unreadable LBA 24. There were no new physical reads and no Office conversion candidates on that installer disk. This is not a full corrupted-filesystem recovery benchmark.
 
 `finalize --destination PATH` combines saved-image processing and package verification in one command. It requires at least one image and an existing destination outside the project. If recovery, conversion, or audit still needs attention, it reports that status and does **not** create a package. A successfully verified archival ZIP is still not a certification that every original customer byte was recovered.
 

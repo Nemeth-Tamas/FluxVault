@@ -10,6 +10,8 @@
 
 > **Greaseweazle-only priority (2026-10-05):** USB is optional. On the working Mitsumi drive (straight cable, selector B), start fast, decode preserved raw evidence, and escalate only problem areas within time/media-stress limits. Routine drive/ribbon swapping is not part of the workflow. `greaseweazle recover N` now implements a bounded single-disk slice and dispatches saved-image processing; automatic format discovery, damaged-filesystem extraction, the guided GW batch loop, and production scheduling remain open. See `CHAT_TO_CHAT_GREASEWEAZLE.md` for the hardware handoff and `GREASEWEAZLE_PREFLIGHT.md` for live results.
 
+> **Native recovery checkpoint (2026-10-06):** Saved partial FAT12 images now automatically yield independently intact files through native readable-chain extraction. The saved WinWord 1 capture produced 22 files / 1,208,710 bytes, with unchanged source hash and the unreadable sector still flagged. This replaces manual extraction for that bounded case, not full DMDE capability: missing boot/directory reconstruction, long filenames, deleted/orphaned chains, carving, automatic format discovery and production scheduling remain open.
+
 ## 0. Development contract / project rules
 
 - [x] Rust stable, Windows-first application.
@@ -146,6 +148,9 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [x] Build/update a project-wide recovered-file manifest.
 - [x] Batch extraction selects the best known attempt rather than blindly using the latest; managed manifest rows use the exact extraction source hash and re-verify file integrity.
 - [x] Run project-wide batch extraction/recovery routing and emit script-compatible summary/review lists.
+- [x] Automatically try native FAT12 readable-chain extraction for partial images, failed 7-Zip extraction/listing, or zero-file results; retain partial status, immutable backups, and legacy report compatibility.
+- [x] Publish native files into separate `attempt_NNN_native`/`legacy_native` managed folders with source/file/provenance hashes; verify unchanged files and reports before reuse or delivery mirroring, without replacing existing extraction/manual recovery.
+- [x] Emit `RecoveryExceptions.txt` alongside legacy `BrokenForDMDE.txt`; unresolved cases are exceptions, not instructions to do manual DMDE as the default workflow.
 - [x] Route these cases to Recovery instead of pretending success:
   - [x] non-clean image / unreadable sectors;
   - [x] missing/unrecognized acquisition log;
@@ -181,6 +186,11 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 - [ ] Build an automatic recovery policy engine that selects the next safe action from evidence and stops at configurable media-stress/time limits.
 - [ ] Automatically combine all USB attempts, retry-recovered sectors, reconstructed FAT copies, and later flux-derived sector images into the best provenance-tracked derived image.
 - [ ] Implement native FAT12 filesystem analysis/reconstruction sufficient to recover directory trees when 7-Zip cannot mount the image.
+  - [x] Traverse intact root/subdirectory entries and fragmented FAT12 file chains from hash-checked saved images with complete acquisition maps; skip unreadable directory sectors and recover intact reachable files beyond those gaps.
+  - [x] Consult every readable FAT copy; refuse disagreement, loops, invalid sizes, cross-linked ownership, unsafe/duplicate paths and unreadable file content rather than guessing or exporting zero-filled files.
+  - [x] Record per-file data/metadata LBAs, cluster links, FAT-copy sources, raw short-name bytes and DOS timestamps; bind this report to the managed inventory and retain partial audit status.
+  - [ ] Reconstruct missing boot/directory metadata and validated long filenames from sufficient recorded evidence; the current parser requires a readable BPB and uses safe 8.3 names (escaping non-ASCII OEM bytes).
+  - [ ] Use validated long names to identify/exclude Windows OS metadata from delivery, without guessing that every `SYSTEM~1` alias is `System Volume Information`. The saved WinWord fixture has one such 76-byte artifact among its 22 reachable files.
 - [ ] Use both FAT copies, boot-sector/BPB evidence, root-directory entries, cluster chains, file sizes, and cross-attempt sector provenance to reconstruct damaged filesystems without arbitrary byte guessing.
 - [ ] Add automatic deleted/orphaned cluster-chain recovery where FAT12 evidence supports it, clearly labeling confidence and recovery method.
 - [ ] Add signature-based file carving as an automatic fallback for unreconstructable filesystems, preserving raw offsets and labeling filenames/paths as reconstructed.
@@ -282,6 +292,7 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
 - [x] Remove DMDE artifact path segments from delivery paths (`$Noname`, `$Root`, raw-signature folders) while preserving forensic path mapping.
 - [x] Resolve name collisions deterministically (`[recovered copy N]`).
 - [x] Preserve recovery-method labels: normal filesystem, DMDE filesystem recovery, signature recovery.
+  - [x] Label native FAT12 files distinctly as readable-chain recovery with unverified filesystem completeness in delivery-path reports and conversion jobs.
 - [x] Support current source extensions/plans:
   - [x] Word-family -> DOCX + PDF: `.doc`, `.rtf`, `.wps`, `.wri`, `.wpd`, `.sdw`.
   - [x] Spreadsheet-family -> XLSX + PDF: `.xls`, `.xlw`, `.xlt`, `.wk1`, `.wk3`, `.wk4`, `.wks`, `.123`, `.wb1`, `.wb2`, `.wq1`, `.wq2`, `.sdc`.
@@ -368,6 +379,10 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [ ] Unit tests for project persistence and migrations.
 - [x] Unit tests for SHA/integrity helpers.
 - [x] Fixture-based tests using scrubbed/sample logs and tiny synthetic images; never require a customer floppy for automated tests.
+- [x] Native FAT12 fixtures cover fragmented chains, directory gaps, FAT-copy fallback/conflicts, FAT entries crossing sector boundaries, loops/cross-links, unsafe paths and 701-bad-sector recovery of an independently intact file.
+- [x] Native service/CLI tests cover hash/map refusal, immutable source/manual preservation, inventory/report tampering, verified reuse and partial files flowing through batch extraction, manifests, delivery mirroring and audit with no hardware.
+- [x] Preserve valid DOS installer underscores and escape-prefix uniqueness; select managed generations numerically so legacy native output cannot hide a later numbered extraction.
+- [x] Validate native recovery on the saved WinWord 1 Greaseweazle image: 22 intact files, unchanged image hash, zero new physical reads, repeat reuse and downstream partial audit/workbook.
 - [x] Integration test for 7-Zip adapter.
 - [x] Integration test for LibreOffice adapter when installed.
 - [x] Greaseweazle hardware tests marked/isolated so normal `cargo test` works without hardware.
@@ -398,6 +413,7 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
 - [x] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
   - [x] `extract all` uses the shared batch service, recovery backups, manual-recovery detection, and manifest generation without requiring LibreOffice.
   - [x] `extract disk N` uses the same eligibility rules, preserves operator recovery, makes/reuses the immutable pass-1 backup when needed, and refreshes the file manifest.
+  - [x] `recovery extract N` invokes native FAT12 recovery on saved evidence without 7-Zip, LibreOffice or hardware; refreshes the manifest, supports JSON and returns attention code 3 rather than certifying complete recovery.
 - [x] Recovery commands for queue/status, attempt comparison, composite creation, and DMDE result import.
   - [x] `recovery plan`, `recovery compare N`, and idempotent `recovery backup N` operate on saved evidence without physical-drive access.
   - [x] `recovery queue`, `recovery composite N`, `recovery fat N`, and guarded `recovery import N --source DIR --dmde-log FILE` use the saved-image and evidence-import services.
