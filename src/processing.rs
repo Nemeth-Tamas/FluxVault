@@ -114,7 +114,7 @@ fn contained_directory(parent: &Path, child: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_workspace(project: &ProjectState) -> Result<(), String> {
+pub(crate) fn validate_workspace(project: &ProjectState) -> Result<(), String> {
     let root = project.root().canonicalize().map_err(|e| e.to_string())?;
     let name = root.to_string_lossy().to_ascii_uppercase();
     if ["A:", "B:", "\\\\?\\A:", "\\\\?\\B:"]

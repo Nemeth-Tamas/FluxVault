@@ -722,6 +722,14 @@ mod tests {
     fn customer_reports_include_native_recovery_exceptions_not_internal_markers() {
         assert!(is_customer_report("RecoveryExceptions.txt", None));
         assert!(!is_customer_report("private-recovery-note.txt", None));
+        for name in [
+            "BaselineComparison-123.json",
+            "BaselineComparison-123.csv",
+            "TestSummary-123.txt",
+            "TestSummary-123.json",
+        ] {
+            assert!(!is_customer_report(name, None));
+        }
         assert!(!should_exclude(Path::new(
             "Recovery/001/attempt_001_fat12.json"
         )));

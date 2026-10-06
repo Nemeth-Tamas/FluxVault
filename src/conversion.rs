@@ -370,6 +370,11 @@ fn collect_files(root: &Path, skip_managed_children: bool) -> Result<Vec<PathBuf
     Ok(files)
 }
 
+/// Same safe presentation normalization used for source-only comparisons.
+pub(crate) fn comparison_path(path: &Path) -> Result<PathBuf, String> {
+    clean_delivery_path(path).map(|(path, _)| path)
+}
+
 fn clean_delivery_path(path: &Path) -> Result<(PathBuf, RecoveryMethod), String> {
     let mut clean = Vec::new();
     let mut signature = false;

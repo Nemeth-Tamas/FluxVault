@@ -8,10 +8,19 @@ The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finish
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
 | Single-Greaseweazle 136-disk benchmark readiness | approximately 95% | Real saved-evidence processing and deterministic 136-job/scan soaks pass; numbered/Enter swaps, limits, resume, telemetry, raw-only exceptions and packed storage exist. Live overlap and full-cohort acceptance remain the final readiness gate. |
-| Whole TODO list | 300 / 443 = 67.7% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
+| Whole TODO list | 304 / 448 = 67.9% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
 | Fully autonomous recovery/product ambition | approximately 65% | Routine acquisition and durable downstream scheduling work. Severe filesystem damage/carving, additional format decoders and two-station custody/resource control remain substantial work. |
 
 These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
+
+## Next-test preparation and actual file baseline
+
+- `benchmark compare --baseline ZIP` compares original recovered payloads within acquired disk numbers, with one-to-one hash/path matching, source-image context, older managed-generation verification and immutable JSON/CSV exports. The ZIP is streamed, never unpacked or modified. Ownership covers inventory through report publication.
+- Default scoring excludes confirmed deleted reference payloads; `--include-deleted` expands **comparison only**. Deleted recovery remains OFF and future extraction opt-in is explicit in TODO. Unknown/carved/ambiguous entries remain visible and in scope, not automatically labeled deleted.
+- Actual saved 001–020: 181/188 in-scope payloads byte-identical, one changed, six missing. Saved 053–064: 81/88 identical, four changed, three missing; all latter differences are on 058 with mixed live/deleted draft versions and different source-image bytes. Both live 059 documents and all eight 062 reference payloads match exactly; ten confirmed deleted 059 payloads are excluded by default. These are sample file-byte comparisons, not product-completeness percentages or same-evidence yield claims.
+- [TOMORROW_TEST.md](TOMORROW_TEST.md) and `scripts/start-pilot.ps1` provide fresh isolated 009/058 checks, resumable ranges and offline collect-only summaries. Windows PowerShell integration verifies collection without a scan journal, tool audit or physical hardware. Historical baseline details: [BASELINE_COMPARISON.md](BASELINE_COMPARISON.md).
+- Baseline/launcher tests cover scope defaults, UTF-16 classification, ambiguous duplicate names, matching multiplicity, unsafe/duplicate ZIPs, archive mutation, inventory tampering, older output generations, competing ownership and snapshot/source preservation. Internal results remain excluded from customer packages.
+- Verification: 248 regular tests pass with zero failures; 11 environment-dependent tests remain ignored in the routine suite. Formatting/all-target checking pass. The rebuilt release launcher also collected the real saved 053–064 result set offline, without hardware.
 
 ## Continuous processing and raw-only continuation checkpoint
 

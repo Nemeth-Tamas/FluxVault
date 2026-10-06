@@ -5,7 +5,9 @@
 > [!IMPORTANT]
 > `A:` is the **Windows USB floppy drive**. Greaseweazle's `--gw-drive A` is a **different drive selector**. Do not use a customer disk to test write protection. The USB acquisition commands require an independently verified write blocker and a positive Windows protection report; the flag does not bypass either check.
 
-**Ready for the current Greaseweazle run?** Start with [the fresh 136-disk runbook](PILOT_136.md), beginning with its short hardware checks. [The completed 20-disk pilot](PILOT_20.md) is historical; do not recreate it.
+**Tomorrow's short test:** [TOMORROW_TEST.md](TOMORROW_TEST.md) has two paste-ready commands and a launcher that creates a fresh project and gathers the results. [The 136-disk runbook](PILOT_136.md) covers the larger run; [the completed 20-disk pilot](PILOT_20.md) is historical.
+
+**Reference comparison:** `fv benchmark compare --baseline 'C:\path\archive.zip'` checks source-file hashes offline. Deleted recovery is off by default; `--include-deleted` expands this comparison only, not extraction. See [comparison scope and measured results](BASELINE_COMPARISON.md).
 
 **Everyday short command:** the installer now provides `fv` as well as `fluxvault`. `fv scan` runs the Greaseweazle loop using saved project settings; enter just the displayed number (`004`), or `QUIT`. See [Policies without homework](POLICIES.md) for optional expert controls. Explicit `scan --drive A:` remains the guarded USB workflow.
 

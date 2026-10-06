@@ -6,6 +6,8 @@
 
 ## 1. Start with a small hardware smoke test
 
+For the shortest next-session path, use [TOMORROW_TEST.md](TOMORROW_TEST.md): its launcher creates an isolated project, runs 009 or 058, and gathers a pasteable summary and baseline comparison. The manual steps below remain available.
+
 Use a **new project folder**, separate from the old script archive and earlier test captures. Never reset or recreate `FluxVault-Test`. A fresh project ensures this is a fresh physical-read benchmark, not reuse of earlier completed recovery jobs.
 
 Use the freshly built executable directly, so an older installed copy cannot accidentally be used:

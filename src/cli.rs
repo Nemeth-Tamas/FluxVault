@@ -47,6 +47,8 @@ Usage:
   fluxvault status [--project PATH] Show project status
   fluxvault benchmark report [--project PATH]
                                     Export recorded pilot timings and recovery outcomes offline
+  fluxvault benchmark compare --baseline ZIP [--include-deleted] [--project PATH]
+                                    Compare recovered source payloads with a script archive offline
   fluxvault storage benchmark N [--project PATH]
                                     Measure verified lossless capture compression; no evidence changed
   fluxvault storage pack N [--capture-attempt N] [--retire-raw]
@@ -148,6 +150,8 @@ Options:
   --last-disk N                     Stop GW scan after this numbered disk, across restarts
   --write-blocker-verified          Operator asserts separate hardware protection test
   --source DIR                      External recovered-files folder for DMDE import
+  --baseline ZIP                    Script archive for recovered-payload comparison
+  --include-deleted                  Include confirmed DMDE deleted files in comparison only
   --dmde-log FILE                   Matching DMDE log for recovery import
   --conversion-workers N            Parallel Office jobs (1-16; default 4); scan saves this setting
   --details                        Include bad-sector LBAs and evidence paths in disk show
@@ -215,6 +219,8 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut write_blocker_verified = false;
     let mut import_source: Option<PathBuf> = None;
     let mut import_log: Option<PathBuf> = None;
+    let mut baseline_zip: Option<PathBuf> = None;
+    let mut include_deleted = false;
     let mut conversion_workers: Option<usize> = None;
     let mut details = false;
     let mut gw_drive: Option<char> = None;
@@ -236,6 +242,13 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--json" => json_output = true,
+            "--include-deleted" => include_deleted = true,
+            "--baseline" => {
+                index += 1;
+                baseline_zip = Some(PathBuf::from(
+                    args.get(index).ok_or("--baseline requires a ZIP file")?,
+                ));
+            }
             "--details" => details = true,
             "--no-verify" => no_verify = true,
             "--retire-raw" => retire_raw = true,
@@ -517,6 +530,13 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
 
     let mut needs_attention = false;
+    if (baseline_zip.is_some() || include_deleted)
+        && !(positional.len() == 2 && positional[0] == "benchmark" && positional[1] == "compare")
+    {
+        return Err(
+            "--baseline and --include-deleted are only valid with benchmark compare".into(),
+        );
+    }
     let workstation_write = matches!(
         positional.first().map(String::as_str),
         Some("process" | "extract" | "files" | "audit" | "report" | "package" | "acquire")
@@ -664,6 +684,43 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             } else {
                 Ok(format!("Lossless capture benchmark: disk {disk:03}, attempt {:03} (largest verified capture; not a whole-project estimate).\n{}\nSource unchanged. No files compressed in place; no physical media access.", result.capture_attempt,
                     result.measurements.iter().map(|m| format!("ZIP/Deflate {}: {:.2} MiB -> {:.2} MiB ({:.1}% saved); {:.2}s compression, {:.2}s roundtrip verification; SHA-256 MATCH", m.level, m.source_bytes as f64 / 1048576.0, m.compressed_bytes as f64 / 1048576.0, m.saved_percent, m.compression_seconds, m.verification_seconds)).collect::<Vec<_>>().join("\n")))
+            }
+        }
+        Some("benchmark")
+            if positional.len() == 2 && positional[1] == "compare" && destination.is_none() =>
+        {
+            let baseline = baseline_zip.ok_or("benchmark compare requires --baseline ZIP")?;
+            let baseline = if baseline.is_absolute() {
+                baseline
+            } else {
+                cwd.join(baseline)
+            };
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let (result, summary, files_csv) =
+                crate::baseline::run(&project, &baseline, include_deleted, &|s| eprintln!("{s}"))?;
+            needs_attention = result.missing_payloads > 0
+                || result.changed_payloads > 0
+                || result.reference_payloads == 0;
+            if json_output {
+                Ok(json!({"comparison":result,"summary":summary,"files_csv":files_csv,"physical_media_access":false}).to_string())
+            } else {
+                Ok(format!(
+                    "Baseline payload comparison: {} acquired disks; {} reference payloads.\nIdentical bytes: {}; changed: {}; missing: {}; current-only: {}.\nConfirmed deleted reference files: {}. Unknown/carved/ambiguous content remains in scope. This flag controls comparison, not recovery.\nUnscanned reference disks are excluded. Image differences, temporary/empty files and recovery-tool reports are recorded separately; this is not delivery certification.\nSummary: {}\nFile comparison: {}",
+                    result.selected_disks.len(),
+                    result.reference_payloads,
+                    result.matched_payloads,
+                    result.changed_payloads,
+                    result.missing_payloads,
+                    result.current_only_payloads,
+                    if result.include_deleted {
+                        "included by explicit opt-in"
+                    } else {
+                        "excluded by default"
+                    },
+                    summary.display(),
+                    files_csv.display()
+                ))
             }
         }
         Some("benchmark")

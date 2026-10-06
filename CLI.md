@@ -33,7 +33,9 @@ For existing evidence, `storage pack N [--capture-attempt N]` **keeps raw**; `--
 
 The runner treats explicit `Command Failed:`/`ERROR:`/`Fatal Error:` output as operation failure even if the host exits zero. In particular, `No Index` preserves failed metadata and gives reseating guidance rather than a misleading missing-SCP error. A resumed empty first capture (no raw artifact or completed raw record/decode) may restart its elapsed acquisition budget after explicit custody confirmation; old budget starts and failed attempt files are retained. Any full/partial raw evidence blocks that reset. Completed disks/cursor are preserved.
 
-For a copy-and-paste operator guide, start with [CHEATSHEET.md](CHEATSHEET.md).
+For a copy-and-paste operator guide, start with [CHEATSHEET.md](CHEATSHEET.md). For the next two short hardware checks and automatic result collection, use [TOMORROW_TEST.md](TOMORROW_TEST.md).
+
+Offline reference comparison: `fv benchmark compare --baseline ZIP [--include-deleted] [--project PATH] [--json]`. Compares original recovered payloads within acquired disk numbers, preserves immutable snapshots and source-image context, and refuses changed managed inventories/unsafe ZIPs. Confirmed deleted reference files are out of scope by default; uncertain/carved content remains in scope. `--include-deleted` is comparison-only, not a recovery feature. Exit 0 matched / 3 changed, missing or no reference payloads / 2 operation error. [Details and measured results](BASELINE_COMPARISON.md).
 
 For setup and the recorded live checks, see [GREASEWEAZLE_PREFLIGHT.md](GREASEWEAZLE_PREFLIGHT.md). The working shop drive is the Mitsumi on selector **B**; the original NEC has a faulty head/read path.
 
