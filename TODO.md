@@ -12,6 +12,8 @@
 
 > **Native recovery checkpoint (2026-10-06):** Saved partial FAT12 images now automatically yield independently intact files through native readable-chain extraction. The saved WinWord 1 capture produced 22 forensic files / 1,208,710 bytes, with unchanged source hash and the unreadable sector still flagged. Native generation 2 validates long names, preserves ASCII short-name case flags, and excludes identified Windows metadata from new delivery plans (21 installer originals). This replaces manual extraction for that bounded case, not full DMDE capability: missing boot/directory reconstruction, deleted/orphaned chains, carving, automatic format discovery and production scheduling remain open.
 
+> **First 20-disk pilot completed (2026-10-06):** Customer 001–020 saved with 17 clean results and three partials (005/012/017, one missing sector each, no conflicting sectors). All 20 reached extraction; all 172 conversion jobs succeeded. The operator approves number-only scanning and requests much more visible swap cues. Next priorities: terminal visibility, saved/configurable scan conversion workers with balanced scheduling, and lossless background raw-capture compression. See `PILOT_20.md` for measured timing/storage and the extraction caveats; this is not yet full script/DMDE yield equivalence or customer-delivery certification.
+
 ## 0. Development contract / project rules
 
 - [x] Rust stable, Windows-first application.
@@ -66,6 +68,11 @@
 - [x] No-argument `fluxvault` shows help instead of opening a window.
 - [x] Folder-first project discovery plus `init`, `status`, disk, drive, recovery, extraction, conversion, audit, report, package, and tool commands.
 - [x] Saved command logs and stderr progress replace the window's status/operator-log panel.
+- [ ] **Next operator priority: unmistakable swap/action banners.** Separate physical completion from downstream processing, prominently display `DONE 004 / REMOVE 004 / INSERT 005`, and explicitly say when waiting for the operator rather than silently appearing busy.
+  - [ ] Add semantic terminal colors: green clean completion, amber partial/attention, cyan next physical action, red operation failure. Always include plain-text labels and disk/station identity; never rely on color, special glyphs, or animation alone.
+  - [ ] Support automatic terminal color detection, explicit color override, and `NO_COLOR`; readable ASCII/monochrome fallback on Windows, no ANSI escapes in redirected logs or JSON/stdout. Test all of these output modes.
+  - [ ] Show concise reading/decoding/processing/waiting status with elapsed time; preserve a clear next-action cue when concurrent worker messages arrive. Optional configurable audible cues may supplement, not replace, the banner.
+  - [ ] At the configured endpoint print `BATCH FINISHED / REMOVE 020`, then downstream progress/results; distinguish a persisted next cursor of 021 from an instruction to insert 021. Show session totals and whole-project totals separately.
 - [x] `greaseweazle preview` preserves the former safe-command mock/preview without touching hardware.
 - [x] `greaseweazle info` exposes the audited read-only device/firmware query through the CLI; live hardware behavior remains untested until the board arrives.
 - [ ] Make the default command path much shorter: one production command runs the full safe chain with plain-language status and next physical action.
@@ -257,6 +264,18 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
   - [x] GW-only single-disk job aggregates its independent raw captures with good-byte conflict refusal and explicit single-capture confidence, then calls `process`; full USB/GW composite integration and damaged-filesystem extraction remain open.
 - [ ] Tell the operator exactly when to move a USB-problem disk into the Greaseweazle drive and when it can be removed; no flux expertise should be required.
 
+### Raw-capture storage efficiency — requested after the 20-disk pilot
+
+The pilot holds 26 immutable SCP captures (20 initial plus six targeted rereads), totaling 985.13 MiB; the whole working project is about 1.08 GiB. Flux preserves multi-revolution timing evidence that sector-only script images did not contain. Storage optimization must not discard that added evidence or substitute regenerated flux.
+
+- [ ] Benchmark lossless capture compression on representative clean, damaged and targeted captures; report ratio, CPU/RAM use and elapsed time rather than promise a fixed saving. Compare equivalent folder/package contents with the old archive, not an uncompressed working project against a ZIP.
+- [ ] First implement a bounded background post-capture compression queue so the operator can swap while completed captures are packed. Explore true streaming only after validating the host/artifact completion contract; never compress or replace a file still being written by `gw`.
+- [ ] Record original SCP bytes/size/SHA-256 and compressed size/hash/codec/version; independently decompress and verify the exact original hash before atomic publication. Keep original evidence until verified promotion and an explicit managed retention policy permit retirement; never touch source media or silently delete historical captures.
+- [ ] Make compressed captures transparently usable by decode, status/audit, recovery resume and export using isolated verified temporary files; protect against concurrent decompress/compress jobs, path collisions and changed/tampered inputs.
+- [ ] Persist queue state and test interruption, corrupt/truncated compressed files, disk-full, failed verification, repeated resume, cleanup and cross-process contention without evidence loss or duplicate ownership.
+- [ ] Budget compression and conversion CPU/RAM/disk I/O together, prioritize acquisition, preflight free space and apply bounded backpressure; additional workers must not starve physical capture or flood the disk.
+- [ ] Document forensic working storage versus customer-delivery storage, including whether raw flux is included in an explicit archival export. No default omission of captured evidence or duplicate deletion without a validated retention/export policy.
+
 ## 11. Autonomous two-drive production workflow
 
 Greaseweazle-only production is also a first-class mode; no USB scan is required. Build its guided disk-swap loop first around the single-disk recovery service, then add concurrent USB/GW scheduling. The working Mitsumi stays connected; alternate-drive comparison is an optional service action, not routine operator work.
@@ -310,6 +329,11 @@ Reproduce `Convert-LegacyOffice_v4_Timeout_Audited.ps1` behavior inside the app 
   - [x] Spreadsheet-family -> XLSX + PDF: `.xls`, `.xlw`, `.xlt`, `.wk1`, `.wk3`, `.wk4`, `.wks`, `.123`, `.wb1`, `.wb2`, `.wq1`, `.wq2`, `.sdc`.
   - [x] Presentation-family -> PPTX + PDF: `.ppt`, `.pps`, `.pot`, `.sdd`.
 - [x] Bounded parallel Office conversion (four workers by default, CLI-configurable from 1 to 16), with isolated LibreOffice profiles, ordered reports, and serialized command audit records.
+  - [x] Workers already claim the next job from one shared atomic queue rather than fixed per-worker batches; an idle worker immediately takes another job, while reports retain stable plan order.
+- [ ] Expose conversion worker count through `scan` and saved project settings, with expert override and a safe default; support this operator's requested 12 workers without editing policy files. Currently `process`/conversion commands accept 1–16 but the automatic GW scan tail uses the default four.
+- [ ] Add size/observed-duration-aware scheduling for mixed large/slow and small/fast jobs: keep long jobs progressing while small jobs flow, with starvation prevention and bounded CPU/RAM/process use. Extend the existing shared queue, do not replace it with static per-thread lists.
+- [ ] Benchmark 4/8/12 conversion workers against saved pilot files, measuring throughput, peak memory, timeouts and output integrity; workers are concurrent jobs, not a guarantee of one CPU thread each or linear speedup.
+- [ ] Stress-test mixed-size scheduling, same-stem/output collisions, concurrent CLI runs, retries, cancellation/restart and worker failure; require exactly-once claims/publication, isolated LibreOffice profiles, hash-bound reuse, serialized shared metadata/audit writes and complete deterministic reports.
 - [x] Per-output timeout (default 45 s to match current workflow).
 - [x] Process-tree kill on timeout.
 - [x] Skip/reuse already-valid outputs; forced reconversion remains an advanced future option.
@@ -383,7 +407,11 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 - [x] Support a validated per-disk profile map in guided GW scanning, persist/bind pending resume settings, record actual profiles, and switch 009 to DD/010 back to HD without technical swap-time decisions.
 - [x] Preflight required downstream tools before normal GW scan custody/acquisition, with explicit acquisition-only bypass and no physical read on failure.
 - [x] Test the 20-disk mixed-format cap/tail and cross-process 008/009/010 switching, changed-map restart refusal, older journals, invalid maps, and processing-preflight refusal without hardware.
-- [ ] Complete a live up-to-20-disk cohort, retain telemetry and compare recovered payloads with the original archive before scaling up.
+- [x] Complete the live 001–020 cohort and retain telemetry: 20 committed disks, 17 acquired/three partial, 26 saved raw captures, automatic DD switch at 009, 20 extracted disks and 172 successful conversion jobs/zero conversion failures. Initial 004 failure remains recorded; resumed scanning completed the cohort.
+  - [x] Exercise bounded damaged-disk recovery on 005/012/017: one unresolved sector each, no byte conflicts; native extraction recovered 3/11/15 complete files respectively. 017 skipped one entry, so recovered intact files do not prove filesystem completeness.
+- [ ] Compare all 20 recovered payloads/yield with the original script/DMDE archive before scaling up; explicitly include deleted/orphaned/carved content, not just readable FAT files.
+- [ ] Use pilot measurements to prioritize visible swap cues, worker scheduling and lossless storage work: mean recovery 108.16 s/disk, recorded operator waits 13.15 min, downstream 7.89 min, raw SCP 985.13 MiB. The benchmark's 5.52-hour projected 136-disk feed is an estimate from this short-policy cohort, not a validated full-chain production result.
+- [ ] Correct benchmark classification of downstream exit 3: count partial/attention separately from execution failure. This pilot reports `downstream_errors: 1` solely for successful processing with three unresolved disks; conversion failures are zero. Retain the genuine initial 004 acquisition failure and interrupted-session history.
 
 - [x] Provide a controlled pilot runbook with isolated projects, small live smoke-test gates, the full numbered collection, restart instructions and a local data-review recipe (`PILOT_136.md`).
 - [x] Add `--last-disk 136` to guided GW scans so the same command stops at the same collection endpoint after restart; keep `--count` as a session cap and preserve older journals.

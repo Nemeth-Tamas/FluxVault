@@ -55,3 +55,29 @@ Look in `Reports\Benchmark` for timestamped JSON/CSV, and `Reports` for the Hung
 Exit **0** means the command completed cleanly; **3** means partial/attention results, not necessarily a crash; **2** means an operation/input error. These are not automatic customer-delivery certification. If saved-file processing needs a retry, run `& $fluxVaultPilotExe process`; it does not read a floppy.
 
 **Today's acceptance:** live 007 and 009 checks → one small damaged-disk check → feed as many of 001–020 as time permits → retain benchmark and compare recovered-file hashes with the old archive. Twenty is a cap, not an obligation to finish tonight. The eventual 136-disk plan remains in [PILOT_136.md](PILOT_136.md).
+
+## First completed cohort — 2026-10-06
+
+The operator completed customer **001–020** using number-only confirmations and the saved short policy. After the initial disk-004 host failure, the resumed scan completed without losing the earlier acquisitions. The operator approves the simplicity/custody workflow; the next usability priority is an unmistakable colored swap banner, because the current prompt is easy to miss.
+
+| Recorded outcome | Result |
+| --- | --- |
+| Committed disks | 20: 17 clean, 3 partial |
+| Partial disks | 005, 012, 017: one missing sector each; zero conflicting sectors |
+| Native partial-image extraction | 005: 3 complete files; 012: 11; 017: 15, with one skipped entry |
+| Extraction / conversion | 20 disks extracted; 172 conversion jobs succeeded, zero failed |
+| Saved raw captures | 26: twenty initial captures plus six targeted rereads; the failed no-file attempt is separate |
+| Mean / median recovery time | 108.16 / 104.97 seconds per committed disk |
+| Recorded successful recovery / operator waits | 36.05 / 13.15 minutes across the two invocations |
+| Downstream tail | 7.89 minutes, using four conversion workers |
+| Raw SCP / complete working project | 985.13 MiB / approximately 1.08 GiB |
+
+These timings are measured stages, not the elapsed time between first launch and final completion; troubleshooting/restart downtime is not fully represented. The benchmark estimates **5.52 hours of feeding for 136 disks** with this cohort's policy/behavior. It does not validate a 136-disk full-chain afternoon, deeper recovery or dual-drive throughput.
+
+The local evidence snapshot is `Reports/Benchmark/Benchmark-1791283405279683100-25748.json` plus its per-disk CSV, and `Reports/FluxVault_Jelentes_20261006_124325_267.xlsx`. There are two scan sessions (one interrupted, one finished) and one genuine initial acquisition error. The current benchmark also counts downstream exit **3** as an error: here it means three partial disks needing attention, not failed extraction/conversion. Splitting those categories is tracked in the TODO.
+
+Partial disks remain partial even when intact files can be extracted. In particular, disk 017 had one skipped entry. Cohort-wide comparison with the old script/DMDE output, including carved/deleted files, remains necessary before claiming equal recovery yield or customer-delivery certification.
+
+Conversion is already threaded: a shared queue feeds the next job to whichever worker finishes. `process --conversion-workers 12` is supported today (valid range 1–16), but the automatic scan tail currently uses four; exposing a saved scan worker setting and smarter mixed-size scheduling is planned. More workers require a measured CPU/RAM budget, not an assumed linear speedup.
+
+Most space is physical multi-revolution flux evidence, not extracted documents: 26 SCP files account for 985.13 MiB, while `Converted` is only 34.24 MiB. The old sector-image ZIP is not an equivalent storage comparison. Planned lossless background compression must verify byte-identical decompression, preserve provenance/resume, and avoid competing with acquisition; no captures are removed by this documentation update.
