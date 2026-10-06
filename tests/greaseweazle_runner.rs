@@ -465,6 +465,97 @@ fn automatic_recovery_merges_new_sector_and_refuses_changed_control_bytes() {
 }
 
 #[test]
+fn no_index_exit_zero_is_a_failed_capture_and_empty_job_can_retry_after_expiry() {
+    let (project, root) = disposable_project("no-index-zero-exit");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut failing = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_stream_to_stderr(false)
+        .with_env("MOCK_GW_NO_INDEX", "1");
+    let error = flux_recovery::recover(
+        &project,
+        4,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut failing,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(error.contains("No Index"));
+    assert!(error.contains("Reseat"));
+    let failed_path = project.root().join("Flux/004_attempt_001.partial.json");
+    let original_failure = fs::read(&failed_path).unwrap();
+    let failed: serde_json::Value = serde_json::from_slice(&original_failure).unwrap();
+    assert_eq!(failed["status"], "failed");
+    let records = fs::read_to_string(&audit).unwrap();
+    let failed_read: serde_json::Value = records
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|row| row["arguments"][0] == "read")
+        .unwrap();
+    assert_eq!(failed_read["exit_code"], 0);
+    assert_eq!(failed_read["success"], false);
+    assert!(!project.root().join("Flux/004_attempt_001.scp").exists());
+    let job_path = project.root().join("Flux/Recovery/004_job.json");
+    let mut job: serde_json::Value = serde_json::from_slice(&fs::read(&job_path).unwrap()).unwrap();
+    job["started_unix_ms"] = serde_json::json!(0);
+    fs::write(&job_path, serde_json::to_vec(&job).unwrap()).unwrap();
+    // Even unfinalized raw evidence blocks budget reset; never discard it to retry.
+    let partial_raw = project.root().join("Flux/004_attempt_001.partial.scp");
+    fs::write(&partial_raw, b"synthetic interrupted raw evidence").unwrap();
+    let mut blocked = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_stream_to_stderr(false);
+    assert!(
+        flux_recovery::recover(
+            &project,
+            4,
+            GreaseweazleProfile::Ibm1440,
+            'B',
+            RecoveryPolicy::default(),
+            &mut blocked,
+            &|_| {}
+        )
+        .is_err()
+    );
+    let not_reset: serde_json::Value =
+        serde_json::from_slice(&fs::read(&job_path).unwrap()).unwrap();
+    assert_eq!(not_reset["started_unix_ms"], 0);
+    assert!(
+        not_reset["empty_capture_budget_restarts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fs::read(&partial_raw).unwrap(),
+        b"synthetic interrupted raw evidence"
+    );
+    fs::remove_file(partial_raw).unwrap(); // Remove only the synthetic file this test just created.
+    let mut backend = ProcessGreaseweazleBackend::new(mock_gw_path(), audit)
+        .unwrap()
+        .with_stream_to_stderr(false);
+    let result = flux_recovery::recover(
+        &project,
+        4,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "acquired");
+    assert_eq!(result.capture_attempts, vec![2]);
+    assert_eq!(result.physical_reads_this_run, 1);
+    assert_eq!(fs::read(&failed_path).unwrap(), original_failure);
+    let job: serde_json::Value = serde_json::from_slice(&fs::read(job_path).unwrap()).unwrap();
+    assert_eq!(job["empty_capture_budget_restarts"], serde_json::json!([0]));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn automatic_recovery_resumes_saved_raw_capture_after_failed_decode() {
     let (project, root) = disposable_project("auto-resume");
     let audit = project.logs_dir().join("external-tools.jsonl");

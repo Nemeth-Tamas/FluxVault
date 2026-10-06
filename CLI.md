@@ -1,5 +1,13 @@
 # FluxVault CLI
 
+## Everyday short workflow
+
+The installer provides both `fluxvault.exe` and the identical short alias `fv.exe`. `fv init`, `fv status`, and `fv scan` work from the project folder. Plain `scan` uses Greaseweazle; explicit `scan --drive A:` (or USB protection/retry flags) retains the existing guarded USB workflow.
+
+GW scans reuse saved project-journal defaults for omitted profile, profile map, selector, policy and end target; explicit expert arguments override them, subject to pending-job consistency checks. Fresh projects currently default to selector B, ibm.1440, the normal built-in policy and no endpoint. Per-disk numbered input asserts label/protection checks, so a separate `--source-write-protected` flag is unnecessary for this guided loop; individual capture/recover still require it. `004` or `4` confirms disk 004; `QUIT`/`Q` stops. Empty/wrong-number input does not read. Legacy `READ 004` remains accepted. See [POLICIES.md](POLICIES.md).
+
+The runner treats explicit `Command Failed:`/`ERROR:`/`Fatal Error:` output as operation failure even if the host exits zero. In particular, `No Index` preserves failed metadata and gives reseating guidance rather than a misleading missing-SCP error. A resumed empty first capture (no raw artifact or completed raw record/decode) may restart its elapsed acquisition budget after explicit custody confirmation; old budget starts and failed attempt files are retained. Any full/partial raw evidence blocks that reset. Completed disks/cursor are preserved.
+
 For a copy-and-paste operator guide, start with [CHEATSHEET.md](CHEATSHEET.md).
 
 For setup and the recorded live checks, see [GREASEWEAZLE_PREFLIGHT.md](GREASEWEAZLE_PREFLIGHT.md). The working shop drive is the Mitsumi on selector **B**; the original NEC has a faulty head/read path.
@@ -79,7 +87,7 @@ fluxvault disk select 1
 fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
 ```
 
-Use the project's next unscanned number (or a fresh project). Each swap requires `READ NNN`, with the displayed number; bare `READ`, a different number, or arbitrary input starts no read. `QUIT`/`Q` or end-of-input stops feeding. `--count N` is a positive cap on results finalized this invocation, including resumed numbering commits. Explicit `--gw-drive` is required. `--profile`, `--policy`, and `--acquisition-only` have the same meaning as for single-disk recovery; the default format remains ibm.1440. Every inserted disk must have its physical write-protect tab set.
+Use the project's next unscanned number (or a fresh project). Each swap requires the displayed number (`004` or `4`); bare `READ`, a different number, or arbitrary input starts no read. Legacy `READ 004` also works. `QUIT`/`Q` or end-of-input stops feeding. `--count N` caps results finalized this invocation, including resumed numbering commits. Plain `scan` reuses saved selector/profile/map/policy/end target; fresh projects use B, ibm.1440 and the normal policy. `--acquisition-only` skips downstream work. Every numbered confirmation includes the prompt's physical write-protect check.
 
 Each disk uses the existing bounded recovery service. A verified terminal result—including partial/unrecoverable-within-policy—advances the project number. Operation failure keeps it selected. Numbered custody, pending result and completion history are atomically recorded in the internal project-root `.fluxvault-gw-scan.json`; an OS-held `.fluxvault-gw-scan.lock` prevents duplicate project scans. Control files and partial metadata commits are excluded from packages. Do not manually edit the journal or change disk selection from another session.
 

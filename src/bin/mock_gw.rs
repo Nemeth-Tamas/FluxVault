@@ -55,6 +55,10 @@ fn main() {
             println!("  Firmware: 1.23");
         }
         "read" => {
+            if env::var("MOCK_GW_NO_INDEX").is_ok() {
+                println!("Command Failed: GetFluxStatus: No Index");
+                return; // Reproduce the real host's misleading exit-zero behavior.
+            }
             let output_path = match args.last() {
                 Some(path) => PathBuf::from(path),
                 None => {

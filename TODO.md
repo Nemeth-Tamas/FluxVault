@@ -372,6 +372,11 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 
 ### First workable pilot — single Greaseweazle station
 
+- [x] Simplify GW custody to number-only input (`004`/`4`) or `QUIT`, retain wrong-number/blank refusal and legacy READ compatibility.
+- [x] Add ordinary `scan` for GW with saved per-project defaults and an installer-provided `fv` alias; preserve explicit guarded USB scans and expert overrides.
+- [x] Explain built-in/saved recovery budgets as optional expert configuration rather than mandatory operator homework (`POLICIES.md`).
+- [x] Reproduce/fix host exit-zero `Command Failed: No Index` reporting; preserve failed metadata and allow an operator-confirmed expired empty-first-capture restart without resetting jobs that contain raw evidence.
+
 **Current operator-time target:** first run up to 20 customer disks (001–020), stopping earlier with `QUIT` if needed; collect real timing/recovery data before expanding to 136. Disk 009's archived image is 720 KB, so the cohort must switch formats rather than decode everything as HD. See `PILOT_20.md`.
 
 - [x] Provide the short 20-disk runbook, opt-in 180-second/three-pass recovery policy, and archive-derived profile list; preserve the normal recovery defaults.

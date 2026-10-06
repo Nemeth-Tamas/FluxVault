@@ -17,7 +17,7 @@ Set-Location $fluxVaultPilotProject
 & $fluxVaultPilotExe greaseweazle scan --gw-drive B --source-write-protected --last-disk 20 --policy $fluxVaultPilotPolicy --profile-map $fluxVaultPilotFormats
 ```
 
-Run `init` only for a **new** folder. To resume an existing pilot, skip `init` and repeat the same scan command. Recreate the four variables if you opened a new terminal. Use the freshly built executable, not a potentially older installed copy.
+Run `init` only for a **new** folder. After the first numbered confirmation saves the settings, resume with just `& $fluxVaultPilotExe scan`: it remembers the drive, formats, policy and endpoint. If installed/aliased as `fv`, simply use `fv scan`. Use the freshly built executable, not a potentially older installed copy. [Policies](POLICIES.md) are optional expert controls; the existing customer pilot already has its settings saved.
 
 The supplied format list comes from the original archive's image sizes: **009 is 720 KB; 001–008 and 010–020 are 1.44 MB**. FluxVault automatically switches at 009 and back at 010. No setting changes are needed during feeding. This list is specific to these customer numbers, not a universal format detector; do not use it for unrelated disks. Unlisted numbers use the default 1.44 MB profile.
 
@@ -25,7 +25,7 @@ The supplied format list comes from the original archive's image sizes: **009 is
 
 1. Match the physical label to the displayed number.
 2. Insert that disk with its write-protect hole **open**.
-3. Type the displayed confirmation, e.g. `READ 001`.
+3. Type the displayed number, e.g. `001` (no `READ` needed).
 4. Wait for **GW SWAP**, remove it, and repeat.
 
 The command stops automatically after **020**. Do not put 021 in for this pilot. Partial results are preserved and advance normally; an operation error retains the same number and evidence. The program does not write to source floppies.

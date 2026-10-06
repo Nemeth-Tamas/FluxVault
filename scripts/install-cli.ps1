@@ -17,6 +17,11 @@ if ($PSCmdlet.ShouldProcess($destination, 'Install FluxVault CLI executable')) {
     New-Item -ItemType Directory -Path $resolvedInstall -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination -Force
 }
+$shortDestination = Join-Path $resolvedInstall 'fv.exe'
+if ($PSCmdlet.ShouldProcess($shortDestination, 'Install short fv command (same FluxVault executable)')) {
+    New-Item -ItemType Directory -Path $resolvedInstall -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination $shortDestination -Force
+}
 
 if ($AddToPath) {
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -40,3 +45,4 @@ if ($AddToPath) {
 }
 
 Write-Output "FluxVault CLI target: $destination"
+Write-Output "Short command target: $shortDestination"

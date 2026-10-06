@@ -173,6 +173,36 @@ struct Journal {
     completed: Vec<RecoveryResult>,
 }
 
+pub(super) struct SavedDefaults {
+    pub profile: GreaseweazleProfile,
+    pub profile_map: BTreeMap<u32, String>,
+    pub drive: char,
+    pub policy: RecoveryPolicy,
+    pub last_disk: Option<u32>,
+}
+
+pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefaults>, String> {
+    let path = project.root().join(JOURNAL);
+    regular_or_missing(&path)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let journal: Journal = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Invalid saved scan settings: {e}"))?;
+    if journal.schema_version != 1 || !matches!(journal.drive, 'A' | 'B') {
+        return Err("Unsupported saved scan settings".to_owned());
+    }
+    validate_profiles(&journal.profile_map)?;
+    journal.policy.validate()?;
+    Ok(Some(SavedDefaults {
+        profile: GreaseweazleProfile::parse(&journal.profile)?,
+        profile_map: journal.profile_map,
+        drive: journal.drive,
+        policy: journal.policy,
+        last_disk: journal.last_disk,
+    }))
+}
+
 pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<CliResponse, String> {
     options.validate()?;
     crate::flux_capture::project_flux_dir(&project)?;
@@ -398,7 +428,7 @@ where
                 waiting = Some((disk, Instant::now()));
             }
             writeln!(output,
-                "GW {}: insert floppy {disk:03}, check its write-protect hole is OPEN. Type READ {disk:03} to confirm its identity and read it, or QUIT: [format {}]", options.drive, profile.argument()
+                "GW {}: insert floppy {disk:03}, check its write-protect hole is OPEN. Type {disk:03} to confirm and read it, or QUIT: [format {}]", options.drive, profile.argument()
             ).map_err(|e| e.to_string())?;
             output.flush().map_err(|e| e.to_string())?;
             let mut answer = String::new();
@@ -411,12 +441,17 @@ where
             {
                 break;
             }
-            if words.len() != 2
-                || !words[0].eq_ignore_ascii_case("READ")
-                || words[1].parse::<u32>().ok() != Some(disk)
-            {
-                writeln!(output, "No read started. Confirm the displayed disk number with READ {disk:03}, or QUIT.")
-                    .map_err(|e| e.to_string())?;
+            let number = match words.as_slice() {
+                [number] => number.parse::<u32>().ok(),
+                [verb, number] if verb.eq_ignore_ascii_case("READ") => number.parse::<u32>().ok(),
+                _ => None,
+            };
+            if number != Some(disk) {
+                writeln!(
+                    output,
+                    "No read started. Type the displayed disk number {disk:03}, or QUIT."
+                )
+                .map_err(|e| e.to_string())?;
                 continue;
             }
             let fresh = ProjectState::open_without_session(root.clone())?;
@@ -764,14 +799,14 @@ mod tests {
         assert!(
             output
                 .lines()
-                .any(|line| line.contains("READ 009") && line.contains("ibm.720"))
+                .any(|line| line.contains("Type 009") && line.contains("ibm.720"))
         );
         assert!(
             output
                 .lines()
-                .any(|line| line.contains("READ 010") && line.contains("ibm.1440"))
+                .any(|line| line.contains("Type 010") && line.contains("ibm.1440"))
         );
-        assert!(!output.contains("READ 021"));
+        assert!(!output.contains("Type 021"));
         let measured = benchmark::report(&project).unwrap();
         assert_eq!(measured.unique_committed_disks, 20);
         assert_eq!(measured.status_counts["partial"], 3);

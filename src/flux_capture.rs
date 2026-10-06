@@ -794,6 +794,9 @@ pub fn capture_with_settings(
             )
         };
         record.detail = Some(reason);
+        if execution.output_text().contains("No Index") {
+            record.detail.as_mut().unwrap().push_str(". No rotation/index signal: physical read has stopped. Reseat the same floppy fully, check the drive is powered and the door/lever closed, then confirm the same disk number again. This is not a bad-sector result.");
+        }
         save_record(&partial_metadata, &record)?;
         return Err(format!(
             "Raw capture failed; attempt evidence remains at {}: {}",
@@ -801,8 +804,19 @@ pub fn capture_with_settings(
             record.detail.as_deref().unwrap_or("unknown error")
         ));
     }
-    let raw_info = fs::symlink_metadata(&partial_flux)
-        .map_err(|error| format!("Successful gw run produced no SCP file: {error}"))?;
+    let raw_info = match fs::symlink_metadata(&partial_flux) {
+        Ok(info) => info,
+        Err(error) => {
+            let reason = format!(
+                "gw exited successfully but produced no SCP file: {error}. Host output: {}",
+                execution.output_text()
+            );
+            record.status = "failed".to_owned();
+            record.detail = Some(reason.clone());
+            save_record(&partial_metadata, &record)?;
+            return Err(reason);
+        }
+    };
     if !raw_info.file_type().is_file() {
         return Err("Greaseweazle output is not a regular SCP file".to_owned());
     }

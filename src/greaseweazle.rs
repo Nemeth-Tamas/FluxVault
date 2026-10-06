@@ -416,7 +416,11 @@ pub fn parse_progress_line(line: &str) -> GreaseweazleProgressEvent {
     if trimmed.starts_with("** WARNING:") || trimmed.starts_with("WARNING:") {
         return GreaseweazleProgressEvent::Warning(trimmed.to_owned());
     }
-    if trimmed.starts_with("** ERROR:") || trimmed.starts_with("ERROR:") {
+    if trimmed.starts_with("** ERROR:")
+        || trimmed.starts_with("ERROR:")
+        || trimmed.starts_with("Command Failed:")
+        || trimmed.starts_with("Fatal Error:")
+    {
         return GreaseweazleProgressEvent::Error(trimmed.to_owned());
     }
     if let Some(rest) = trimmed.strip_prefix('T') {
@@ -771,7 +775,15 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
         }
 
         let duration_ms = started.elapsed().as_millis();
-        let success = exit_status.as_ref().is_some_and(|s| s.success()) && !timed_out;
+        // Some gw releases catch hardware failures and still exit zero (e.g. No Index).
+        let reported_failure = stdout_text.lines().chain(stderr_text.lines()).any(|line| {
+            matches!(
+                parse_progress_line(line),
+                GreaseweazleProgressEvent::Error(_)
+            )
+        });
+        let success =
+            exit_status.as_ref().is_some_and(|s| s.success()) && !timed_out && !reported_failure;
         let exit_code = exit_status.and_then(|s| s.code());
 
         let stdout_trimmed = stdout_text.trim().to_owned();

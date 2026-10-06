@@ -7,6 +7,8 @@
 
 **Ready for the current Greaseweazle run?** Start with [Tonight's 20-disk pilot](PILOT_20.md): a single restart-safe command, the correct mixed formats (009 is 720 KB), a shorter recovery budget, and automatic processing/measurements.
 
+**Everyday short command:** the installer now provides `fv` as well as `fluxvault`. `fv scan` runs the Greaseweazle loop using saved project settings; enter just the displayed number (`004`), or `QUIT`. See [Policies without homework](POLICIES.md) for optional expert controls. Explicit `scan --drive A:` remains the guarded USB workflow.
+
 ## 1. Get to a working prompt
 
 The current built executable is in the repository. To use it from any folder as `fluxvault`, run this once from PowerShell:
@@ -154,7 +156,7 @@ fluxvault disk select 1
 fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
 ```
 
-At each prompt, check the floppy's label and open write-protect hole, insert it, then type the displayed confirmation, such as **`READ 001`**. When FluxVault says **GW SWAP**, remove it and insert the next numbered floppy. Type **`QUIT`** to finish early. Omit `--count 10` to keep going until `QUIT`.
+At each prompt, check the floppy's label and open write-protect hole, insert it, then type the displayed number, such as **`001`**. When FluxVault says **GW SWAP**, remove it and insert the next numbered floppy. Type **`QUIT`** to finish early. Omit `--count 10` to keep going until `QUIT`.
 
 The program performs bounded recovery automatically, saves each result, and advances the number—even for a completed partial result. An operation error keeps that disk selected. At the end it automatically extracts/converts saved files and updates the audit/workbook; processing waits until feeding has ended so it does not delay each swap. `--count` counts results finalized in this invocation, including interrupted numbering commits recovered on restart.
 

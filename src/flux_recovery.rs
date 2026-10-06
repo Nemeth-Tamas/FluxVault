@@ -88,6 +88,8 @@ struct Journal {
     profile: String,
     drive: char,
     started_unix_ms: u64,
+    #[serde(default)]
+    empty_capture_budget_restarts: Vec<u64>,
     policy: RecoveryPolicy,
     stages: Vec<Stage>,
     result: Option<RecoveryResult>,
@@ -295,6 +297,7 @@ pub fn recover(
             profile: profile.argument().to_owned(),
             drive,
             started_unix_ms: external_tools::current_unix_ms(),
+            empty_capture_budget_restarts: Vec::new(),
             policy: policy.clone(),
             stages: Vec::new(),
             result: None,
@@ -358,6 +361,31 @@ pub fn recover(
         result.resumed = true;
         result.physical_reads_this_run = 0;
         return Ok(result);
+    }
+    // An operator-confirmed retry after an empty first capture gets a fresh bounded
+    // window. Never reset a job that has any full/partial raw evidence or a decode.
+    if resumed
+        && j.stages.len() <= 1
+        && j.stages.iter().all(|s| s.decode_attempt.is_none())
+        && external_tools::current_unix_ms().saturating_sub(j.started_unix_ms) / 1000
+            >= policy.max_seconds
+        && !fs::read_dir(&flux)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with(&format!("{disk:03}_attempt_"))
+                    && (name.ends_with(".scp")
+                        || (name.ends_with(".json") && !name.ends_with(".partial.json")))
+            })
+    {
+        j.empty_capture_budget_restarts.push(j.started_unix_ms);
+        j.started_unix_ms = external_tools::current_unix_ms();
+        progress(
+            "Restarting the bounded first-pass budget after a capture produced no raw file; prior attempts retained.",
+        );
     }
     save_journal(&state, &j)?;
     let mut reads = 0;

@@ -34,7 +34,7 @@ Set-Location 'C:\Users\User\Desktop\FluxVault-Test\Customer-136-Pilot'
 & $fluxVaultPilotExe greaseweazle scan --gw-drive B --source-write-protected --last-disk 136
 ```
 
-Check the disk label against every prompt. Insert the protected disk, type the displayed **`READ NNN`**, and wait for **GW SWAP** before removing it. Completed partial results advance normally. An acquisition error keeps the same disk selected and preserves evidence. **`QUIT`** ends feeding early and runs the saved-file processing tail. The source floppy is never written by FluxVault.
+Check the disk label against every prompt. Insert the protected disk, type the displayed **number only** (e.g. `004`), and wait for **GW SWAP** before removing it. Completed partial results advance normally. An acquisition error keeps the same disk selected and preserves evidence. **`QUIT`** ends feeding early and runs the saved-file processing tail. The source floppy is never written by FluxVault. After initial settings are saved, plain `scan` reuses them on restart.
 
 `--last-disk 136` means **stop after numbered disk 136**, not “read another 136 disks.” Repeat that exact command after a restart; no remaining-disk arithmetic is needed. An interrupted physical job asks you to reconfirm the same numbered disk; an interrupted completed-numbering commit is reconciled without another physical read. Keep the same profile, drive, policy and end target for a pending job. Do not change disk selection from another terminal.
 

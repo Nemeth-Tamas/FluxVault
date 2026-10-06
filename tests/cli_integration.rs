@@ -159,9 +159,9 @@ fn cli_mixed_format_scan_switches_at_009_and_binds_resume_to_the_saved_map() {
     let resumed = invoke_mock_with_input(
         &project,
         &app_data,
-        &scan,
+        &["scan", "--acquisition-only", "--json"],
         false,
-        Some(b"READ 009\nREAD 010\nREAD 011\n"),
+        Some(b"\nREAD\n008\n009 extra\n009\n010\n011\n"),
         &[],
     );
     assert_eq!(
@@ -209,7 +209,7 @@ fn cli_mixed_format_scan_switches_at_009_and_binds_resume_to_the_saved_map() {
         serde_json::from_slice(&fs::read(project.join(".fluxvault-gw-scan.json")).unwrap())
             .unwrap();
     assert_eq!(journal["profile_map"]["9"], "ibm.720");
-    assert!(!String::from_utf8_lossy(&resumed.stderr).contains("READ 011"));
+    assert!(!String::from_utf8_lossy(&resumed.stderr).contains("Type 011"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -349,6 +349,8 @@ fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
         "scan",
         "--count",
         "2",
+        "--last-disk",
+        "4",
         "--gw-drive",
         "B",
         "--source-write-protected",
@@ -358,7 +360,7 @@ fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
     let blocked = invoke_mock_with_input(
         &project,
         &app_data,
-        &["greaseweazle", "scan", "--gw-drive", "B", "--json"],
+        &["greaseweazle", "scan", "--gw-drive", "C", "--json"],
         false,
         Some(b"READ 1\n"),
         &[],
@@ -429,6 +431,8 @@ fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
         "scan",
         "--count",
         "1",
+        "--last-disk",
+        "4",
         "--gw-drive",
         "B",
         "--source-write-protected",
@@ -594,7 +598,7 @@ fn cli_gw_reservation_blocks_other_projects_and_releases_after_process_terminati
     let (sender, receiver) = mpsc::channel();
     let reader = thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            if line.contains("Type READ 001") {
+            if line.contains("Type 001") {
                 let _ = sender.send(());
             }
         }

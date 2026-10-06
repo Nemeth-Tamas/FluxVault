@@ -56,6 +56,7 @@ Usage:
   fluxvault drive probe --drive A:  Read-only 512-byte media and protection probe
   fluxvault acquire --drive A: --disk N [--retries N] --write-blocker-verified
                                     Read-only image; requires independently verified hardware
+  fluxvault scan [--last-disk N]     Guided Greaseweazle scan; reuses saved project settings
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
                                     Guided read-only multi-disk loop; type READ for each disk
   fluxvault tools check [--project PATH]
@@ -79,7 +80,7 @@ Usage:
   fluxvault greaseweazle recover N [--gw-drive A|B] [--profile ibm.1440|ibm.720]
       --source-write-protected [--policy FILE] [--acquisition-only]
                                     Automatic bounded recovery without a USB reader
-  fluxvault greaseweazle scan [--count N] [--last-disk N] --gw-drive A|B --source-write-protected
+  fluxvault greaseweazle scan [--count N] [--last-disk N] [--gw-drive A|B]
       [--profile ibm.1440|ibm.720] [--profile-map FILE] [--policy FILE] [--acquisition-only]
                                     Guided disk swaps, durable numbering, automatic processing
   fluxvault extract all [--project PATH]
@@ -372,6 +373,14 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if details && !(positional.len() == 3 && positional[0] == "disk" && positional[1] == "show") {
         return Err("--details is only valid with disk show N".to_owned());
     }
+    // Keep explicitly selected USB scans intact; the ordinary folder command uses GW.
+    if positional == ["scan"]
+        && drive_override.is_none()
+        && acquisition_retries.is_none()
+        && !write_blocker_verified
+    {
+        positional = vec!["greaseweazle".to_owned(), "scan".to_owned()];
+    }
     let gw_capture =
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "capture";
     let gw_decode =
@@ -544,6 +553,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("greaseweazle") if (gw_recover || gw_scan) && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            let saved = if gw_scan {
+                flux_scan::saved_defaults(&project)?
+            } else {
+                None
+            };
             let policy = match recovery_policy {
                 Some(path) => {
                     let path = if path.is_absolute() {
@@ -554,22 +568,30 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
                         .map_err(|e| format!("Invalid recovery policy: {e}"))?
                 }
-                None => crate::flux_recovery::RecoveryPolicy::default(),
+                None => saved.as_ref().map(|s| s.policy.clone()).unwrap_or_default(),
             };
             if gw_scan {
                 return flux_scan::run(
                     project,
                     flux_scan::ScanOptions {
-                        profile: gw_profile.unwrap_or(GreaseweazleProfile::Ibm1440),
+                        profile: gw_profile.unwrap_or_else(|| {
+                            saved
+                                .as_ref()
+                                .map_or(GreaseweazleProfile::Ibm1440, |s| s.profile)
+                        }),
                         profile_map: match profile_map_path {
                             Some(path) => flux_scan::load_profile_map(&cwd.join(path))?,
-                            None => Default::default(),
+                            None => saved
+                                .as_ref()
+                                .map(|s| s.profile_map.clone())
+                                .unwrap_or_default(),
                         },
-                        drive: gw_drive.ok_or("greaseweazle scan requires --gw-drive A|B")?,
-                        protected: source_write_protected,
+                        drive: gw_drive.unwrap_or_else(|| saved.as_ref().map_or('B', |s| s.drive)),
+                        // The numbered prompt asserts identity AND an open protection tab per disk.
+                        protected: true,
                         policy,
                         count: scan_count,
-                        last_disk,
+                        last_disk: last_disk.or_else(|| saved.as_ref().and_then(|s| s.last_disk)),
                         acquisition_only,
                         json_output,
                     },
