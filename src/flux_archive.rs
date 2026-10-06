@@ -449,6 +449,10 @@ impl Queue {
                 Err(e) => return vec![e],
             };
             loop {
+                // Acquire the producer's finished flag before enumerating jobs:
+                // finish must not miss a last task published after an earlier
+                // directory snapshot. Otherwise notifications drive the next loop.
+                let draining = ending.load(Ordering::Acquire);
                 let entries = match fs::read_dir(&jobs) {
                     Ok(e) => e,
                     Err(e) => {
@@ -499,7 +503,7 @@ impl Queue {
                     }
                     continue;
                 }
-                if ending.load(Ordering::Acquire) {
+                if draining {
                     break;
                 }
                 if receiver.recv().is_err() {

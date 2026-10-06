@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -105,7 +105,9 @@ pub struct RecoveryResult {
     pub status: String,
     pub stop_reason: String,
     pub capture_attempts: Vec<u32>,
+    #[serde(default, skip_serializing_if = "empty_path")]
     pub image: PathBuf,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub image_sha256: String,
     pub provenance: PathBuf,
     pub provenance_sha256: String,
@@ -115,6 +117,21 @@ pub struct RecoveryResult {
     pub single_capture_sectors: usize,
     pub physical_reads_this_run: usize,
     pub resumed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_exception: Option<FormatException>,
+}
+
+/// No supported geometry was established. Preserve raw evidence, never invent
+/// a sector image or claim a known readable/missing-sector count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FormatException {
+    pub capture_attempt: u32,
+    pub source_sha256: String,
+    pub reason: String,
+}
+
+fn empty_path(path: &Path) -> bool {
+    path.as_os_str().is_empty()
 }
 #[derive(Debug, Clone, Serialize)]
 struct SectorProvenance {
@@ -423,12 +440,7 @@ fn recover_impl(
         }
     }
     if let Some(mut result) = j.result.clone() {
-        aggregate(project, disk, profile, &j.stages)?;
-        if hash_path(&result.image)? != result.image_sha256
-            || hash_path(&result.provenance)? != result.provenance_sha256
-        {
-            return Err("Completed recovery output changed".to_owned());
-        }
+        verify_completed_result(project, &result)?;
         result.resumed = true;
         result.physical_reads_this_run = 0;
         return Ok(result);
@@ -578,7 +590,36 @@ fn recover_impl(
         if automatic_format && index == 0 && j.stages[index].decode_attempt.is_none() {
             let (decision, report) =
                 crate::flux_format::identify(project, disk, capture, backend, progress)?;
-            let selected = decision.selected_profile.as_deref().ok_or_else(|| format!("Cannot safely identify disk {disk:03}: {}. Raw capture preserved; no further physical reads. Decision: {}", decision.reason, report.display()))?;
+            let selected = match decision.selected_profile.as_deref() {
+                Some(selected) => selected,
+                None if decision.candidates.len() == 2
+                    && decision.candidates.iter().all(|c| c.error.is_none()) =>
+                {
+                    let result = RecoveryResult {
+                        disk, selected_profile:None, status:"raw_format_exception".into(),
+                        stop_reason:"supported_formats_ambiguous_or_insufficient; raw evidence preserved; no geometry assumed".into(),
+                        capture_attempts:vec![capture], image:PathBuf::new(), image_sha256:String::new(),
+                        provenance:report.clone(),provenance_sha256:hash_path(&report)?,missing_lbas:vec![],conflicting_lbas:vec![],
+                        corroborated_sectors:0,single_capture_sectors:0,physical_reads_this_run:reads,resumed,
+                        format_exception:Some(FormatException {capture_attempt:capture,source_sha256:decision.source_sha256.clone(),reason:decision.reason.clone()}),
+                    };
+                    j.result = Some(result.clone());
+                    save_journal(&state, &j)?;
+                    verify_completed_result(project, &result)?;
+                    progress(&format!(
+                        "RAW-ONLY FORMAT EXCEPTION {disk:03}: raw capture and format report verified; no sector image claimed. Report: {}",
+                        report.display()
+                    ));
+                    return Ok(result);
+                }
+                None => {
+                    return Err(format!(
+                        "Cannot safely identify disk {disk:03}: {}. A decoder trial failed; raw preserved, number not advanced. Decision: {}",
+                        decision.reason,
+                        report.display()
+                    ));
+                }
+            };
             profile = GreaseweazleProfile::parse(selected)?;
             j.profile = selected.to_owned();
             let chosen = decision
@@ -693,7 +734,11 @@ pub(crate) fn completed_profile(
         return Err("Recovery journal identity mismatch".to_owned());
     }
     GreaseweazleProfile::parse(&job.profile)?;
-    Ok(job.result.as_ref().map(|_| job.profile))
+    Ok(job
+        .result
+        .as_ref()
+        .filter(|r| r.format_exception.is_none())
+        .map(|_| job.profile))
 }
 
 /// Recheck a published batch result without invoking a host tool or reading media.
@@ -738,10 +783,18 @@ pub(crate) fn verify_completed_result(
         || saved.status != result.status
         || saved.missing_lbas != result.missing_lbas
         || saved.conflicting_lbas != result.conflicting_lbas
+        || saved.capture_attempts != result.capture_attempts
+        || saved.format_exception != result.format_exception
     {
         return Err("Batch result disagrees with committed recovery evidence".to_owned());
     }
     job.policy.validate()?;
+    if let Some(exception) = &result.format_exception {
+        return verify_format_exception(project, &flux, &job, result, exception);
+    }
+    if result.status == "raw_format_exception" {
+        return Err("Raw exception lacks its source binding".into());
+    }
     aggregate(
         project,
         result.disk,
@@ -755,6 +808,175 @@ pub(crate) fn verify_completed_result(
     }
     Ok(())
 }
+fn verify_format_exception(
+    project: &ProjectState,
+    flux: &Path,
+    job: &Journal,
+    result: &RecoveryResult,
+    exception: &FormatException,
+) -> Result<(), String> {
+    if result.status != "raw_format_exception"
+        || result.selected_profile.is_some()
+        || !result.image.as_os_str().is_empty()
+        || !result.image_sha256.is_empty()
+        || !result.missing_lbas.is_empty()
+        || !result.conflicting_lbas.is_empty()
+        || result.corroborated_sectors != 0
+        || result.single_capture_sectors != 0
+        || result.capture_attempts != [exception.capture_attempt]
+        || job.stages.len() != 1
+        || job.stages[0].capture_attempt != exception.capture_attempt
+        || job.stages[0].decode_attempt.is_some()
+        || !job.automatic_format
+    {
+        return Err("Invalid raw-only format exception; numbering not advanced".into());
+    }
+    let formats = flux
+        .join("Formats")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let report = result
+        .provenance
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if formats.parent() != Some(flux)
+        || report.parent() != Some(formats.as_path())
+        || !fs::symlink_metadata(&report)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_file()
+        || fs::metadata(&report).map_err(|e| e.to_string())?.len() > 131072
+        || hash_path(&report)? != result.provenance_sha256
+    {
+        return Err("Raw-only format decision path/hash changed".into());
+    }
+    let decision: crate::flux_format::FormatDecision =
+        serde_json::from_slice(&fs::read(&report).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    if decision.schema_version != 1
+        || decision.disk != result.disk
+        || decision.capture_attempt != exception.capture_attempt
+        || decision.source_sha256 != exception.source_sha256
+        || decision.reason != exception.reason
+        || decision.selected_profile.is_some()
+        || decision.physical_media_access
+        || decision.candidates.len() != 2
+    {
+        return Err("Raw-only format decision binding disagrees".into());
+    }
+    let inspected = flux_capture::inspect_disk(project, result.disk)?;
+    let capture = inspected
+        .captures
+        .iter()
+        .find(|c| c.attempt == exception.capture_attempt)
+        .ok_or("Raw exception capture missing")?;
+    if capture.status != "complete"
+        || !capture.hash_matches
+        || capture.sha256.as_deref() != Some(exception.source_sha256.as_str())
+        || capture
+            .capture_settings
+            .as_ref()
+            .is_none_or(|s| s.cylinders.is_some())
+    {
+        return Err("Raw exception source binding changed".into());
+    }
+    let mut profiles = BTreeSet::new();
+    for candidate in &decision.candidates {
+        let profile = GreaseweazleProfile::parse(&candidate.profile)?;
+        if !profiles.insert(candidate.profile.clone()) || candidate.error.is_some() {
+            return Err("Raw exception has failed/duplicate format trials".into());
+        }
+        let decode = inspected
+            .decodes
+            .iter()
+            .find(|d| {
+                d.capture_attempt == exception.capture_attempt
+                    && d.profile == candidate.profile
+                    && Some(d.decode_attempt) == candidate.decode_attempt
+            })
+            .ok_or("Raw exception trial missing")?;
+        let count = profile.expected_sector_image_bytes() as usize / 512;
+        let (_, bad) = flux_capture::verified_decode(project, decode, count)?;
+        if candidate.total_sectors != count
+            || candidate.good_sectors != count - bad.len()
+            || candidate.image_sha256.as_deref() != Some(decode.output_sha256.as_str())
+        {
+            return Err("Raw exception candidate evidence changed".into());
+        }
+    }
+    Ok(())
+}
+
+/// Raw-only jobs belong to project attention even though Images/ has no image.
+pub(crate) fn format_exceptions(project: &ProjectState) -> Result<Vec<RecoveryResult>, String> {
+    let flux = project
+        .root()
+        .join("Flux")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if flux.parent()
+        != Some(
+            project
+                .root()
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .as_path(),
+        )
+    {
+        return Err("Flux escapes project".into());
+    }
+    let directory = flux.join("Recovery");
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let directory = directory.canonicalize().map_err(|e| e.to_string())?;
+    if directory.parent() != Some(flux.as_path()) {
+        return Err("Recovery journal directory escapes Flux".into());
+    }
+    let mut results = Vec::new();
+    for item in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let path = item.map_err(|e| e.to_string())?.path();
+        let Some(disk) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix("_job.json"))
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if !fs::symlink_metadata(&path)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_file()
+        {
+            return Err("Unsafe recovery journal".into());
+        }
+        let mut bytes = Vec::new();
+        fs::File::open(&path)
+            .map_err(|e| e.to_string())?
+            .take(1048577)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 1048576 {
+            return Err("Oversized recovery journal".into());
+        }
+        let job: Journal =
+            serde_json::from_slice(&bytes).map_err(|e| format!("Invalid recovery journal: {e}"))?;
+        if job.disk != disk || job.schema_version != 1 {
+            return Err("Invalid recovery journal identity".into());
+        }
+        if let Some(result) = job.result.filter(|r| r.format_exception.is_some()) {
+            verify_completed_result(project, &result)?;
+            results.push(result);
+        }
+        if results.len() > 4096 {
+            return Err("Too many raw-only exceptions".into());
+        }
+    }
+    results.sort_by_key(|r| r.disk);
+    Ok(results)
+}
+
 fn save_journal(path: &Path, j: &Journal) -> Result<(), String> {
     let tmp = path.with_extension(format!(
         "{}-{}.partial.json",
@@ -818,6 +1040,7 @@ fn publish(
     e: &Evidence,
     reason: &str,
 ) -> Result<RecoveryResult, String> {
+    let _snapshot = crate::project_work::snapshot(project.root())?;
     let root = project.root().canonicalize().map_err(|e| e.to_string())?;
     let images = project
         .images_dir()
@@ -834,6 +1057,7 @@ fn publish(
     let stem = format!("{:03}_attempt_{attempt:03}", j.disk);
     let image = images.join(format!("{stem}.img"));
     let metadata = images.join(format!("{stem}.json"));
+    let partial_metadata = images.join(format!("{stem}.partial.json"));
     let partial = images.join(format!("{stem}.partial.img"));
     let log = logs.join(format!("{stem}.log"));
     let provenance = dir.join(format!("{stem}_provenance.json"));
@@ -915,7 +1139,10 @@ fn publish(
     }))
     .map_err(|e| e.to_string())?;
     publish_image_no_replace(&partial, &image)?;
-    write_new(&metadata, &meta)?;
+    // Metadata is the completed-image commit record. Readers never see a partly
+    // written JSON document; interruption leaves only an ignored partial record.
+    write_new(&partial_metadata, &meta)?;
+    publish_image_no_replace(&partial_metadata, &metadata)?;
     Ok(RecoveryResult {
         disk: j.disk,
         selected_profile: Some(j.profile.clone()),
@@ -947,6 +1174,7 @@ fn publish(
             .count(),
         physical_reads_this_run: 0,
         resumed: false,
+        format_exception: None,
     })
 }
 

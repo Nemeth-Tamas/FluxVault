@@ -28,6 +28,7 @@ pub enum AuditEvent {
 
 #[derive(Debug, Clone)]
 pub struct AuditResult {
+    pub disk_verification: BTreeMap<String, bool>,
     pub json_path: PathBuf,
     pub csv_path: PathBuf,
     pub disk_count: usize,
@@ -254,6 +255,15 @@ pub(crate) fn run_audit(
         .filter(|disk| disk.evidence_status == "IMAGE_FILES_CONVERSIONS_VERIFIED")
         .count();
     let attention_disks = disks.len() - verified_disks;
+    let disk_verification = disks
+        .iter()
+        .map(|d| {
+            (
+                d.disk.clone(),
+                d.evidence_status == "IMAGE_FILES_CONVERSIONS_VERIFIED",
+            )
+        })
+        .collect();
     let report = AuditDocument {
         schema_version: 1,
         scope: "image_managed_extraction_and_recorded_conversion_integrity",
@@ -272,6 +282,7 @@ pub(crate) fn run_audit(
     fs::write(&csv_path, csv_report(&report))
         .map_err(|error| format!("Cannot write {}: {error}", csv_path.display()))?;
     Ok(AuditResult {
+        disk_verification,
         json_path,
         csv_path,
         disk_count: report.disks.len(),

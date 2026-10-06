@@ -40,6 +40,7 @@ pub enum PipelineEvent {
 
 #[derive(Debug, Clone)]
 pub struct PipelineResult {
+    pub raw_format_exceptions: usize,
     pub composited_disks: usize,
     pub reused_composites: usize,
     pub declined_composites: usize,
@@ -78,6 +79,21 @@ pub(crate) fn run_pipeline(
     request: &PipelineRequest,
     stage: &impl Fn(&str),
 ) -> Result<PipelineResult, String> {
+    run_pipeline_mode(request, stage, false)
+}
+
+pub(crate) fn run_pipeline_incremental(
+    request: &PipelineRequest,
+    stage: &impl Fn(&str),
+) -> Result<PipelineResult, String> {
+    run_pipeline_mode(request, stage, true)
+}
+
+fn run_pipeline_mode(
+    request: &PipelineRequest,
+    stage: &impl Fn(&str),
+    incremental: bool,
+) -> Result<PipelineResult, String> {
     if !request.seven_zip_executable.is_file() {
         return Err(format!(
             "7-Zip is unavailable: {}",
@@ -91,6 +107,8 @@ pub(crate) fn run_pipeline(
         ));
     }
     let project = &request.project;
+    let snapshot = crate::project_work::snapshot(project.root())?;
+    let raw_format_exceptions = crate::flux_recovery::format_exceptions(project)?.len();
     stage("1/5: Planning safe offline recovery from saved images...");
     let mut composited_disks = 0;
     let mut reused_composites = 0;
@@ -325,8 +343,9 @@ pub(crate) fn run_pipeline(
         &|message| stage(&format!("2/5: {message}")),
         &|completed, total| stage(&format!("2/5: {completed}/{total} disks processed")),
     )?;
+    drop(snapshot); // Long Office work must not block the next image publication.
     stage("3/5: Converting eligible legacy Office files...");
-    let conversion = conversion_run::run_conversion(
+    let conversion = conversion_run::run_conversion_mode(
         &ConversionRequest {
             planning: ConversionPlanningRequest {
                 extracted_root: project.extracted_dir(),
@@ -342,7 +361,9 @@ pub(crate) fn run_pipeline(
         },
         &|message| stage(&format!("3/5: {message}")),
         &|completed, total| stage(&format!("3/5: {completed}/{total} conversions processed")),
+        incremental,
     )?;
+    let _snapshot = crate::project_work::snapshot(project.root())?;
     stage("4/5: Auditing source images and managed extracted files...");
     let audit = audit::run_audit(project, &|message| stage(&format!("4/5: {message}")))?;
     stage("5/5: Creating the Hungarian project workbook...");
@@ -354,6 +375,7 @@ pub(crate) fn run_pipeline(
         &statistics,
     )?;
     Ok(PipelineResult {
+        raw_format_exceptions,
         composited_disks,
         reused_composites,
         declined_composites,

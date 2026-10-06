@@ -31,6 +31,7 @@ pub(super) struct ScanOptions {
     pub profile: GreaseweazleProfile,
     pub automatic_format: bool,
     pub packed_captures: bool,
+    pub background_processing: bool,
     pub profile_map: BTreeMap<u32, String>,
     pub drive: char,
     pub protected: bool,
@@ -200,6 +201,8 @@ struct Journal {
     #[serde(default)]
     packed_captures: bool,
     #[serde(default)]
+    background_processing: bool,
+    #[serde(default)]
     profile_map: BTreeMap<u32, String>,
     drive: char,
     policy: RecoveryPolicy,
@@ -215,6 +218,7 @@ pub(super) struct SavedDefaults {
     pub profile: GreaseweazleProfile,
     pub automatic_format: bool,
     pub packed_captures: bool,
+    pub background_processing: bool,
     pub profile_map: BTreeMap<u32, String>,
     pub drive: char,
     pub policy: RecoveryPolicy,
@@ -240,6 +244,7 @@ pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefau
         profile: GreaseweazleProfile::parse(&journal.profile)?,
         automatic_format: journal.automatic_format,
         packed_captures: journal.packed_captures,
+        background_processing: journal.background_processing,
         profile_map: journal.profile_map,
         drive: journal.drive,
         policy: journal.policy,
@@ -254,13 +259,56 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
     let reservation = GreaseweazleReservation::acquire()?;
     let settings = crate::external_tools::load_settings()?;
     let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut seven_zip = None;
+    let mut libreoffice = None;
     preflight_downstream(options.acquisition_only, |tool| {
         eprintln!(
             "Before feeding disks: checking {} for saved-file processing...",
             tool.display_name()
         );
-        crate::external_tools::find_ready_tool(tool, settings.path(tool), &audit).map(|_| ())
+        let path = crate::external_tools::find_ready_tool(tool, settings.path(tool), &audit)?;
+        match tool {
+            crate::external_tools::ToolKind::SevenZip => seven_zip = Some(path),
+            crate::external_tools::ToolKind::LibreOffice => libreoffice = Some(path),
+            _ => {}
+        }
+        Ok(())
     })?;
+    let saved = load(&project.root().join(JOURNAL), &options)?;
+    let request = if options.background_processing && !options.acquisition_only {
+        Some(crate::pipeline::PipelineRequest {
+            project: project.clone(),
+            seven_zip_executable: seven_zip.unwrap(),
+            libreoffice_executable: libreoffice.unwrap(),
+            command_audit_path: audit.clone(),
+            conversion_workers: options.conversion_workers,
+        })
+    } else {
+        None
+    };
+    let processing = std::cell::RefCell::new(match &request {
+        Some(request) => Some(crate::processing::Queue::start(request.clone())?),
+        None => None,
+    });
+    let processing_errors = std::cell::RefCell::new(Vec::<String>::new());
+    let feeding_owner = std::cell::RefCell::new(if request.is_none() {
+        Some(crate::project_work::reserve(project.root())?)
+    } else {
+        None
+    });
+    if let Some(worker) = processing.borrow().as_ref() {
+        for result in &saved.completed {
+            if result.format_exception.is_some() {
+                continue;
+            }
+            if let Err(error) = worker.enqueue(result) {
+                processing_errors.borrow_mut().push(error);
+            }
+        }
+        eprintln!(
+            "BACKGROUND PROCESSING ON: saved-file work continues between swaps. Worker details: `fv processing status`; swap banners stay unobscured."
+        );
+    }
     let stdin = io::stdin();
     let mut stderr = io::stderr();
     let mut queue = if options.packed_captures
@@ -304,6 +352,21 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
         },
         |project, result| {
             flux_recovery::verify_completed_result(project, result)?;
+            if let Some(worker) = processing.borrow().as_ref() {
+                if result.format_exception.is_none()
+                    && let Err(error) = worker.enqueue(result)
+                {
+                    processing_errors.borrow_mut().push(error);
+                }
+                match crate::processing::status(project) {
+                    Ok(state) => eprintln!(
+                        "Background saved-file work: {} pending/failed; {}. Next swap cue follows.",
+                        state["pending"],
+                        state["worker"]["stage"].as_str().unwrap_or("starting")
+                    ),
+                    Err(error) => processing_errors.borrow_mut().push(error),
+                }
+            }
             if options.packed_captures && queue.is_none() {
                 match crate::flux_archive::Queue::start(project) {
                     Ok(worker) => queue = Some(worker),
@@ -319,7 +382,31 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
             }
             Ok(())
         },
-        |project| flux::process_saved_with_workers(project, options.conversion_workers),
+        |project| {
+            // Tail processing acquires its own owner; release only after all
+            // physical feeding/publication is finished, never during a read.
+            drop(feeding_owner.borrow_mut().take());
+            if let Some(request) = &request {
+                let outcome = processing.borrow_mut().take().unwrap().finish();
+                let _owner = crate::project_work::reserve(project.root())?;
+                let final_result =
+                    crate::pipeline::run_pipeline_incremental(request, &|s| eprintln!("{s}"))?;
+                let mut value = crate::processing::summary(&final_result);
+                crate::processing::record_final(project, &value)?;
+                let attention = value["exit_code"] != 0
+                    || !outcome.errors.is_empty()
+                    || !processing_errors.borrow().is_empty();
+                value["background_processing"] =
+                    serde_json::to_value(outcome).map_err(|e| e.to_string())?;
+                value["enqueue_errors"] = json!(*processing_errors.borrow());
+                Ok(CliResponse {
+                    output: value.to_string(),
+                    exit_code: if attention { 3 } else { 0 },
+                })
+            } else {
+                flux::process_saved_with_workers(project, options.conversion_workers)
+            }
+        },
     );
     if let Some(queue) = queue {
         eprintln!("Finishing queued lossless capture storage; no physical drive access...");
@@ -401,6 +488,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
             profile: options.profile.argument().to_owned(),
             automatic_format: options.automatic_format,
             packed_captures: options.packed_captures,
+            background_processing: options.background_processing,
             profile_map: options.profile_map.clone(),
             drive: options.drive,
             policy: options.policy.clone(),
@@ -442,6 +530,7 @@ fn load(path: &Path, options: &ScanOptions) -> Result<Journal, String> {
     journal.profile = options.profile.argument().to_owned();
     journal.automatic_format = options.automatic_format;
     journal.packed_captures = options.packed_captures;
+    journal.background_processing = options.background_processing;
     journal.profile_map = options.profile_map.clone();
     journal.drive = options.drive;
     journal.policy = options.policy.clone();
@@ -479,6 +568,7 @@ where
         json!({"profile":options.profile.argument(),
         "automatic_format":options.automatic_format,
         "packed_captures":options.packed_captures,
+        "background_processing":options.background_processing,
         "profile_map":options.profile_map,
         "drive":options.drive,"policy":options.policy,"count":options.count,
         "acquisition_only":options.acquisition_only,"start_disk":project.current_disk_number(),
@@ -638,7 +728,7 @@ where
         if result.disk != disk
             || !matches!(
                 result.status.as_str(),
-                "acquired" | "partial" | "unrecoverable_within_policy"
+                "acquired" | "partial" | "unrecoverable_within_policy" | "raw_format_exception"
             )
         {
             return Err("Recovery returned a different disk or invalid terminal state".to_owned());
@@ -712,25 +802,46 @@ where
                 "GW SWAP / {} {disk:03} / {action}",
                 if result.status == "acquired" {
                     "DONE"
+                } else if result.format_exception.is_some() {
+                    "RAW-ONLY FORMAT EXCEPTION SAVED"
                 } else {
                     "PARTIAL SAVED"
                 }
             ),
             &format!(
-                "{}; {} missing, {} conflicting. {}. Image and evidence verification passed.",
+                "{}; {} missing, {} conflicting. {}. {} verification passed.",
                 result.status,
-                result.missing_lbas.len(),
-                result.conflicting_lbas.len(),
+                if result.format_exception.is_some() {
+                    "unknown".into()
+                } else {
+                    result.missing_lbas.len().to_string()
+                },
+                if result.format_exception.is_some() {
+                    "unknown".into()
+                } else {
+                    result.conflicting_lbas.len().to_string()
+                },
                 recovery_elapsed_ms
                     .map(|ms| format!("Read/decode: {:.1}s", ms as f64 / 1000.0))
-                    .unwrap_or_else(|| "Resumed saved evidence".to_owned())
+                    .unwrap_or_else(|| "Resumed saved evidence".to_owned()),
+                if result.format_exception.is_some() {
+                    "Raw capture/format report; no sector geometry or image claimed. Evidence"
+                } else {
+                    "Image and evidence"
+                }
             ),
         )?;
         results.push(result);
     }
     let mut attention =
         journal.pending.is_some() || journal.completed.iter().any(|r| r.status != "acquired");
-    let processing = if options.acquisition_only || journal.completed.is_empty() {
+    let processing = if options.acquisition_only
+        || journal.completed.is_empty()
+        || journal
+            .completed
+            .iter()
+            .all(|r| r.format_exception.is_some())
+    {
         json!({"skipped":true})
     } else {
         terminal::banner(
@@ -739,7 +850,12 @@ where
             Cue::Action,
             "FEEDING FINISHED / REMOVE THE FLOPPY",
             &format!(
-                "Processing saved files only: extraction, conversion ({} workers), audit and workbook. No more insertions requested.",
+                "{} saved-file work: extraction, conversion ({} requested workers), audit and workbook. No more insertions requested.",
+                if options.background_processing {
+                    "Draining and reconciling background"
+                } else {
+                    "Starting"
+                },
                 options.conversion_workers
             ),
         )?;
@@ -862,6 +978,7 @@ mod tests {
             profile: GreaseweazleProfile::Ibm1440,
             automatic_format: false,
             packed_captures: false,
+            background_processing: false,
             profile_map: BTreeMap::new(),
             drive: 'B',
             protected: true,
@@ -1037,6 +1154,7 @@ mod tests {
             single_capture_sectors: 0,
             physical_reads_this_run: 1,
             resumed: false,
+            format_exception: None,
         }
     }
     fn skipped(_: &ProjectState) -> Result<CliResponse, String> {

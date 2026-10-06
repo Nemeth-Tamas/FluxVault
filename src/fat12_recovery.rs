@@ -246,7 +246,7 @@ fn result(
     }
 }
 
-fn validate_sector_evidence(
+pub(crate) fn validate_sector_evidence(
     attempt: &AttemptSummary,
     sectors: usize,
     sha256: &str,

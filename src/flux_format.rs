@@ -6,7 +6,7 @@ use crate::{
     greaseweazle::{GreaseweazleBackend, GreaseweazleProfile},
     project::ProjectState,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
@@ -14,7 +14,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Candidate {
     pub profile: String,
     pub decode_attempt: Option<u32>,
@@ -25,7 +25,7 @@ pub struct Candidate {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FormatDecision {
     pub schema_version: u32,
     pub disk: u32,

@@ -102,7 +102,7 @@ pub(super) fn recover_reserved(
         })?
     };
     let mut attention = result.status != "acquired";
-    let processing = if acquisition_only {
+    let processing = if acquisition_only || result.format_exception.is_some() {
         json!({"skipped":true})
     } else {
         eprintln!("Acquisition saved. Processing project files and reports...");
@@ -118,7 +118,9 @@ pub(super) fn recover_reserved(
             }
         }
     };
-    let processing_summary = if acquisition_only {
+    let processing_summary = if result.format_exception.is_some() {
+        "Skipped: raw-only exception; no supported geometry/image claimed. Sector counts are unknown; format trials are preserved in the report.".into()
+    } else if acquisition_only {
         "Skipped (--acquisition-only).".to_owned()
     } else if let Some(error) = processing.get("error").and_then(|v| v.as_str()) {
         format!("Needs attention: {error}. Acquisition evidence is preserved.")
@@ -143,8 +145,16 @@ pub(super) fn recover_reserved(
                 "Disk {disk:03}: {} ({}). Missing sectors: {}; conflicts: {}.\nPhysical reads this run: {}; corroborated sectors: {}; single-capture sectors: {}.\nImage: {}\nProvenance: {}\nDownstream: {}\nPhysical work finished; you may remove disk {disk:03}. Not customer-delivery certification.",
                 result.status,
                 result.stop_reason,
-                result.missing_lbas.len(),
-                result.conflicting_lbas.len(),
+                if result.format_exception.is_some() {
+                    "unknown".into()
+                } else {
+                    result.missing_lbas.len().to_string()
+                },
+                if result.format_exception.is_some() {
+                    "unknown".into()
+                } else {
+                    result.conflicting_lbas.len().to_string()
+                },
                 result.physical_reads_this_run,
                 result.corroborated_sectors,
                 result.single_capture_sectors,

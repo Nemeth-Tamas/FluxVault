@@ -278,6 +278,15 @@ pub(crate) fn run_conversion(
     send_stage: &impl Fn(&str),
     send_progress: &impl Fn(usize, usize),
 ) -> Result<ConversionResult, String> {
+    run_conversion_mode(request, send_stage, send_progress, false)
+}
+
+pub(crate) fn run_conversion_mode(
+    request: &ConversionRequest,
+    send_stage: &impl Fn(&str),
+    send_progress: &impl Fn(usize, usize),
+    incremental: bool,
+) -> Result<ConversionResult, String> {
     if !request.libreoffice_executable.is_file() {
         return Err(format!(
             "A LibreOffice futtatható fájl nem található: {}",
@@ -301,7 +310,15 @@ pub(crate) fn run_conversion(
 
     let _reservation = crate::conversion_lock::reserve(&request.planning.reports_directory)?;
     send_stage("Delivery eredetik és friss conversion plan készítése...");
-    let planning = conversion::build_conversion_plan_reserved(&request.planning, send_stage)?;
+    let planning = {
+        let root = request
+            .planning
+            .reports_directory
+            .parent()
+            .ok_or("Reports has no project parent")?;
+        let _snapshot = crate::project_work::snapshot(root)?;
+        conversion::build_conversion_plan_reserved(&request.planning, send_stage)?
+    };
     let selected_sources = request.selected_sources.as_ref().map(|sources| {
         sources
             .iter()
@@ -396,7 +413,10 @@ pub(crate) fn run_conversion(
                         && same_path(&row.job.modern_path, &job.modern_path)
                         && same_path(&row.job.pdf_path, &job.pdf_path)
                 });
-            let (modern, pdf) = if selected {
+            // During continuous processing an unchanged previously attempted job
+            // is inspected, not repeatedly relaunched for every following disk.
+            // Explicit conversion run/retry retains its existing retry behavior.
+            let (modern, pdf) = if selected && !(incremental && previous.is_some()) {
                 (
                     retry_transient_failure(|| {
                         convert_output(
@@ -1224,6 +1244,68 @@ mod tests {
             assert_eq!(calls, 1);
             assert_eq!(result.state, first.state);
         }
+    }
+
+    #[test]
+    fn incremental_processing_preserves_failed_jobs_but_explicit_run_retries_them() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-incremental-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("Extracted/001")).unwrap();
+        fs::write(root.join("Extracted/001/sample.rtf"), b"{\\rtf1 test}").unwrap();
+        let planning_request = ConversionPlanningRequest {
+            extracted_root: root.join("Extracted"),
+            converted_root: root.join("Converted"),
+            reports_directory: root.join("Reports"),
+        };
+        let planning = conversion::build_conversion_plan(&planning_request, &|_| {}).unwrap();
+        let job = planning.jobs[0].clone();
+        let previous = ConversionResult {
+            rows: vec![JobResult {
+                job,
+                modern: failure("prior bounded modern failure".into()),
+                pdf: failure("prior bounded PDF failure".into()),
+                duration_seconds: 1.0,
+            }],
+            planning,
+            ok: 0,
+            partial: 0,
+            failed: 1,
+            timed_out: 0,
+            reused_outputs: 0,
+            retried_outputs: 0,
+            issues: vec![],
+            summary_path: root.join("Reports/ConversionSummary.csv"),
+            failures_path: root.join("Reports/ConversionFailures.txt"),
+        };
+        save_snapshot(&planning_request.reports_directory, &root, &previous).unwrap();
+        // A regular empty fixture cannot execute. The incremental path must not
+        // even try it; the explicit retry must surface its launch failure.
+        let executable = root.join("invalid-fixture.exe");
+        fs::write(&executable, []).unwrap();
+        let request = ConversionRequest {
+            planning: planning_request,
+            libreoffice_executable: executable,
+            command_audit_path: root.join("audit.jsonl"),
+            timeout_seconds: 10,
+            workers: 2,
+            selected_sources: None,
+            previous_result: None,
+        };
+        for _ in 0..3 {
+            let result = run_conversion_mode(&request, &|_| {}, &|_, _| {}, true).unwrap();
+            assert_eq!(result.failed, 1);
+            assert_eq!(result.rows[0].modern.detail, "prior bounded modern failure");
+            assert_eq!(result.rows[0].pdf.detail, "prior bounded PDF failure");
+            assert!(!request.command_audit_path.exists());
+        }
+        let retry = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(retry.failed, 1);
+        assert!(retry.rows[0].modern.detail.contains("indítási hiba"));
+        assert!(retry.rows[0].pdf.detail.contains("indítási hiba"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

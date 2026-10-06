@@ -5,7 +5,7 @@
 > [!IMPORTANT]
 > `A:` is the **Windows USB floppy drive**. Greaseweazle's `--gw-drive A` is a **different drive selector**. Do not use a customer disk to test write protection. The USB acquisition commands require an independently verified write blocker and a positive Windows protection report; the flag does not bypass either check.
 
-**Ready for the current Greaseweazle run?** Start with [Tonight's 20-disk pilot](PILOT_20.md): a single restart-safe command, the correct mixed formats (009 is 720 KB), a shorter recovery budget, and automatic processing/measurements.
+**Ready for the current Greaseweazle run?** Start with [the fresh 136-disk runbook](PILOT_136.md), beginning with its short hardware checks. [The completed 20-disk pilot](PILOT_20.md) is historical; do not recreate it.
 
 **Everyday short command:** the installer now provides `fv` as well as `fluxvault`. `fv scan` runs the Greaseweazle loop using saved project settings; enter just the displayed number (`004`), or `QUIT`. See [Policies without homework](POLICIES.md) for optional expert controls. Explicit `scan --drive A:` remains the guarded USB workflow.
 
@@ -13,11 +13,13 @@
 
 **At a glance:** cyan **WAITING FOR YOU / INSERT**, green **DONE / REMOVE / INSERT**, amber **PARTIAL SAVED**, red **FAILED**. Every cue also has a large plain-text banner. After the last disk, **BATCH FINISHED** means remove it; the saved next number is not an insertion request. `--color never` disables colors.
 
-**Conversion workers:** `fv scan --conversion-workers 12` saves twelve workers for that project's scan tail. Default is four; 1–16 are supported. Idle workers take the next queued file; more workers can use more RAM and may not be faster. For saved files alone: `fv process --conversion-workers 12`.
+**Keep swapping:** new projects extract/convert/update reports in the background. `fv processing status` in another terminal shows progress without hiding your swap prompt; after interruption, `fv processing resume` finishes saved-image work offline. Old journals keep tail mode; `fv scan --processing-mode background` opts them in. [How background work behaves](BACKGROUND_PROCESSING.md).
+
+**Conversion workers:** `fv scan --conversion-workers 4` saves the requested count. Default is four; 1–16 are supported, capped during background scanning to leave two logical CPUs for acquisition. Idle workers take the next queued file; more workers may not be faster. For saved files alone: `fv process --conversion-workers 12`.
 
 **Capture size experiment:** `fv storage benchmark 7` measures lossless compression on a saved capture of disk 007 and verifies exact decompression. It does not change any captures.
 
-**New projects need no format list:** `fv scan --last-disk 136` identifies supported 720 KB/1.44 MB formats from saved raw flux. Completed captures pack in the background; their exact bytes/hash survive while the uncompressed working copy is retired after verification. Old projects keep saved formats/raw storage. Ambiguous/nonstandard formats stop for now with evidence preserved.
+**New projects need no format list:** `fv scan --last-disk 136` identifies supported 720 KB/1.44 MB formats. Completed captures pack in the background; exact bytes/hash survive. If two completed format trials remain inconclusive, an amber **RAW-ONLY FORMAT EXCEPTION SAVED** banner permits the next swap. It is preserved raw evidence, not a successful image/extraction; tool/integrity failures still stop. Old projects keep saved modes.
 
 **Saved-capture tools:** `fv greaseweazle identify 9` identifies format without hardware. `fv storage pack 7` makes a verified container but keeps raw; add `--retire-raw` explicitly to reclaim space. `fv storage resume` finishes durable packing tasks after interruption without a disk in the drive. Normal decode/recovery commands handle packed evidence transparently.
 
@@ -170,7 +172,7 @@ fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
 
 At each prompt, check the floppy's label and open write-protect hole, insert it, then type the displayed number, such as **`001`**. When FluxVault says **GW SWAP**, remove it and insert the next numbered floppy. Type **`QUIT`** to finish early. Omit `--count 10` to keep going until `QUIT`.
 
-The program performs bounded recovery automatically, saves each result, and advances the number—even for a completed partial result. An operation error keeps that disk selected. At the end it automatically extracts/converts saved files and updates the audit/workbook; processing waits until feeding has ended so it does not delay each swap. `--count` counts results finalized in this invocation, including interrupted numbering commits recovered on restart.
+The program performs bounded recovery automatically, saves each result, and advances the number—even for a completed partial result. An operation error keeps that disk selected. New scans process saved files between swaps, then drain and reconcile at the end; old journals retain tail mode. `--count` counts results finalized in this invocation, including interrupted numbering commits recovered on restart.
 
 Restart with the same command/settings. Saved completed evidence is checked before an interrupted number advance; that step reads no disk. An interrupted physical job asks you to confirm the same numbered floppy again before it can continue. The final summary tells you the next number. Avoid changing disk selection in another terminal during a scan.
 
@@ -182,7 +184,7 @@ fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 
 FluxVault captures and decodes, rereads only problem areas within bounded limits, then runs extraction/conversion/audit/report processing. After it finishes, remove the disk and run the command with the next disk's number. It stops after two non-improving passes rather than endlessly hammering the disk.
 
-For verified **720 KB** media, add `--profile ibm.720` to either command. For a known mixed sequence, `scan --profile-map FILE` switches formats from a saved per-disk list; see the pilot guide for the supplied customer list. Otherwise keep the session on its selected format. The default is 1.44 MB. FluxVault reserves the Greaseweazle across your CLI sessions and project folders, so another `scan`, `recover`, `capture`, or `info` command reports that it is busy instead of competing for the board.
+New scans identify supported **720 KB / 1.44 MB** formats automatically. Expert `recover` still defaults to 1.44 MB; add `--profile auto` or pin `--profile ibm.720`. An explicit scan profile/map overrides discovery. FluxVault reserves the Greaseweazle across your CLI sessions and project folders, so another `scan`, `recover`, `capture`, or `info` reports that it is busy instead of competing for the board.
 
 Repeat the same command/settings to resume an interrupted job. A completed job is verified/reused, not physically reread. Partial results keep missing sectors explicit—no bytes are guessed. The downstream pipeline salvages intact reachable FAT12 files and validated original names automatically. Native generation 3 also has a bounded, warned standard-layout fallback for missing boot metadata and reports precise file holes; deeper missing-directory/deleted-file/carving recovery remains unfinished. See [damaged-filesystem recovery](DAMAGED_FILESYSTEM_RECOVERY.md). Clean maps can still contain lower-confidence single-capture sectors; they are not delivery certification. Add `--acquisition-only` to skip downstream processing.
 

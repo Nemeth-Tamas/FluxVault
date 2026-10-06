@@ -129,6 +129,8 @@ Usage:
                                     Export the Hungarian XLSX workbook
   fluxvault process [--project PATH] [--conversion-workers N]
                                     Extract, convert, audit, and report
+  fluxvault processing status      Show durable background work without tools or hardware
+  fluxvault processing resume      Drain interrupted saved-image work offline
   fluxvault finalize --destination PATH [--project PATH]
                                     Process saved images, then package only if clean
   fluxvault package build --destination PATH [--project PATH]
@@ -151,6 +153,8 @@ Options:
   --gw-drive A|B                   GW selector (capture/recover default A; scan saved/B; not Windows A:)
   --profile NAME                   auto, ibm.1440 or ibm.720 (new scans default auto)
   --capture-storage packed|raw     Scan retention (new scans pack verified complete captures)
+  --processing-mode background|tail
+                                    Scan processing (new scans default background)
   --retire-raw                     storage pack only: retire raw copy AFTER verified publication
   --profile-map FILE               Known per-disk formats for mixed-format GW scans
   --revs N                         Raw-flux revolutions per track (1-10; default 3)
@@ -163,9 +167,9 @@ Options:
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
 
 #[derive(Debug)]
-struct CliResponse {
-    output: String,
-    exit_code: i32,
+pub(crate) struct CliResponse {
+    pub(crate) output: String,
+    pub(crate) exit_code: i32,
 }
 
 pub fn run_from_env() -> i32 {
@@ -198,7 +202,7 @@ fn json_error(message: &str) -> String {
     json!({"error": {"code": "operation_error", "message": message}}).to_string()
 }
 
-fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
+pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
     let mut destination: Option<PathBuf> = None;
@@ -216,6 +220,7 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut gw_profile: Option<GreaseweazleProfile> = None;
     let mut automatic_format: Option<bool> = None;
     let mut packed_captures: Option<bool> = None;
+    let mut background_processing: Option<bool> = None;
     let mut retire_raw = false;
     let mut gw_revolutions: Option<u32> = None;
     let mut gw_capture_attempt: Option<u32> = None;
@@ -233,6 +238,14 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             "--details" => details = true,
             "--no-verify" => no_verify = true,
             "--retire-raw" => retire_raw = true,
+            "--processing-mode" => {
+                index += 1;
+                background_processing = Some(match args.get(index).map(String::as_str) {
+                    Some("background") => true,
+                    Some("tail") => false,
+                    _ => return Err("--processing-mode requires background or tail".into()),
+                });
+            }
             "--capture-storage" => {
                 index += 1;
                 packed_captures = Some(match args.get(index).map(String::as_str) {
@@ -435,15 +448,19 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if conversion_workers.is_some()
         && !gw_scan
         && positional.first().map(String::as_str) != Some("process")
+        && !(positional.len() == 2 && positional[0] == "processing" && positional[1] == "resume")
         && positional.first().map(String::as_str) != Some("finalize")
         && !(positional.len() >= 2
             && positional[0] == "conversion"
             && matches!(positional[1].as_str(), "run" | "retry"))
     {
-        return Err("--conversion-workers is only valid with scan, process, finalize or conversion run/retry".to_owned());
+        return Err("--conversion-workers is only valid with scan, process, processing resume, finalize or conversion run/retry".to_owned());
     }
     if profile_map_path.is_some() && !gw_scan {
         return Err("--profile-map is only valid with greaseweazle scan".to_owned());
+    }
+    if background_processing.is_some() && !gw_scan {
+        return Err("--processing-mode is only valid with Greaseweazle scan".into());
     }
     if (recovery_policy.is_some() || acquisition_only) && !(gw_recover || gw_scan) {
         return Err(
@@ -499,7 +516,82 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
 
     let mut needs_attention = false;
+    let workstation_write = matches!(
+        positional.first().map(String::as_str),
+        Some("process" | "extract" | "files" | "audit" | "report" | "package" | "acquire")
+    ) || (positional.first().is_some_and(|s| s == "conversion")
+        && positional.get(1).is_some_and(|s| s != "issues"))
+        || (positional.first().is_some_and(|s| s == "scan") && drive_override.is_some())
+        || (positional.first().is_some_and(|s| s == "recovery")
+            && positional
+                .get(1)
+                .is_some_and(|s| !matches!(s.as_str(), "plan" | "queue" | "compare")))
+        || (positional.first().is_some_and(|s| s == "disk")
+            && positional
+                .get(1)
+                .is_some_and(|s| matches!(s.as_str(), "next" | "select")));
+    let _workstation_owner = if workstation_write {
+        Some(crate::project_work::reserve(&resolve_project_root(
+            cwd,
+            project_override.as_deref(),
+        )?)?)
+    } else {
+        None
+    };
     let output = match positional.first().map(String::as_str) {
+        Some("processing")
+            if destination.is_none() && positional.len() == 2 && positional[1] == "status" =>
+        {
+            let project = ProjectState::open_without_session(resolve_project_root(
+                cwd,
+                project_override.as_deref(),
+            )?)?;
+            let state = crate::processing::status(&project)?;
+            if json_output {
+                Ok(state.to_string())
+            } else {
+                Ok(format!(
+                    "Background processing: {}\nOwner active: {} | stale recorded stage: {}\nPending/failed jobs: {} | attention jobs: {}\nDetails: {}\nNo physical media accessed.",
+                    state["worker"]["stage"].as_str().unwrap_or("unknown"),
+                    state["owner_active"],
+                    state["stale_worker_status"],
+                    state["pending"],
+                    state["attention"],
+                    project
+                        .reports_dir()
+                        .join("ProcessingStatus.json")
+                        .display()
+                ))
+            }
+        }
+        Some("processing")
+            if destination.is_none() && positional.len() == 2 && positional[1] == "resume" =>
+        {
+            let project = ProjectState::open_without_session(resolve_project_root(
+                cwd,
+                project_override.as_deref(),
+            )?)?;
+            let outcome = crate::processing::resume(
+                &project,
+                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+            )?;
+            needs_attention = !outcome.errors.is_empty()
+                || outcome
+                    .last_result
+                    .as_ref()
+                    .is_some_and(|v| v["exit_code"] != 0);
+            if json_output {
+                Ok(serde_json::to_string(&outcome).map_err(|e| e.to_string())?)
+            } else {
+                Ok(format!(
+                    "Offline processing: {} coalesced runs, {} jobs completed, {} errors.\n{}\nNo physical media accessed; durable failed jobs remain resumable.",
+                    outcome.runs,
+                    outcome.processed_jobs,
+                    outcome.errors.len(),
+                    outcome.errors.join("\n")
+                ))
+            }
+        }
         Some("help") if positional.len() == 1 => Ok(HELP.to_owned()),
         Some("storage")
             if positional.len() == 2 && positional[1] == "resume" && destination.is_none() =>
@@ -704,6 +796,9 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 return flux_scan::run(
                     project,
                     flux_scan::ScanOptions {
+                        background_processing: background_processing.unwrap_or_else(|| {
+                            saved.as_ref().is_none_or(|s| s.background_processing)
+                        }),
                         packed_captures: packed_captures
                             .unwrap_or_else(|| saved.as_ref().is_none_or(|s| s.packed_captures)),
                         automatic_format: automatic_format
@@ -939,8 +1034,19 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let stats = imaging::load_project_statistics(&project.images_dir())?;
-            let next_actions = status_next_actions(stats.disk_count, stats.partial_disks);
-            needs_attention = stats.partial_disks > 0;
+            let processing = crate::processing::status(&project)?;
+            let raw_exceptions = crate::flux_recovery::format_exceptions(&project)?;
+            let mut next_actions = if processing["owner_active"] == true {
+                vec![
+                    "Saved-file processing is active. Follow the scan's swap prompt; use `fv processing status` for details.",
+                ]
+            } else {
+                status_next_actions(stats.disk_count, stats.partial_disks)
+            };
+            if !raw_exceptions.is_empty() {
+                next_actions.push("Raw-only format exceptions are preserved without supported sector images; inspect `recovery queue` and Flux/Formats reports.");
+            }
+            needs_attention = stats.partial_disks > 0 || !raw_exceptions.is_empty();
             if json_output {
                 Ok(json!({
                     "project": project.root(),
@@ -952,19 +1058,25 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     "partial_disks": stats.partial_disks,
                     "best_known_bad_sectors": stats.best_known_bad_sectors,
                     "next_actions": next_actions,
+                    "background_processing":processing,
+                    "raw_format_exceptions":raw_exceptions,
                 })
                 .to_string())
             } else {
                 Ok(format!(
-                    "{} ({})\nCurrent disk: {:03}\nDisks: {} ({} OK, {} partial)\nAttempts: {}\nBest known bad sectors: {}\nNext actions:\n{}",
+                    "{} ({})\nCurrent disk: {:03}\nImage disks: {} ({} OK, {} partial) | raw-only exceptions: {}\nAttempts: {}\nBest known bad sectors: {}\nBackground: {} | owner active: {} | pending/failed: {}\nNext actions:\n{}",
                     project.name(),
                     project.root().display(),
                     project.current_disk_number(),
                     stats.disk_count,
                     stats.ok_disks,
                     stats.partial_disks,
+                    raw_exceptions.len(),
                     stats.total_attempts,
                     stats.best_known_bad_sectors,
+                    processing["worker"]["stage"].as_str().unwrap_or("unknown"),
+                    processing["owner_active"],
+                    processing["pending"],
                     next_actions
                         .iter()
                         .map(|action| format!("  - {action}"))
@@ -1530,17 +1642,20 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let result = audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
-            needs_attention = result.attention_disks > 0;
+            let raw_exceptions = crate::flux_recovery::format_exceptions(&project)?.len();
+            needs_attention = result.attention_disks > 0 || raw_exceptions > 0;
             if json_output {
                 Ok(json!({"json": result.json_path, "csv": result.csv_path, "disks": result.disk_count,
                     "verified": result.verified_disks, "attention": result.attention_disks,
+                    "raw_format_exceptions":raw_exceptions,
                     "customer_delivery_certified": false}).to_string())
             } else {
                 Ok(format!(
-                    "Evidence audit: {} of {} disk evidence sets verified; {} need attention.\nReport: {}",
+                    "Evidence audit: {} of {} image evidence sets verified; {} need attention. Raw-only format exceptions: {}.\nReport: {}",
                     result.verified_disks,
                     result.disk_count,
                     result.attention_disks,
+                    raw_exceptions,
                     result.csv_path.display()
                 ))
             }
@@ -1701,12 +1816,14 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             )?;
             let conversion_state = conversion_run::snapshot_path(&reports_directory);
             needs_attention = result.audit.attention_disks > 0
+                || result.raw_format_exceptions > 0
                 || result.extraction.recovery_disks > 0
                 || result.declined_composites > 0
                 || result.conversion.partial > 0
                 || result.conversion.failed > 0;
             if json_output {
                 Ok(json!({"disks": result.extraction.total_disks,
+                    "raw_format_exceptions":result.raw_format_exceptions,
                     "composited_disks": result.composited_disks,
                     "composites_reused": result.reused_composites,
                     "composites_declined": result.declined_composites,
@@ -1727,10 +1844,11 @@ fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .to_string())
             } else {
                 Ok(format!(
-                    "Project processing complete: {} disks, {} verified evidence sets, {} need attention.\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}\nConversion state: {}",
+                    "Project processing complete: {} image disks, {} verified evidence sets, {} image disks need attention.\nRaw-only format exceptions: {} (separate from image counts; decoding/recovery still needed).\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}\nConversion state: {}",
                     result.extraction.total_disks,
                     result.audit.verified_disks,
                     result.audit.attention_disks,
+                    result.raw_format_exceptions,
                     result.composited_disks,
                     result.reused_composites,
                     result.declined_composites,

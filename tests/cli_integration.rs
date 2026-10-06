@@ -26,6 +26,104 @@ fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
 }
 
 #[test]
+#[ignore = "requires FLUXVAULT_TEST_7Z and FLUXVAULT_TEST_LIBREOFFICE; real saved-file tools, mock Greaseweazle only"]
+fn default_background_scan_runs_the_whole_cli_path_without_physical_hardware() {
+    let root = std::env::temp_dir().join(format!(
+        "fv-bg-cli-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    for (tool, variable) in [
+        ("greaseweazle", None),
+        ("sevenzip", Some("FLUXVAULT_TEST_7Z")),
+        ("libreoffice", Some("FLUXVAULT_TEST_LIBREOFFICE")),
+    ] {
+        let executable = variable
+            .map(|v| std::env::var(v).unwrap())
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_mock_gw").into());
+        assert!(
+            invoke_with_mock_gw(
+                &project,
+                &app_data,
+                &["tools", "set", tool, &executable],
+                false
+            )
+            .status
+            .success()
+        );
+    }
+    let scanned = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &["scan", "--last-disk", "2", "--json"],
+        false,
+        Some(b"1\n2\n"),
+        &[],
+    );
+    // Mock images have known readable sectors but no usable filesystem. Their
+    // processing must finish with attention, not crash or claim invented files.
+    assert_eq!(
+        scanned.status.code(),
+        Some(3),
+        "{}\n{}",
+        String::from_utf8_lossy(&scanned.stdout),
+        String::from_utf8_lossy(&scanned.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&scanned.stdout).unwrap();
+    assert_eq!(value["scanned"], 2);
+    assert_eq!(
+        value["processing"]["background_processing"]["processed_jobs"],
+        2
+    );
+    assert_eq!(
+        value["processing"]["background_processing"]["errors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(value["processing"]["disks"], 2);
+    assert_eq!(value["processing"]["converted_ok"], 0);
+    assert_eq!(
+        value["capture_storage"]["errors"].as_array().unwrap().len(),
+        0
+    );
+    let state = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["processing", "status", "--json"],
+        true,
+    );
+    assert!(state.status.success());
+    let state: serde_json::Value = serde_json::from_slice(&state.stdout).unwrap();
+    assert_eq!(state["owner_active"], false);
+    assert_eq!(state["pending"], 0);
+    assert_eq!(state["attention"], 2);
+    assert!(project.join("Logs/ProcessingEvents.jsonl").is_file());
+    let journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.join(".fluxvault-gw-scan.json")).unwrap())
+            .unwrap();
+    assert_eq!(journal["background_processing"], true);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn default_scan_discovers_dd_packs_and_reuses_evidence_across_cli_processes() {
     let root = std::env::temp_dir().join(format!(
         "fv-auto-packed-{}-{}",
@@ -149,6 +247,141 @@ fn default_scan_discovers_dd_packs_and_reuses_evidence_across_cli_processes() {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
         v.to_string().contains("disk_committed") && v.to_string().contains("ibm.720")
     }));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn raw_only_format_exceptions_advance_custody_keep_unknown_counts_and_block_all_clear() {
+    let root = std::env::temp_dir().join(format!(
+        "fv-raw-scan-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &[
+                "tools",
+                "set",
+                "greaseweazle",
+                env!("CARGO_BIN_EXE_mock_gw")
+            ],
+            false
+        )
+        .status
+        .success()
+    );
+    let output = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &["scan", "--last-disk", "2", "--acquisition-only", "--json"],
+        false,
+        Some(b"1\n2\n"),
+        &[("MOCK_GW_MEDIA_FORMAT", "unsupported-test-format")],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["scanned"], 2);
+    assert_eq!(value["next_disk"], 3);
+    assert_eq!(value["disks"][0]["status"], "raw_format_exception");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("RAW-ONLY FORMAT EXCEPTION SAVED"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown missing"));
+    assert!(
+        fs::read_dir(project.join("Images"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    let audit = project.join("Logs/external-tools.jsonl");
+    let before = fs::read(&audit).unwrap();
+    let report = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["benchmark", "report", "--json"],
+        true,
+    );
+    let benchmark: serde_json::Value = serde_json::from_slice(&report.stdout).unwrap();
+    // The exporter returns its snapshot paths; inspect the committed snapshot.
+    let path = benchmark["json"]
+        .as_str()
+        .or_else(|| benchmark["summary"].as_str())
+        .unwrap();
+    let measured: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(measured["status_counts"]["raw_format_exception"], 2);
+    assert_eq!(
+        measured["disks"][0]["outcome"]["missing_sectors"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        measured["disks"][0]["outcome"]["image_sha256"],
+        serde_json::Value::Null
+    );
+    for args in [
+        ["status", "--json"].as_slice(),
+        ["recovery", "queue", "--json"].as_slice(),
+        ["audit", "--json"].as_slice(),
+    ] {
+        let status = invoke_with_mock_gw(&project, &app_data, args, true);
+        assert_eq!(
+            status.status.code(),
+            Some(3),
+            "{}",
+            String::from_utf8_lossy(&status.stdout)
+        );
+    }
+    assert_eq!(fs::read(&audit).unwrap(), before);
+    // Reconcile a crash before the numbering commit of disk 002. No hardware,
+    // new decode, packing duplicate, fake image or second number advance.
+    let journal_path = project.join(".fluxvault-gw-scan.json");
+    let mut journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+    let second = journal["completed"].as_array_mut().unwrap().pop().unwrap();
+    journal["pending"] = serde_json::json!({"disk":2,"result":second});
+    fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    assert!(
+        invoke_with_mock_gw(&project, &app_data, &["disk", "select", "2"], true)
+            .status
+            .success()
+    );
+    let resumed = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["scan", "--acquisition-only", "--json"],
+        true,
+    );
+    assert_eq!(
+        resumed.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&resumed.stdout)
+    );
+    let resumed: serde_json::Value = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(resumed["resumed_advances"], 1);
+    assert_eq!(resumed["next_disk"], 3);
+    assert_eq!(fs::read(&audit).unwrap(), before);
     fs::remove_dir_all(root).unwrap();
 }
 

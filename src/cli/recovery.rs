@@ -29,13 +29,15 @@ pub(super) fn run_advanced(
             .into_iter()
             .filter(|plan| plan.action != RecoveryAction::Complete)
             .collect::<Vec<_>>();
+        let raw = crate::flux_recovery::format_exceptions(project)?;
         return Ok(CliResponse {
             output: if json_output {
-                json!({"project": project.root(), "queue": pending}).to_string()
-            } else if pending.is_empty() {
+                json!({"project": project.root(), "queue": pending,"raw_format_exceptions":raw})
+                    .to_string()
+            } else if pending.is_empty() && raw.is_empty() {
                 "No disks currently need recovery decisions.".to_owned()
             } else {
-                pending
+                let mut lines = pending
                     .iter()
                     .map(|plan| {
                         format!(
@@ -44,9 +46,24 @@ pub(super) fn run_advanced(
                         )
                     })
                     .collect::<Vec<_>>()
-                    .join("\n")
+                    .join("\n");
+                for result in &raw {
+                    if !lines.is_empty() {
+                        lines.push('\n');
+                    }
+                    lines.push_str(&format!(
+                        "{:03} | RAW-ONLY FORMAT EXCEPTION | sector counts unknown | {}",
+                        result.disk,
+                        result.provenance.display()
+                    ));
+                }
+                lines
             },
-            exit_code: if pending.is_empty() { 0 } else { 3 },
+            exit_code: if pending.is_empty() && raw.is_empty() {
+                0
+            } else {
+                3
+            },
         });
     }
 

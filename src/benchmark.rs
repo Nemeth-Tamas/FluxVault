@@ -139,11 +139,13 @@ pub(crate) fn milliseconds(duration: std::time::Duration) -> u64 {
 
 pub(crate) fn outcome(result: &RecoveryResult) -> Value {
     json!({"disk":result.disk,"status":result.status,"stop_reason":result.stop_reason,
-        "missing_sectors":result.missing_lbas.len(),"conflicting_sectors":result.conflicting_lbas.len(),
+        "missing_sectors":if result.format_exception.is_some(){None}else{Some(result.missing_lbas.len())},"conflicting_sectors":if result.format_exception.is_some(){None}else{Some(result.conflicting_lbas.len())},
         "missing_lbas":result.missing_lbas,"conflicting_lbas":result.conflicting_lbas,
         "corroborated_sectors":result.corroborated_sectors,"single_capture_sectors":result.single_capture_sectors,
         "capture_attempts":result.capture_attempts,"physical_reads_this_run":result.physical_reads_this_run,
-        "reused_job":result.resumed,"image_sha256":result.image_sha256,"provenance_sha256":result.provenance_sha256})
+        "reused_job":result.resumed,"image_sha256":if result.format_exception.is_some(){None}else{Some(&result.image_sha256)},
+        "evidence_sha256":result.format_exception.as_ref().map(|e|e.source_sha256.as_str()).unwrap_or(&result.image_sha256),
+        "format_exception":result.format_exception,"provenance_sha256":result.provenance_sha256})
 }
 
 #[derive(Debug, Serialize)]
@@ -307,7 +309,9 @@ pub fn report(project: &ProjectState) -> Result<BenchmarkReport, String> {
                     result.recovery_seconds += elapsed as f64 / 1000.0;
                     result.reported_physical_reads += reads;
                     let wait = waits.get(&disk).copied().unwrap_or(0);
-                    let hash = data["outcome"]["image_sha256"]
+                    let hash = data["outcome"]
+                        .get("evidence_sha256")
+                        .unwrap_or(&data["outcome"]["image_sha256"])
                         .as_str()
                         .ok_or("Missing image hash")?
                         .to_owned();
@@ -330,7 +334,9 @@ pub fn report(project: &ProjectState) -> Result<BenchmarkReport, String> {
                     if disk_number(&data["outcome"])? != disk {
                         return Err("Benchmark outcome disk identity disagrees".to_owned());
                     }
-                    let hash = data["outcome"]["image_sha256"]
+                    let hash = data["outcome"]
+                        .get("evidence_sha256")
+                        .unwrap_or(&data["outcome"]["image_sha256"])
                         .as_str()
                         .ok_or("Missing image hash")?
                         .to_owned();
@@ -398,7 +404,7 @@ pub fn report(project: &ProjectState) -> Result<BenchmarkReport, String> {
             .to_owned();
         if !matches!(
             status.as_str(),
-            "acquired" | "partial" | "unrecoverable_within_policy"
+            "acquired" | "partial" | "unrecoverable_within_policy" | "raw_format_exception"
         ) {
             return Err("Unknown benchmark terminal status".to_owned());
         }

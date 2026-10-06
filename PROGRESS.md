@@ -1,17 +1,29 @@
 # FluxVault progress — 2026-10-06 offline preparation
 
-The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats and losslessly pack verified raw captures in the background. Native recovery now has a bounded missing-boot standard-layout fallback and precise skipped-file hole reports. Existing projects retain their saved settings. This checkpoint uses saved captures only; the next hardware session should smoke-test the new defaults before scaling up.
+The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats, losslessly pack verified raw captures, and continuously extract/recover/convert/audit saved images in the background. Unrecognized formats become explicit raw-only attention records rather than stopping numbered feeding. Existing projects retain their saved settings. This checkpoint uses saved captures and mock hardware only; the next hardware session should smoke-test overlapping work before scaling up.
 
 ## How close?
 
 | Measure | Current checkpoint | Meaning |
 | --- | --- | --- |
-| Routine replacement of the seven scripts in `G.zip` | approximately 85% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented. This is engineering coverage, not proven equality of all historical reports/files. |
-| Single-Greaseweazle 136-disk benchmark readiness | approximately 90% | The real 20-disk chain passed; numbered/Enter swaps, limits, resume, telemetry, standard format handling and packed storage exist. New live defaults, nonstandard exceptions and long-run acceptance still need validation. |
-| Whole TODO list | 289 / 433 = 66.7% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
-| Fully autonomous recovery/product ambition | approximately 60% | Routine scans and saved-file processing work. Severe filesystem damage/carving, automatic ambiguous-format continuation, continuous downstream scheduling and two-station custody/resource control are major remaining work. |
+| Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
+| Single-Greaseweazle 136-disk benchmark readiness | approximately 95% | Real saved-evidence processing and deterministic 136-job/scan soaks pass; numbered/Enter swaps, limits, resume, telemetry, raw-only exceptions and packed storage exist. Live overlap and full-cohort acceptance remain the final readiness gate. |
+| Whole TODO list | 298 / 441 = 67.6% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
+| Fully autonomous recovery/product ambition | approximately 65% | Routine acquisition and durable downstream scheduling work. Severe filesystem damage/carving, additional format decoders and two-station custody/resource control remain substantial work. |
 
-These estimates do **not** mean 85% of customer files are recovered or that 90% of damaged disks are solvable. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
+These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
+
+## Continuous processing and raw-only continuation checkpoint
+
+- New scans use durable image-hash-bound jobs and one coalesced background pipeline. Swapping remains unobscured; status and elapsed stage events are saved. `processing status` is read-only, and `processing resume` drains/reconciles saved work without a floppy.
+- Whole-project writer ownership excludes competing extraction/conversion/report mutations, including after a worker exits while the scan is still feeding. Short publication snapshots release during long Office work. Requested conversion workers are capped to leave two logical CPUs available; this is conservative static budgeting, not adaptive memory/I/O scheduling.
+- Completed jobs retain individual disk verification state. Unchanged failed conversions are not relaunched on every disk arrival; explicit offline resume/process/retry performs bounded retries. Queue and capture-packer drain races are fixed and regression-tested.
+- Ambiguous automatic IBM trials retain one verified whole-disk capture plus a bound format decision, then advance custody as a raw-only exception. No geometry, complete image or zero-missing-sector claim is invented. Packed restart needs no hardware call; decoder execution failures still stop rather than being misclassified as unsupported formats. Status, queue, audit, process/finalize and benchmark records preserve the exception as attention.
+- Real validation on `C:\Users\User\Desktop\FluxVault-Test\Offline-Background-Validation-20261006`: all 20 saved images processed in two coalesced runs; all 172 fresh conversion jobs succeeded; final audit 17 verified / 3 attention; every original image hash unchanged. Approximately 8 minutes 42 seconds including copying and final checks, **not physical acquisition throughput**. A later CLI resume reconciled all records to 17 processed / 3 attention, zero pending jobs.
+- An explicitly run executable test exercised the complete default background scan, drain and packing path using mock Greaseweazle and real saved-file tools. The deterministic coalescing soak covers 136 arrivals, duplicate enqueue, interruption, failed tasks, changed evidence and competing writers.
+- Verification: 232 regular tests pass with no failures; 11 environment-dependent tests are excluded from the routine suite. The real background 20-disk test and the mock-hardware/real-tools CLI test were additionally run explicitly and passed. Formatting and all-target checking are clean; the release executable is rebuilt.
+
+Operator details: [BACKGROUND_PROCESSING.md](BACKGROUND_PROCESSING.md), [CHEATSHEET.md](CHEATSHEET.md) and [PILOT_136.md](PILOT_136.md).
 
 ## Damaged-filesystem starter checkpoint
 
@@ -22,11 +34,11 @@ These estimates do **not** mean 85% of customer files are recovered or that 90% 
 - A copied historical 009 is now analyzed rather than failing at its missing BPB: 954 bad sectors, nine live-JPEG holes totaling 4,608 bytes, 30 deleted slots. No complete payload is claimed from that image. This is a diagnostic capability improvement, not an increase in proven recovered-file yield.
 - 219 regular automated tests passed, plus the explicitly run saved-pilot regression; eight other environment-dependent checks were not run. Formatting/all-target checking are clean and the release executable was rebuilt.
 
-Details and validation paths: [DAMAGED_FILESYSTEM_RECOVERY.md](DAMAGED_FILESYSTEM_RECOVERY.md). The engineering estimates above stay unchanged for this smaller foundational slice; continuous downstream processing is the next batch.
+Details and validation paths: [DAMAGED_FILESYSTEM_RECOVERY.md](DAMAGED_FILESYSTEM_RECOVERY.md). Those results remain the foundation for the continuous processing checkpoint above.
 
 ## Previous offline preparation batch
 
-- Conservative IBM 1.44 MB/720 KB format discovery from immutable whole-disk flux, with saved candidate hashes/sector maps/decision reports. Explicit fixed formats/maps remain available. Ambiguity saves evidence and stops custody rather than guessing.
+- Conservative IBM 1.44 MB/720 KB format discovery from immutable whole-disk flux, with saved candidate hashes/sector maps/decision reports. Explicit fixed formats/maps remain available. At that earlier checkpoint ambiguity stopped custody; the current raw-only exception path safely continues feeding.
 - Persist selected format and automatic/fixed mode through recovery restart. Correctly distinguish per-profile decode attempt numbers, use the selected profile for comparisons/default re-decodes, and record actual format in telemetry.
 - Convert-only offline backend: saved-capture identify/decode cannot query the board, even for host version discovery. The installed distribution's bounded local `VERSION` file is used when available; missing version stays unknown.
 - One background lossless packer, durable task files, offline `storage resume`, capture ownership locks, atomic no-overwrite publication, verified decompression, explicit/managed retention, capacity checks, isolated materialization and archival export of packed evidence.
@@ -35,7 +47,7 @@ Details and validation paths: [DAMAGED_FILESYSTEM_RECOVERY.md](DAMAGED_FILESYSTE
 
 ## Real saved-evidence checks
 
-Prior preparation batch verification: 209 automated tests passed (8 environment-dependent tests were ignored), `cargo fmt`/all-target checking were clean, and the release executable was rebuilt. Final suites were rerun after the transient harness failure noted below. Current verification counts are in the damaged-filesystem checkpoint above.
+Prior preparation batch verification: 209 automated tests passed (8 environment-dependent tests were ignored), `cargo fmt`/all-target checking were clean, and the release executable was rebuilt. Final suites were rerun after the transient harness failure noted below. Current verification counts are in the continuous processing checkpoint above.
 
 | Check | Result |
 | --- | --- |
@@ -50,8 +62,7 @@ Validation workspace: `C:\Users\User\Desktop\FluxVault-Test\Offline-Packed-Captu
 
 ## Next acceptance priorities
 
-1. Short live 007/009 and damaged-disk checks on the new auto/packed defaults, then a fresh numbered benchmark folder.
-2. Continue past ambiguous/nonstandard formats with explicit raw-only exception records; do not fabricate image geometry or require journal editing.
-3. Compare saved pilot payloads against reachable versus deleted/orphaned/carved baseline content; implement evidence-bounded recovery for the actual yield gaps.
-4. Coalesced background extraction/conversion/audit with shared project ownership and acquisition-priority resource limits.
-5. Forced interruption/disk-full/cross-process storage soak tests and cleanup of abandoned private temporaries. One concurrent Windows test-harness fast-fail was not reproduced on subsequent complete reruns; it remains an investigation item, not a claimed fix.
+1. Short live 007/009 and damaged-disk checks with processing/packing overlap, then a fresh numbered 136-disk benchmark folder. Measure contention, memory, yield and total operator time rather than extrapolating offline tests.
+2. Compare saved pilot payloads against reachable versus deleted/orphaned/carved baseline content; implement evidence-bounded recovery for the actual yield gaps and add decoders for confirmed nonstandard formats.
+3. Forced interruption/disk-full/cross-process storage soak tests, immediate coordinated tool cancellation and cleanup of abandoned private temporaries. One concurrent Windows test-harness fast-fail was not reproduced on subsequent complete reruns; it remains an investigation item, not a claimed fix.
+4. Adaptive shared resource limits and eventual concurrent USB/GW custody scheduling. The single-GW background worker is implemented, not a claim of a finished dual-station production scheduler.

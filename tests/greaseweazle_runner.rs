@@ -24,6 +24,92 @@ fn mock_gw_path() -> PathBuf {
 }
 
 #[test]
+fn unknown_format_is_bound_raw_only_and_resumes_packed_without_any_host_command() {
+    let (project, root) = disposable_project("raw-exception");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut backend = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_env("MOCK_GW_MEDIA_FORMAT", "unsupported-test-format");
+    let result = flux_recovery::recover_auto(
+        &project,
+        1,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "raw_format_exception");
+    assert_eq!(result.physical_reads_this_run, 1);
+    assert!(result.image.as_os_str().is_empty());
+    assert!(result.image_sha256.is_empty());
+    assert!(result.selected_profile.is_none());
+    assert!(result.format_exception.is_some());
+    assert!(fs::read_dir(project.images_dir()).unwrap().next().is_none());
+    fluxvault::flux_archive::pack(&project, 1, 1, true).unwrap();
+    let before = fs::read(&audit).unwrap();
+    let mut offline = ProcessGreaseweazleBackend::new_offline(mock_gw_path(), audit.clone())
+        .unwrap()
+        .with_env("MOCK_GW_FAIL", "1");
+    let resumed = flux_recovery::recover_auto(
+        &project,
+        1,
+        'B',
+        RecoveryPolicy::default(),
+        &mut offline,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(resumed.physical_reads_this_run, 0);
+    assert!(resumed.resumed);
+    assert_eq!(resumed.format_exception, result.format_exception);
+    assert_eq!(fs::read(&audit).unwrap(), before);
+    fs::write(&result.provenance, b"tampered decision").unwrap();
+    assert!(
+        flux_recovery::recover_auto(
+            &project,
+            1,
+            'B',
+            RecoveryPolicy::default(),
+            &mut offline,
+            &|_| {}
+        )
+        .unwrap_err()
+        .contains("path/hash changed")
+    );
+    assert_eq!(fs::read(&audit).unwrap(), before);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failed_auto_decoder_is_not_misclassified_as_a_terminal_format_exception() {
+    let (project, root) = disposable_project("failed-auto-decoder");
+    let mut backend = ProcessGreaseweazleBackend::new(
+        mock_gw_path(),
+        project.logs_dir().join("external-tools.jsonl"),
+    )
+    .unwrap()
+    .with_env("MOCK_GW_FAIL_CONVERT", "1");
+    let error = flux_recovery::recover_auto(
+        &project,
+        1,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(error.contains("decoder trial failed"), "{error}");
+    let job: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("Flux/Recovery/001_job.json")).unwrap())
+            .unwrap();
+    assert_eq!(job["result"], serde_json::Value::Null);
+    assert!(root.join("Flux/001_attempt_001.scp").is_file());
+    assert!(fs::read_dir(project.images_dir()).unwrap().next().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn automatic_format_trials_do_not_redirect_consensus_to_the_wrong_profile() {
     let (project, root) = disposable_project("auto-consensus");
     let mut backend = ProcessGreaseweazleBackend::new(
