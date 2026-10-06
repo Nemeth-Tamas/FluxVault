@@ -458,6 +458,8 @@ fn enter_only_scan_is_explicit_colored_json_clean_and_saved_workers_survive_rest
     assert!(output.contains("DONE 002 / REMOVE 002 / BATCH FINISHED"));
     assert!(output.contains('\x1b'));
     assert!(!output.contains("INSERT 003"));
+    // Even forced color must not animate into redirected stderr or JSON.
+    assert!(!output.contains('\r'));
     assert!(!first.stdout.contains(&0x1b));
     let second = invoke_mock_with_input(
         &project,

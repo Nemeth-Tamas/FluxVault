@@ -6,6 +6,7 @@ mod flux;
 mod flux_scan;
 mod media_reservation;
 mod office;
+mod read_progress;
 mod recovery;
 mod scan;
 mod terminal;

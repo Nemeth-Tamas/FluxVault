@@ -8,7 +8,7 @@ The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finish
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
 | Single-Greaseweazle 136-disk benchmark readiness | approximately 95% | Real saved-evidence processing and deterministic 136-job/scan soaks pass; numbered/Enter swaps, limits, resume, telemetry, raw-only exceptions and packed storage exist. Live overlap and full-cohort acceptance remain the final readiness gate. |
-| Whole TODO list | 298 / 441 = 67.6% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
+| Whole TODO list | 300 / 443 = 67.7% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
 | Fully autonomous recovery/product ambition | approximately 65% | Routine acquisition and durable downstream scheduling work. Severe filesystem damage/carving, additional format decoders and two-station custody/resource control remain substantial work. |
 
 These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
@@ -24,6 +24,12 @@ These estimates describe implementation coverage, **not** customer-file recovery
 - Verification: 232 regular tests pass with no failures; 11 environment-dependent tests are excluded from the routine suite. The real background 20-disk test and the mock-hardware/real-tools CLI test were additionally run explicitly and passed. Formatting and all-target checking are clean; the release executable is rebuilt.
 
 Operator details: [BACKGROUND_PROCESSING.md](BACKGROUND_PROCESSING.md), [CHEATSHEET.md](CHEATSHEET.md) and [PILOT_136.md](PILOT_136.md).
+
+## First live background batch and read visibility
+
+The operator ran customer 053–064 using the new Enter-only, automatic-format, background-processing defaults. Saved records confirm all 12 acquired/extracted, 46 conversions successful, no background errors, and final 10 verified / 2 attention. 059 retains five missing sectors; 062 improves from 44 to 14 after targeted normal/recovery/detective passes. Processing began after 053 while feeding was still active and finished 12 worker runs; final reconciliation reused the saved outputs. The operator confirms the shorter end-of-batch wait feels materially better. This validates clean/damaged HD overlap, not the full DD/136-disk acceptance or historical file-yield parity.
+
+In response to that run, interactive reading/recovery now shows an ASCII loading bar, elapsed time and unique host-reported tracks, with a heartbeat during quiet operations. Each target range resets; track visitation is not sector recovery. The bar clears before messages and on success/error; redirected stderr/JSON stays unanimated. Partial-saved swaps are red with explicit permission to proceed, keeping them distinct from amber warnings. The release is rebuilt; 236 regular tests pass and formatting/all-target checking are clean.
 
 ## Damaged-filesystem starter checkpoint
 

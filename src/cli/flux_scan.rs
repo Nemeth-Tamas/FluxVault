@@ -795,8 +795,10 @@ where
             options.color,
             if result.status == "acquired" {
                 Cue::Success
-            } else {
+            } else if result.format_exception.is_some() {
                 Cue::Attention
+            } else {
+                Cue::Error
             },
             &format!(
                 "GW SWAP / {} {disk:03} / {action}",
@@ -809,7 +811,7 @@ where
                 }
             ),
             &format!(
-                "{}; {} missing, {} conflicting. {}. {} verification passed.",
+                "{}; {} missing, {} conflicting. {}. {} verification passed. Safe to swap; proceed with the displayed action.",
                 result.status,
                 if result.format_exception.is_some() {
                     "unknown".into()
@@ -1032,6 +1034,8 @@ mod tests {
         assert!(output.contains("WARNING: --no-verify"));
         assert!(output.contains("WAITING FOR YOU / INSERT 001"));
         assert!(output.contains("PARTIAL SAVED 002"));
+        assert!(output.contains("\x1b[1;31m============================================================\nGW SWAP / PARTIAL SAVED 002"));
+        assert!(output.contains("Safe to swap; proceed"));
         assert!(output.contains("REMOVE 002 / BATCH FINISHED / NO NEXT INSERTION"));
         assert!(!output.contains("INSERT 003"));
         assert!(output.contains('\x1b'));

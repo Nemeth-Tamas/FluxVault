@@ -82,6 +82,11 @@ pub(super) fn recover_reserved(
         );
     }
     policy.validate()?;
+    let progress = super::read_progress::ReadProgress::new(
+        disk,
+        std::io::stderr(),
+        super::read_progress::interactive(),
+    );
     let settings = external_tools::load_settings()?;
     let audit = project.logs_dir().join("external-tools.jsonl");
     let executable = external_tools::find_ready_tool(
@@ -91,16 +96,22 @@ pub(super) fn recover_reserved(
     )?;
     let mut backend =
         ProcessGreaseweazleBackend::new(executable, audit)?.with_stream_to_stderr(false);
-    eprintln!("READ ONLY: automatic recovery of disk {disk:03} on Greaseweazle drive {drive}");
+    backend.set_progress_callback(Some(progress.callback()));
+    progress.message(&format!(
+        "READ ONLY: automatic recovery of disk {disk:03} on Greaseweazle drive {drive}"
+    ));
     let result = if automatic_format {
         crate::flux_recovery::recover_auto(project, disk, drive, policy, &mut backend, &|s| {
-            eprintln!("{s}")
+            progress.message(s)
         })?
     } else {
         crate::flux_recovery::recover(project, disk, profile, drive, policy, &mut backend, &|s| {
-            eprintln!("{s}")
+            progress.message(s)
         })?
     };
+    // Clear and join before processing reports or emitting a swap/failure cue.
+    backend.set_progress_callback(None);
+    drop(progress);
     let mut attention = result.status != "acquired";
     let processing = if acquisition_only || result.format_exception.is_some() {
         json!({"skipped":true})

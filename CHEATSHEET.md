@@ -11,7 +11,9 @@
 
 **Even less typing (opt-in):** `fv scan --no-verify` lets you press **Enter after each swap** instead of typing the number. Check the label yourself: the warning means label typing is skipped, not that hashes or read-only protections are disabled. `QUIT` still stops; add the flag each time you want this mode.
 
-**At a glance:** cyan **WAITING FOR YOU / INSERT**, green **DONE / REMOVE / INSERT**, amber **PARTIAL SAVED**, red **FAILED**. Every cue also has a large plain-text banner. After the last disk, **BATCH FINISHED** means remove it; the saved next number is not an insertion request. `--color never` disables colors.
+**At a glance:** cyan **WAITING FOR YOU / INSERT**, green **DONE / REMOVE / INSERT**, red **PARTIAL SAVED / REMOVE / INSERT** or **FAILED**. A partial-saved banner explicitly says it is safe to swap; a failed read does not advance the number. Amber remains for warnings and raw-only format exceptions. Every cue has a plain-text label. After the last disk, **BATCH FINISHED** means remove it; the saved next number is not an insertion request. `--color never` disables colors.
+
+**While reading:** an interactive ASCII loading bar shows reported track visitation and elapsed time, then clears before the swap banner. It stays animated during quiet tool operations; unknown progress uses a moving marker, not a made-up percentage. Each reread resets its track count. Visiting all tracks does not mean every sector was recovered. Redirected output/JSON keeps ordinary stage messages without animation.
 
 **Keep swapping:** new projects extract/convert/update reports in the background. `fv processing status` in another terminal shows progress without hiding your swap prompt; after interruption, `fv processing resume` finishes saved-image work offline. Old journals keep tail mode; `fv scan --processing-mode background` opts them in. [How background work behaves](BACKGROUND_PROCESSING.md).
 
