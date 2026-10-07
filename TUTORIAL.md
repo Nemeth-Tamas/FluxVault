@@ -196,7 +196,7 @@ fv process --conversion-workers 12
 
 Workers are parallel Office jobs, not floppy drives. Requests 1–16 are accepted. Background scanning caps them to leave two logical CPUs available; more may not be faster. Twelve can be requested for image-only processing on your machine. [Details](BACKGROUND_PROCESSING.md).
 
-New scans pack verified complete captures automatically. `fv storage pack 7` packs saved evidence and keeps raw; `fv storage pack 7 --retire-raw` explicitly retires raw after verification. Containers preserve exact original bytes. `fv storage resume` finishes pending packing offline. `--capture-storage raw` is an optional new-job scan choice.
+New scans pack verified complete captures automatically. `fv storage pack 7` packs saved evidence and keeps raw; `fv storage pack 7 --retire-raw` explicitly retires raw after verification. Containers preserve exact original bytes. `fv storage resume` finishes pending packing offline and safely checks abandoned temporary compression/decode copies after an interruption; active readers and unknown files are left alone. `--capture-storage raw` is an optional new-job scan choice. [Storage/restart details](CAPTURE_STORAGE.md).
 
 ### Recovery budgets and formats
 

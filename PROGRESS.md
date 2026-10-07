@@ -1,4 +1,4 @@
-# FluxVault progress — 2026-10-07 recovery preference and delivery maintenance
+# FluxVault progress — 2026-10-07 capture-storage resilience
 
 The routine path remains `fv init` -> `fv scan` -> swap/confirm until finished. Automatic format selection, packed captures and continuous saved-file processing work. The live 021–032 cohort completed with eight OK/four partial images, 37 successful conversions, no downstream errors and cursor 033. Native generation 4 automatically salvages validated orphan/signature/embedded candidates, with separate raw partial fragments and optional forensic-only deleted recovery. This checkpoint automatically prefers verified same-acquisition recovery improvements and recoverably quarantines equivalent obsolete program-owned original mirrors. Existing scan settings and original evidence are preserved.
 
@@ -8,10 +8,17 @@ The routine path remains `fv init` -> `fv scan` -> swap/confirm until finished. 
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
 | Single-Greaseweazle 136-disk benchmark readiness | approximately 98% | Completed live mixed/damaged cohorts plus deterministic 136-job/scan soaks; the actual full 136-disk run and live ten-minute stage-exhaustion acceptance remain unproven. |
-| Whole TODO list | 319 / 456 = 70.0% checked | Literal checkbox count, including nested checkpoints and umbrella tasks; not a weighted engineering score. Reaching the day's 80% target needs 46 more checked items at this denominator. Recovery preference and original-mirror retirement are now checked with their precise bounded scope. |
+| Whole TODO list | 321 / 456 = 70.4% checked | Literal checkbox count, including nested checkpoints and umbrella tasks; not a weighted engineering score. Reaching the day's 80% target needs 44 more checked items at this denominator. Capture-storage crash/disk-full/cleanup validation adds two completed items. |
 | Fully autonomous recovery/product ambition | approximately 72% | Routine scheduling, bounded salvage/fragments/deleted candidates, evidence-based generation preference and recoverable original-copy maintenance work. Deeper directories/erased fragmented allocation, additional formats, document-aware repair and two-station production control remain substantial. |
 
 These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
+
+## Capture-storage resilience checkpoint (2026-10-07)
+
+- Compression/binding/materialization scratch now has capture-bound ownership and non-recursive cleanup. Storage resume also discovers interrupted decode copies after the packing task has already completed. A surviving source must verify before abandoned cleanup; active readers, unknown/edited/foreign entries, reparse points and unbound legacy scratch are preserved. Packed-only enqueue now verifies rather than silently accepting a corrupted container.
+- Actual process-kill tests cover 11 packing and three materialization checkpoints; injected disk-full errors exercise ZIP, metadata and decompression writes. Eight two-reader cross-process contention rounds plus a killed queue owner verify locking/restart behavior without evidence loss. No production fault-injection switches ship.
+- Release validation on a new copied 007 capture: **54,050,828 -> 12,343,928 bytes**, packed-only evidence healthy, storage resume succeeds, both benchmark decompressions hash-identical and no temporary materialization remains. Original source hash is unchanged. Retained project: `C:\Users\User\Desktop\FluxVault-Test\Storage-Resilience-007-20261007-v1`.
+- Validation: **325 routine tests pass**, 15 environment-dependent tests outside the routine suite; formatting/all-target checks and release build pass. No new recovery-yield claim; no physical media access. See [CAPTURE_STORAGE.md](CAPTURE_STORAGE.md).
 
 ## Operator documentation checkpoint (2026-10-07)
 
