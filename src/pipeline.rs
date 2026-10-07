@@ -44,6 +44,9 @@ pub struct PipelineResult {
     pub composited_disks: usize,
     pub reused_composites: usize,
     pub declined_composites: usize,
+    pub published_recovery_images: usize,
+    pub reused_recovery_images: usize,
+    pub declined_recovery_publications: usize,
     pub recovery_decisions_path: PathBuf,
     pub reconstructed_disks: usize,
     pub reused_reconstructions: usize,
@@ -62,6 +65,50 @@ struct OfflineRecoveryDecision {
     detail: String,
     derived_images: Vec<PathBuf>,
     unresolved_bad_sectors: Option<usize>,
+    published_attempt: Option<u32>,
+    publication_report: Option<PathBuf>,
+    publication_error: Option<String>,
+}
+
+#[derive(Default)]
+struct PublicationCounts {
+    published: usize,
+    reused: usize,
+    declined: usize,
+}
+
+fn publish_recovery(
+    project: &ProjectState,
+    disk: u32,
+    attempts: &[imaging::AttemptSummary],
+    composite: Option<&composite::CompositeResult>,
+    reconstruction: Option<&sector_recovery::ReconstructionResult>,
+    counts: &mut PublicationCounts,
+    stage: &impl Fn(&str),
+) -> (Option<crate::offline_images::Published>, Option<String>) {
+    match crate::offline_images::publish(project, disk, attempts, composite, reconstruction) {
+        Ok(p) => {
+            counts.published += 1;
+            counts.reused += usize::from(p.reused);
+            stage(&format!(
+                "1/5: Disk {disk:03}: {} DERIVED attempt #{:03} for automatic saved-file processing",
+                if p.reused {
+                    "verified/reused"
+                } else {
+                    "published"
+                },
+                p.attempt
+            ));
+            (Some(p), None)
+        }
+        Err(e) => {
+            counts.declined += 1;
+            stage(&format!(
+                "1/5: Disk {disk:03}: derived publication declined; original attempts preserved: {e}"
+            ));
+            (None, Some(e))
+        }
+    }
 }
 
 pub fn spawn_pipeline(request: PipelineRequest) -> Receiver<PipelineEvent> {
@@ -116,6 +163,7 @@ fn run_pipeline_mode(
     let mut reconstructed_disks = 0;
     let mut reused_reconstructions = 0;
     let mut decisions = Vec::new();
+    let mut publications = PublicationCounts::default();
     for plan in recovery_plan::plan_project(&project.images_dir())? {
         if plan.action == RecoveryAction::CompareAndComposite {
             let attempts =
@@ -130,6 +178,7 @@ fn run_pipeline_mode(
                 .iter()
                 .filter(|attempt| {
                     attempt.total_sectors == best.total_sectors
+                        && attempt.status != "DERIVED"
                         && (attempt.parsed_log.is_some() || attempt.parsed_dmde_log.is_some())
                 })
                 .map(|attempt| CompositeSource {
@@ -156,6 +205,7 @@ fn run_pipeline_mode(
             match result {
                 Ok(result) => {
                     let mut derived_images = Vec::new();
+                    let mut reconstruction_for_publication = None;
                     let mut unresolved = result.unresolved_bad_sectors.len();
                     if let Some(image_path) = &result.derived_image {
                         derived_images.push(image_path.clone());
@@ -192,7 +242,7 @@ fn run_pipeline_mode(
                                         recovery_root: project.recovery_dir(),
                                         disk_number: plan.disk_number,
                                         attempt_number: result.base_attempt,
-                                        bad_sectors: result.unresolved_bad_sectors,
+                                        bad_sectors: result.unresolved_bad_sectors.clone(),
                                     },
                                     &|message| stage(&format!("1/5: {message}")),
                                 )?;
@@ -200,12 +250,41 @@ fn run_pipeline_mode(
                                     usize::from(reconstruction.derived_image.is_some());
                                 reused_reconstructions += usize::from(reconstruction.reused);
                                 unresolved = reconstruction.unresolved_bad_sectors.len();
+                                if reconstruction.derived_image.is_some() {
+                                    reconstruction_for_publication = Some(reconstruction.clone());
+                                }
                                 if let Some(derived) = reconstruction.derived_image {
                                     derived_images.push(derived);
                                 }
                             }
                         }
                     }
+                    let (publication, publication_error) = if result.derived_image.is_some() {
+                        let eligible = attempts
+                            .iter()
+                            .filter(|a| {
+                                a.status != "DERIVED"
+                                    && a.total_sectors == best.total_sectors
+                                    && (a.parsed_log.is_some() || a.parsed_dmde_log.is_some())
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let (published, error) = publish_recovery(
+                            project,
+                            plan.disk_number,
+                            &eligible,
+                            Some(&result),
+                            reconstruction_for_publication.as_ref(),
+                            &mut publications,
+                            stage,
+                        );
+                        if let Some(p) = &published {
+                            derived_images.push(p.image.clone());
+                        }
+                        (published, error)
+                    } else {
+                        (None, None)
+                    };
                     decisions.push(OfflineRecoveryDecision {
                         disk_number: plan.disk_number,
                         best_attempt: plan.best_attempt,
@@ -223,6 +302,9 @@ fn run_pipeline_mode(
                         ),
                         derived_images,
                         unresolved_bad_sectors: Some(unresolved),
+                        published_attempt: publication.as_ref().map(|p| p.attempt),
+                        publication_report: publication.map(|p| p.report),
+                        publication_error,
                     });
                 }
                 Err(error) => {
@@ -239,6 +321,9 @@ fn run_pipeline_mode(
                         detail: error,
                         derived_images: Vec::new(),
                         unresolved_bad_sectors: Some(plan.best_bad_sectors),
+                        published_attempt: None,
+                        publication_report: None,
+                        publication_error: None,
                     });
                 }
             }
@@ -253,6 +338,9 @@ fn run_pipeline_mode(
                 detail: plan.reason,
                 derived_images: Vec::new(),
                 unresolved_bad_sectors: Some(plan.best_bad_sectors),
+                published_attempt: None,
+                publication_report: None,
+                publication_error: None,
             });
             continue;
         }
@@ -291,6 +379,19 @@ fn run_pipeline_mode(
                 }
             ));
         }
+        let (publication, publication_error) = if result.derived_image.is_some() {
+            publish_recovery(
+                project,
+                plan.disk_number,
+                std::slice::from_ref(attempt),
+                None,
+                Some(&result),
+                &mut publications,
+                stage,
+            )
+        } else {
+            (None, None)
+        };
         decisions.push(OfflineRecoveryDecision {
             disk_number: plan.disk_number,
             best_attempt: plan.best_attempt,
@@ -308,8 +409,15 @@ fn run_pipeline_mode(
                 result.reconstructed.len(),
                 result.unresolved_bad_sectors.len()
             ),
-            derived_images: result.derived_image.into_iter().collect(),
+            derived_images: result
+                .derived_image
+                .into_iter()
+                .chain(publication.as_ref().map(|p| p.image.clone()))
+                .collect(),
             unresolved_bad_sectors: Some(result.unresolved_bad_sectors.len()),
+            published_attempt: publication.as_ref().map(|p| p.attempt),
+            publication_report: publication.map(|p| p.report),
+            publication_error,
         });
     }
     let recovery_decisions_path = project.reports_dir().join("OfflineRecoveryDecisions.json");
@@ -379,6 +487,9 @@ fn run_pipeline_mode(
         composited_disks,
         reused_composites,
         declined_composites,
+        published_recovery_images: publications.published,
+        reused_recovery_images: publications.reused,
+        declined_recovery_publications: publications.declined,
         recovery_decisions_path,
         reconstructed_disks,
         reused_reconstructions,

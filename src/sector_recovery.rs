@@ -348,6 +348,14 @@ fn find_existing_reconstruction(
     Ok(None)
 }
 
+pub(crate) fn reconstruction_evidence(
+    image: &[u8],
+    bad: &[u64],
+) -> Result<(Vec<ReconstructionRecord>, Vec<u64>), String> {
+    let layout = FatLayout::parse(image)?;
+    Ok(plan_reconstruction(image, layout, bad))
+}
+
 pub(crate) fn inspect_mirrored_fat(
     image: &[u8],
     bad_sectors: &[u64],

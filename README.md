@@ -73,6 +73,7 @@ FluxVault never writes to source floppies. Missing bytes are not fabricated. Fra
 | Automatic orphan/signature/embedded salvage | [Carving recovery](CARVING_RECOVERY.md) |
 | Fragments and opt-in deleted recovery | [Deleted and fragment recovery](DELETED_AND_FRAGMENT_RECOVERY.md) |
 | Preferred generations and recoverable copy cleanup | [Recovery selection](RECOVERY_SELECTION.md) |
+| Automatic extraction from improved composite/FAT images | [Offline recovery handoff](OFFLINE_RECOVERY_HANDOFF.md) |
 | Comparing to the old archive | [Baseline comparison](BASELINE_COMPARISON.md) |
 
 This is a working **single-Greaseweazle prototype**, with live sample batches and automated tests. Full 136-disk acceptance, deeper damaged-filesystem recovery and simultaneous USB/Greaseweazle production remain development targets. See [current progress](PROGRESS.md) for measured results; implementation percentages are not recovery rates.

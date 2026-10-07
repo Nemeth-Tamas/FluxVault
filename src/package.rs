@@ -83,6 +83,8 @@ pub(crate) fn build_package(
     if !project.join("project.json").is_file() {
         return Err("The selected source is not a FluxVault project.".to_owned());
     }
+    // Replays catalogued offline derivations before exporting their products.
+    crate::imaging::load_project_statistics(&project.join("Images"))?;
     // Packed flux is evidence, not an unrelated nested ZIP. Verify its logical
     // original identity before including the container and binding sidecar.
     let flux = project.join("Flux");
@@ -300,6 +302,7 @@ fn is_customer_report(name: &str, latest_workbook: Option<&str>) -> bool {
     EXACT.contains(&normalized.as_str())
         || (normalized.starts_with("recoveryselection-") && normalized.ends_with(".json"))
         || (normalized.starts_with("deliverycleanup-") && normalized.ends_with(".json"))
+        || (normalized.starts_with("offlinederived-") && normalized.ends_with(".json"))
         || (normalized.starts_with("finalaudit")
             && (normalized.ends_with(".csv") || normalized.ends_with(".txt")))
         || latest_workbook.is_some_and(|latest| latest == name)
@@ -528,6 +531,7 @@ fn readme_text(project_name: &str, file_count: usize, total_bytes: u64) -> Strin
         "FluxVault archival package\r\nProject: {project_name}\r\nFiles: {file_count}\r\nSource bytes: {total_bytes}\r\n\r\nImages: acquired sector images.\r\nLogs: acquisition and recovery logs.\r\nExtracted: recovered source files.\r\nConverted: customer-friendly converted copies.\r\nRecovery: preserved recovery evidence, derived images, and backups.\r\nReports: selected inventories and reports.\r\nFlux: raw flux captures, where available.\r\n\r\nWindows System Volume Information and Recycle Bin folders are excluded from delivery files; original sector images retain all captured bytes.\r\nCheck PACKAGE_MANIFEST.csv for each included file's SHA-256.\r\nA partial image or recovered file is not proof that every original byte was readable.\r\nReview audit and recovery reports for limitations before delivery.\r\n"
     );
     text.push_str("\r\nPacked flux: a managed .scp.zip contains one byte-identical original SCP, not regenerated flux. Its .scp.packed.json binds original/packed sizes and SHA-256. FluxVault decodes it transparently; a ZIP tool can restore the original SCP member.\r\n");
+    text.push_str("\r\nOffline DERIVED images: Images may also contain explicitly labeled offline composite/mirrored-FAT attempts. They are saved-sector derivations, NOT new clean physical reads. OfflineDerived reports bind original images/logs/metadata and exact replayable sector copies; originals remain included. Zero remaining gaps do not certify filesystem/customer completeness.\r\n");
     text.push_str("\r\nForensic-only recovery: Recovery may contain raw .bin fragments of incomplete live files and explicitly requested deleted candidates. They are separate evidence, NOT complete/live customer documents. Read their source/offset/hash and missing-range reports; fragment counts do not increase recovered whole-file counts.\r\n");
     text.push_str("\r\nRecoverySelection reports explain the preferred same-acquisition recovery generation; earlier forensic results remain included. DeliveryCleanup reports audit equivalent obsolete original copies moved into local Recovery/DeliveryQuarantine. Quarantined copies and private ownership journals are excluded from this package; edited/untracked originals and prior Office derivatives are preserved.\r\n");
     text

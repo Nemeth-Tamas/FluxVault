@@ -226,11 +226,21 @@ pub(crate) fn run_audit(
             record.evidence_status = "IMAGE_FILES_CONVERSIONS_VERIFIED".to_owned();
             record.issue.clear();
         } else if attempt.attention_required || recovery_attention {
-            record.evidence_status = "PARTIAL_IMAGE_READ".to_owned();
+            record.evidence_status = if attempt.status == "DERIVED" {
+                "DERIVED_RECOVERY"
+            } else {
+                "PARTIAL_IMAGE_READ"
+            }
+            .to_owned();
             if record.issue.is_empty() {
                 record.issue = format!(
-                    "{} unresolved sectors{}",
+                    "{} unresolved sectors{}{}",
                     record.bad_sectors,
+                    if attempt.status == "DERIVED" {
+                        "; replay-verified saved-sector derivation, not an untouched physical read"
+                    } else {
+                        ""
+                    },
                     if recovery_attention {
                         "; native recovery does not certify complete filesystem recovery"
                     } else {

@@ -144,11 +144,13 @@ fv storage resume
 
 `fv process` also runs the saved-image recovery/extraction/conversion/audit/report chain. It never reads a physical disk.
 
+When saved attempts can supply missing sectors or readable FAT redundancy can repair a FAT gap, processing automatically hands the verified improved image to file extraction and delivery. It appears as **DERIVED**, not a clean physical read; attention is still expected even with no remaining gaps. Earlier evidence and operator-created recovery folders are preserved. [Details and limits](OFFLINE_RECOVERY_HANDOFF.md).
+
 ### Find your files
 
 | Folder | Contents |
 | --- | --- |
-| `Images` | Sector images and acquisition metadata. |
+| `Images` | Sector images, acquisition metadata and explicitly labeled DERIVED offline improvements. |
 | `Flux` | Raw/packed captures and decode/format evidence. |
 | `Extracted` | Forensic recovered originals and preserved generations. |
 | `Converted` | Delivery-friendly originals and successful Office/PDF copies. |

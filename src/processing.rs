@@ -210,13 +210,16 @@ pub(crate) fn summary(result: &PipelineResult) -> Value {
         || result.raw_format_exceptions > 0
         || result.conversion.failed > 0
         || result.conversion.partial > 0
-        || result.declined_composites > 0;
+        || result.declined_composites > 0
+        || result.declined_recovery_publications > 0;
     json!({"exit_code":if attention {3} else {0},"disks":result.extraction.total_disks,"verified_disks":result.audit.verified_disks,"attention_disks":result.audit.attention_disks,
         "conversion_ok":result.conversion.ok,"conversion_failed":result.conversion.failed,"conversion_partial":result.conversion.partial,
         "extracted":result.extraction.extracted_disks,"reused_extractions":result.extraction.reused_disks,"recovery_queue":result.extraction.recovery_disks,
         "converted_ok":result.conversion.ok,"converted_failed":result.conversion.failed,"converted_partial":result.conversion.partial,
         "evidence_verified":result.audit.verified_disks,"evidence_attention":result.audit.attention_disks,"customer_delivery_certified":false,
-        "disk_verification":result.audit.disk_verification,"raw_format_exceptions":result.raw_format_exceptions,"workbook":result.workbook_path,"recovery_decisions":result.recovery_decisions_path,"physical_media_access":false})
+        "disk_verification":result.audit.disk_verification,"raw_format_exceptions":result.raw_format_exceptions,"workbook":result.workbook_path,"recovery_decisions":result.recovery_decisions_path,
+        "published_recovery_images":result.published_recovery_images,"reused_recovery_images":result.reused_recovery_images,
+        "declined_recovery_publications":result.declined_recovery_publications,"physical_media_access":false})
 }
 
 #[derive(Default, Serialize)]

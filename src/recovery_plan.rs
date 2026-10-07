@@ -55,9 +55,16 @@ fn plan_disk(
     disk: &DiskSummary,
     attempts: &[AttemptSummary],
 ) -> Result<DiskRecoveryPlan, String> {
+    let physical = attempts
+        .iter()
+        .filter(|a| a.status != "DERIVED")
+        .cloned()
+        .collect::<Vec<_>>();
     let best = attempts
         .iter()
         .find(|attempt| attempt.attempt_number == disk.best_attempt_number)
+        .filter(|a| a.status != "DERIVED")
+        .or_else(|| imaging::best_attempt(&physical))
         .ok_or_else(|| format!("Disk {:03}: best attempt is missing", disk.disk_number))?;
     let mut plan = DiskRecoveryPlan {
         disk_number: disk.disk_number,
@@ -146,6 +153,7 @@ fn plan_disk(
         .iter()
         .filter(|attempt| {
             attempt.attempt_number != best.attempt_number
+                && attempt.status != "DERIVED"
                 && attempt.total_sectors == best.total_sectors
                 && images[&attempt.attempt_number].len() == best_bytes.len()
                 && (attempt.parsed_log.is_some() || attempt.parsed_dmde_log.is_some())

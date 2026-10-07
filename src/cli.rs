@@ -1882,6 +1882,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 || result.raw_format_exceptions > 0
                 || result.extraction.recovery_disks > 0
                 || result.declined_composites > 0
+                || result.declined_recovery_publications > 0
                 || result.conversion.partial > 0
                 || result.conversion.failed > 0;
             if json_output {
@@ -1890,6 +1891,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     "composited_disks": result.composited_disks,
                     "composites_reused": result.reused_composites,
                     "composites_declined": result.declined_composites,
+                    "published_recovery_images": result.published_recovery_images,
+                    "reused_recovery_images": result.reused_recovery_images,
+                    "declined_recovery_publications": result.declined_recovery_publications,
                     "recovery_decisions": result.recovery_decisions_path,
                     "mirrored_fat_derived_disks": result.reconstructed_disks,
                     "mirrored_fat_reused": result.reused_reconstructions,
@@ -1907,7 +1911,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .to_string())
             } else {
                 Ok(format!(
-                    "Project processing complete: {} image disks, {} verified evidence sets, {} image disks need attention.\nRaw-only format exceptions: {} (separate from image counts; decoding/recovery still needed).\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}\nConversion state: {}",
+                    "Project processing complete: {} image disks, {} verified evidence sets, {} image disks need attention.\nRaw-only format exceptions: {} (separate from image counts; decoding/recovery still needed).\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nAutomatic DERIVED image handoff: {} published/verified, {} reused, {} declined.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}\nConversion state: {}",
                     result.extraction.total_disks,
                     result.audit.verified_disks,
                     result.audit.attention_disks,
@@ -1917,6 +1921,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     result.declined_composites,
                     result.reconstructed_disks,
                     result.reused_reconstructions,
+                    result.published_recovery_images,
+                    result.reused_recovery_images,
+                    result.declined_recovery_publications,
                     result.conversion.ok,
                     result.conversion.partial,
                     result.conversion.failed,

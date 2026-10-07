@@ -909,6 +909,11 @@ pub fn load_attempts_for_disk(
         if metadata.disk_number != disk_number {
             continue;
         }
+        crate::offline_images::verify_metadata(
+            directory,
+            &path,
+            &serde_json::from_str(&json).map_err(|e| e.to_string())?,
+        )?;
 
         let resolved_log_path =
             resolve_archiver_log_path(directory, &metadata.log_file, metadata.disk_number);

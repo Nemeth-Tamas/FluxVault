@@ -8,6 +8,7 @@ use std::{
 pub enum ArchiverLogStatus {
     Ok,
     Partial,
+    Derived,
     Failed,
     InProgress,
     Unknown,
@@ -18,6 +19,7 @@ impl ArchiverLogStatus {
         match self {
             Self::Ok => "OK",
             Self::Partial => "PARTIAL",
+            Self::Derived => "DERIVED",
             Self::Failed => "FAILED",
             Self::InProgress => "IN PROGRESS",
             Self::Unknown => "UNKNOWN",
@@ -279,6 +281,7 @@ fn parse_status(value: &str) -> ArchiverLogStatus {
     match value.trim().to_ascii_uppercase().as_str() {
         "OK" | "SUCCESS" | "COMPLETE" => ArchiverLogStatus::Ok,
         "PARTIAL" => ArchiverLogStatus::Partial,
+        "DERIVED" => ArchiverLogStatus::Derived,
         "FAILED" | "FAIL" | "ERROR" => ArchiverLogStatus::Failed,
         "IN PROGRESS" | "IN_PROGRESS" | "RUNNING" => ArchiverLogStatus::InProgress,
         _ => ArchiverLogStatus::Unknown,

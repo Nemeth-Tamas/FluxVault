@@ -36,6 +36,8 @@ Interactive recovery/scan displays a temporary ASCII bar with disk identity, pha
 
 ## Saved conversion state
 
+`process` and scan/background processing now publish verified composite/mirrored-FAT improvements as **DERIVED** image-catalog attempts before extraction. Native recovery, manifests, conversion and audit use that improved evidence automatically; originals/operator folders remain preserved. Ready/reused/declined handoff counts appear in human/JSON results. Even zero-gap derived results remain attention, and changed lineage is refused. Expert standalone `recovery composite`/`recovery fat` commands do not perform this catalog handoff themselves. [Bounds, provenance and restart](OFFLINE_RECOVERY_HANDOFF.md).
+
 Saved conversion state is atomically replaced, with immutable current/prior snapshots retained in `Reports/ConversionHistory` for audit. Equivalent DOS/canonical Windows paths no longer invalidate source/output hash bindings. Changed outputs, changed sources and malformed snapshots are still refused; history is internal, not customer delivery content.
 
 ## Capture packing and format discovery

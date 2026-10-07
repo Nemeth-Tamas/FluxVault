@@ -115,6 +115,8 @@ Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count 
 
 Normal scans/processing need their saved-file tools; standalone native extraction needs neither 7-Zip nor LibreOffice. Deleted candidates and raw fragments are not complete/live customer documents.
 
+`fv process` automatically uses supported verified composite/FAT improvements for extraction and delivery. These appear as **DERIVED**, not clean physical reads; even zero-gap results retain attention. No manual copying from `Recovery` is needed. [Details](OFFLINE_RECOVERY_HANDOFF.md).
+
 ### Settings and diagnostics
 
 - `fv tools check` checks host tools; `fv greaseweazle info` checks board readiness.

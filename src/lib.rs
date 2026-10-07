@@ -27,6 +27,7 @@ pub mod imaging;
 pub mod legacy_logs;
 pub mod manifest;
 pub mod manual_recovery_import;
+mod offline_images;
 pub mod package;
 pub mod pipeline;
 pub mod processing;

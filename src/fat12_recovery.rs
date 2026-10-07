@@ -199,6 +199,7 @@ fn recover_with_mode(
     }
     let snapshot = read_snapshot(&image)?;
     let source_sha256 = hash(&snapshot);
+    crate::offline_images::verify_attempt(&images, attempt)?;
     if attempt.sha256.len() != 64 || !attempt.sha256.eq_ignore_ascii_case(&source_sha256) {
         return Err("Image hash differs from saved acquisition; no native files published".into());
     }
@@ -477,7 +478,9 @@ pub(crate) fn validate_sector_evidence(
     sectors: usize,
     sha256: &str,
 ) -> Result<(), String> {
-    if attempt.total_sectors != sectors || !matches!(attempt.status.as_str(), "OK" | "PARTIAL") {
+    if attempt.total_sectors != sectors
+        || !matches!(attempt.status.as_str(), "OK" | "PARTIAL" | "DERIVED")
+    {
         return Err("Acquisition is unfinished/unknown or geometry differs from image".into());
     }
     let mut expected = attempt.bad_sectors.clone();
@@ -488,7 +491,7 @@ pub(crate) fn validate_sector_evidence(
         if !log.end_seen
             || !matches!(
                 log.status,
-                ArchiverLogStatus::Ok | ArchiverLogStatus::Partial
+                ArchiverLogStatus::Ok | ArchiverLogStatus::Partial | ArchiverLogStatus::Derived
             )
             || log.geometry.bytes_per_sector != Some(512)
             || log.geometry.total_sectors != Some(sectors as u64)
