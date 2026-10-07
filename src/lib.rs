@@ -20,6 +20,7 @@ pub mod flux_capture;
 pub mod flux_format;
 pub mod flux_recovery;
 pub mod flux_storage;
+pub mod fragments;
 pub mod greaseweazle;
 pub mod imaging;
 pub mod legacy_logs;

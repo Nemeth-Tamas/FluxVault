@@ -113,8 +113,8 @@ Usage:
                                     Build/reuse an evidence-checked image composite
   fluxvault recovery fat N [--project PATH]
                                     Reconstruct only provable mirrored FAT sectors
-  fluxvault recovery extract N [--project PATH]
-                                    Recover intact files and validated signature candidates offline
+  fluxvault recovery extract N [--include-deleted] [--project PATH]
+                                    Recover intact/signature files offline; deleted opt-in stays forensic-only
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
   fluxvault conversion plan [--project PATH]
@@ -151,7 +151,7 @@ Options:
   --write-blocker-verified          Operator asserts separate hardware protection test
   --source DIR                      External recovered-files folder for DMDE import
   --baseline ZIP                    Script archive for recovered-payload comparison
-  --include-deleted                  Include confirmed DMDE deleted files in comparison only
+  --include-deleted                  Opt-in forensic deleted recovery (recovery extract), or baseline comparison scope
   --dmde-log FILE                   Matching DMDE log for recovery import
   --conversion-workers N            Parallel Office jobs (1-16; default 4); scan saves this setting
   --details                        Include bad-sector LBAs and evidence paths in disk show
@@ -530,12 +530,16 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
 
     let mut needs_attention = false;
-    if (baseline_zip.is_some() || include_deleted)
+    if baseline_zip.is_some()
         && !(positional.len() == 2 && positional[0] == "benchmark" && positional[1] == "compare")
     {
-        return Err(
-            "--baseline and --include-deleted are only valid with benchmark compare".into(),
-        );
+        return Err("--baseline is only valid with benchmark compare".into());
+    }
+    if include_deleted
+        && !((positional.len() == 2 && positional[0] == "benchmark" && positional[1] == "compare")
+            || (positional.len() == 3 && positional[0] == "recovery" && positional[1] == "extract"))
+    {
+        return Err("--include-deleted is only valid with recovery extract or benchmark compare; default processing excludes known deleted entries".into());
     }
     let workstation_write = matches!(
         positional.first().map(String::as_str),
@@ -1509,6 +1513,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 json_output,
                 import_source.as_deref(),
                 import_log.as_deref(),
+                include_deleted,
             );
         }
         Some("recovery")

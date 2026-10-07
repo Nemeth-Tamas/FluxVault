@@ -10,7 +10,11 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 mod layout_recovery;
 #[path = "fat12_orphans.rs"]
 mod orphan_recovery;
-pub(crate) use orphan_recovery::{orphan_regions, partial_file_regions};
+pub(crate) use orphan_recovery::{orphan_regions, partial_file_regions, partial_file_safe};
+#[path = "fat12_deleted.rs"]
+mod deleted_recovery;
+pub(crate) use deleted_recovery::analyze_deleted;
+pub use deleted_recovery::{DeletedAnalysis, DeletedEntry};
 
 const SECTOR: usize = 512;
 const MAX_ENTRIES: usize = 16_384;
@@ -128,6 +132,8 @@ pub struct Analysis {
     pub owned_clusters: Vec<u16>,
     #[serde(default)]
     pub deleted_clusters_excluded: Vec<u16>,
+    #[serde(default)]
+    pub deleted_entries: Vec<DeletedEntry>,
     pub customer_delivery_certified: bool,
 }
 
@@ -318,6 +324,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
         crosslinked_clusters: Vec::new(),
         owned_clusters: Vec::new(),
         deleted_clusters_excluded: Vec::new(),
+        deleted_entries: Vec::new(),
         customer_delivery_certified: false,
     };
     let bad = result.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
@@ -360,6 +367,15 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             if entry[0] == 0xe5 {
                 result.deleted_entries_not_recovered += 1;
                 if entry[11] != 0x0f && entry[11] & 8 == 0 {
+                    let mut metadata = dir.metadata.clone();
+                    metadata.insert(lba);
+                    result.deleted_entries.push(DeletedEntry {
+                        directory_entry_offset: at,
+                        raw_entry: entry.try_into().unwrap(),
+                        parent_directory_hint: dir.path.clone(),
+                        ancestor_clusters: dir.ancestors.clone(),
+                        metadata_lbas: metadata.into_iter().collect(),
+                    });
                     let chain = layout.chain(image, &bad, word(entry, 26));
                     chain_visits += chain.clusters.len();
                     if chain_visits > 65_536 {

@@ -305,6 +305,8 @@ fn should_exclude(path: &Path) -> bool {
             let name = name.to_string_lossy();
             name.eq_ignore_ascii_case("System Volume Information")
                 || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+                || name.starts_with(".tmp-fragments-")
+                || name.starts_with(".tmp-native-")
         }
         _ => false,
     }) {
@@ -510,6 +512,7 @@ fn readme_text(project_name: &str, file_count: usize, total_bytes: u64) -> Strin
         "FluxVault archival package\r\nProject: {project_name}\r\nFiles: {file_count}\r\nSource bytes: {total_bytes}\r\n\r\nImages: acquired sector images.\r\nLogs: acquisition and recovery logs.\r\nExtracted: recovered source files.\r\nConverted: customer-friendly converted copies.\r\nRecovery: preserved recovery evidence, derived images, and backups.\r\nReports: selected inventories and reports.\r\nFlux: raw flux captures, where available.\r\n\r\nWindows System Volume Information and Recycle Bin folders are excluded from delivery files; original sector images retain all captured bytes.\r\nCheck PACKAGE_MANIFEST.csv for each included file's SHA-256.\r\nA partial image or recovered file is not proof that every original byte was readable.\r\nReview audit and recovery reports for limitations before delivery.\r\n"
     );
     text.push_str("\r\nPacked flux: a managed .scp.zip contains one byte-identical original SCP, not regenerated flux. Its .scp.packed.json binds original/packed sizes and SHA-256. FluxVault decodes it transparently; a ZIP tool can restore the original SCP member.\r\n");
+    text.push_str("\r\nForensic-only recovery: Recovery may contain raw .bin fragments of incomplete live files and explicitly requested deleted candidates. They are separate evidence, NOT complete/live customer documents. Read their source/offset/hash and missing-range reports; fragment counts do not increase recovered whole-file counts.\r\n");
     text
 }
 
@@ -736,5 +739,15 @@ mod tests {
         assert!(should_exclude(Path::new(
             "Extracted/001/attempt_001_native/.fluxvault-fat12.json"
         )));
+        assert!(should_exclude(Path::new(
+            "Recovery/001/.tmp-fragments-1-2/fragment.bin"
+        )));
+        assert!(should_exclude(Path::new(
+            "Recovery/.tmp-native-001-1-2/DeletedRecovery/candidate.doc"
+        )));
+        assert!(!should_exclude(Path::new(
+            "Recovery/001/attempt_001_fragments_v1/fragments.json"
+        )));
+        assert!(readme_text("test", 1, 1).contains("NOT complete/live customer documents"));
     }
 }

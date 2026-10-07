@@ -271,9 +271,12 @@ pub(crate) fn verify_managed_extraction(
                 .map_err(|e| format!("Invalid native recovery provenance: {e}"))?;
         if report.schema_version != 1
             || report.source_sha256 != expected_source_sha256
+            || (report.method == "native_fat12_deleted_candidates") != report.deleted.is_some()
             || !matches!(
                 report.method.as_str(),
-                "native_fat12_readable_chains" | "native_fat12_and_validated_carving"
+                "native_fat12_readable_chains"
+                    | "native_fat12_and_validated_carving"
+                    | "native_fat12_deleted_candidates"
             )
             || report.payloads().len() != actual.len()
         {

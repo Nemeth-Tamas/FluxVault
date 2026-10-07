@@ -7,7 +7,7 @@
 
 **Tomorrow's short test:** [TOMORROW_TEST.md](TOMORROW_TEST.md) has two paste-ready commands and a launcher that creates a fresh project and gathers the results. [The 136-disk runbook](PILOT_136.md) covers the larger run; [the completed 20-disk pilot](PILOT_20.md) is historical.
 
-**Reference comparison:** `fv benchmark compare --baseline 'C:\path\archive.zip'` checks source-file hashes offline. Deleted recovery is off by default; `--include-deleted` expands this comparison only, not extraction. See [comparison scope and measured results](BASELINE_COMPARISON.md).
+**Reference comparison:** `fv benchmark compare --baseline 'C:\path\archive.zip'` checks source-file hashes offline. On that command, `--include-deleted` expands comparison only. Separate optional deleted recovery uses `fv recovery extract 59 --include-deleted`; it stays forensic-only and never changes normal delivery. See [comparison scope](BASELINE_COMPARISON.md) and [deleted/partial recovery](DELETED_AND_FRAGMENT_RECOVERY.md).
 
 **Everyday short command:** the installer now provides `fv` as well as `fluxvault`. `fv scan` runs the Greaseweazle loop using saved project settings; enter just the displayed number (`004`), or `QUIT`. See [Policies without homework](POLICIES.md) for optional expert controls. Explicit `scan --drive A:` remains the guarded USB workflow.
 
@@ -159,6 +159,8 @@ fluxvault recovery extract 7
 
 `process` and the extraction commands try this automatically too. Standalone `recovery extract` needs no 7-Zip or LibreOffice. It saves intact readable files and validated signature candidates separately, preserves earlier/manual extraction, and records exceptions. Success still returns **3 (partial/attention)**—that is expected. Names from intact entries are preserved; carved names are reconstructed and delivery-labeled **Signature-Recovered**. Generation 4 can find orphaned or embedded document/picture candidates without guessing missing bytes. Known deleted/free allocation is excluded when a readable layout exists; a raw fallback labels live/deleted ownership unknown. Reports use `Recovery\007\attempt_NNN_fat12_v4.json`, outputs `_native_v4`; see [automatic carving and actual recovered Word documents](CARVING_RECOVERY.md).
 
+Readable parts of incomplete live files now also save automatically as separate **raw fragments**, with exact offsets and holes. Nothing extra to type; they are evidence, not complete documents. If you deliberately want deleted candidates too: `fv recovery extract 7 --include-deleted`. These stay under `Recovery`, outside normal conversion/delivery. [What the new recovery can and cannot prove](DELETED_AND_FRAGMENT_RECOVERY.md).
+
 ## 6. Greaseweazle: start once, feed the disks
 
 For the first measured customer run, follow [the 136-disk pilot guide](PILOT_136.md). Scans now save a local benchmark automatically; `fluxvault benchmark report` exports it again without touching hardware. For a restart-safe numbered endpoint, use `--last-disk 136` instead of a per-invocation `--count 136`.
@@ -194,7 +196,7 @@ FluxVault captures and decodes, rereads only problem areas within bounded limits
 
 New scans identify supported **720 KB / 1.44 MB** formats automatically. Expert `recover` still defaults to 1.44 MB; add `--profile auto` or pin `--profile ibm.720`. An explicit scan profile/map overrides discovery. FluxVault reserves the Greaseweazle across your CLI sessions and project folders, so another `scan`, `recover`, `capture`, or `info` reports that it is busy instead of competing for the board.
 
-Repeat the same command/settings to resume an interrupted job. A completed job is verified/reused, not physically reread. Partial results keep missing sectors explicit—no bytes are guessed. The downstream pipeline automatically salvages intact FAT12 files, corroborated missing-boot layouts and generation-4 orphan/signature candidates; deeper directory reconstruction and explicit deleted-file extraction remain unfinished. See [damaged-filesystem recovery](DAMAGED_FILESYSTEM_RECOVERY.md) and [automatic carving](CARVING_RECOVERY.md). Clean maps can still contain lower-confidence single-capture sectors; they are not delivery certification. Add `--acquisition-only` to skip downstream processing.
+Repeat the same command/settings to resume an interrupted job. A completed job is verified/reused, not physically reread. Partial results keep missing sectors explicit—no bytes are guessed. The downstream pipeline automatically salvages intact FAT12 files, corroborated missing-boot layouts, generation-4 orphan/signature candidates and readable raw partial fragments. Deleted recovery is separate opt-in; deeper directory/erased-fragmented-chain reconstruction remains unfinished. See [damaged-filesystem recovery](DAMAGED_FILESYSTEM_RECOVERY.md), [automatic carving](CARVING_RECOVERY.md) and [deleted/fragment recovery](DELETED_AND_FRAGMENT_RECOVERY.md). Clean maps can still contain lower-confidence single-capture sectors; they are not delivery certification. Add `--acquisition-only` to skip downstream processing.
 
 Optional **offline** evidence checks:
 

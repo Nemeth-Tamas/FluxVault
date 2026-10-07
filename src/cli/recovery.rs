@@ -23,6 +23,7 @@ pub(super) fn run_advanced(
     json_output: bool,
     import_source: Option<&Path>,
     import_log: Option<&Path>,
+    include_deleted: bool,
 ) -> Result<CliResponse, String> {
     if positional[1] == "queue" {
         let pending = recovery_plan::plan_project(&project.images_dir())?
@@ -85,14 +86,48 @@ pub(super) fn run_advanced(
                 .iter()
                 .find(|a| a.attempt_number == disk.best_attempt_number)
                 .ok_or("Selected attempt missing")?;
-            let result = fat12_recovery::recover_attempt(
+            let progress = |s: &str| eprintln!("{s}");
+            let service = if include_deleted {
+                fat12_recovery::recover_deleted_attempt
+            } else {
+                fat12_recovery::recover_attempt
+            };
+            let result = service(
                 &project.images_dir(),
                 &project.extracted_dir(),
                 &project.recovery_dir(),
                 disk_number,
                 attempt,
-                &|s| eprintln!("{s}"),
+                &progress,
             )?;
+            if include_deleted {
+                return Ok(CliResponse {
+                    output: if json_output {
+                        json!({"recovery":result,"physical_media_access":false,"default_delivery_changed":false}).to_string()
+                    } else {
+                        format!(
+                            "Disk {disk_number:03}: {} forensic deleted candidates{} ({} surviving-chain files; {} validated signature candidates). {} entries examined; {} skipped.\nFolder: {}\nReport: {}\nWARNING: {}\nDefault live extraction, conversion and delivery are unchanged; no physical media accessed.",
+                            result.files,
+                            if result.reused {
+                                " (verified result reused)"
+                            } else {
+                                ""
+                            },
+                            result.deleted_surviving_chain_files,
+                            result.carved_files,
+                            result.deleted_entries_examined,
+                            result.skipped_entries,
+                            result.output_directory.display(),
+                            result.report_path.display(),
+                            result
+                                .deleted_warning
+                                .as_deref()
+                                .unwrap_or("Historical authenticity remains unverified")
+                        )
+                    },
+                    exit_code: 3,
+                });
+            }
             let inventory = manifest::build_manifest(
                 &ManifestRequest {
                     extracted_root: project.extracted_dir(),
@@ -106,7 +141,7 @@ pub(super) fn run_advanced(
                     json!({"recovery":result,"manifest":inventory.path,"physical_media_access":false}).to_string()
                 } else {
                     format!(
-                        "Disk {disk_number:03}: {} payloads recovered{} ({} validated signature candidates); {} entries skipped; {} validated long names; {} short-name fallbacks.\nLayout: {}{}{}\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
+                        "Disk {disk_number:03}: {} payloads recovered{} ({} validated signature candidates); {} entries skipped; {} validated long names; {} short-name fallbacks.\nLayout: {}{}{}{}\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
                         result.files,
                         if result.reused {
                             " (verified result reused)"
@@ -133,6 +168,7 @@ pub(super) fn run_advanced(
                                     ""
                                 }
                             )),
+                        result.fragments.as_ref().map_or(String::new(), |f| format!("\nRaw partial-file evidence: {} fragments / {} bytes (NOT complete files). Report: {}", f.files, f.bytes, f.report_path.display())),
                         result.output_directory.display(),
                         result.report_path.display()
                     )
@@ -390,6 +426,7 @@ mod tests {
             true,
             None,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(queue.exit_code, 3);
@@ -402,12 +439,12 @@ mod tests {
             "composite".to_owned(),
             "1".to_owned(),
         ];
-        let first_run = run_advanced(&args, &project, &root, true, None, None).unwrap();
+        let first_run = run_advanced(&args, &project, &root, true, None, None, false).unwrap();
         let first_json: serde_json::Value = serde_json::from_str(&first_run.output).unwrap();
         assert_eq!(first_run.exit_code, 0);
         assert_eq!(first_json["replacements"].as_array().unwrap().len(), 1);
         assert_eq!(first_json["reused"], false);
-        let second_run = run_advanced(&args, &project, &root, true, None, None).unwrap();
+        let second_run = run_advanced(&args, &project, &root, true, None, None, false).unwrap();
         let second_json: serde_json::Value = serde_json::from_str(&second_run.output).unwrap();
         assert_eq!(second_json["reused"], true);
         assert_eq!(first_json["derived_image"], second_json["derived_image"]);
@@ -432,12 +469,32 @@ mod tests {
         let log = root.join("copy.log");
         fs::write(&log, b"START 2026-09-22 12:00:00.000\nlogsec=512\nC 1 > > 0 : 1\nSTOP 2026-09-22 12:01:00.000\n").unwrap();
         let args = ["recovery".to_owned(), "import".to_owned(), "7".to_owned()];
-        let result = run_advanced(&args, &project, &root, true, Some(&source), Some(&log)).unwrap();
+        let result = run_advanced(
+            &args,
+            &project,
+            &root,
+            true,
+            Some(&source),
+            Some(&log),
+            false,
+        )
+        .unwrap();
         let output: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(result.exit_code, 3);
         assert_eq!(output["files"], 1);
         assert!(Path::new(output["project_manifest"].as_str().unwrap()).is_file());
-        assert!(run_advanced(&args, &project, &root, true, Some(&source), Some(&log)).is_err());
+        assert!(
+            run_advanced(
+                &args,
+                &project,
+                &root,
+                true,
+                Some(&source),
+                Some(&log),
+                false
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(source.join("recovered.txt")).unwrap(), b"evidence");
         fs::remove_dir_all(root).unwrap();
     }

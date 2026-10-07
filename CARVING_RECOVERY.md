@@ -70,4 +70,4 @@ The historical archive comparison remains **38/89 byte-identical payloads, 51 mi
 
 Results: `C:\Users\User\Desktop\FluxVault-Test\Native-Carving-021-032-20261007-v4-CLI`. `Reports/NativeCarvingValidation.json`, native per-disk reports, `ConversionSummary.csv`, `DeliveryPathMap.csv` and immutable baseline snapshots explain the result.
 
-Still open: explicit deleted-file extraction, pre-OLE legacy Word/PDF/other signatures, ambiguous fragmented allocation and deeper directory reconstruction, recovery of arbitrary damaged document text, raw partial-fragment export and complete historical recovery-yield parity. The program does not brute-force plausible text and call it authentic.
+Automatic raw partial-fragment preservation and explicit forensic-only deleted recovery are now implemented; see [commands and measured results](DELETED_AND_FRAGMENT_RECOVERY.md). Still open: pre-OLE legacy Word/PDF/other signatures, erased/ambiguous fragmented allocation, deeper directory reconstruction, arbitrary damaged-document text recovery and complete historical recovery-yield parity. The program does not brute-force plausible text and call it authentic.

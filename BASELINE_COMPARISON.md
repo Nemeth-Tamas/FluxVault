@@ -19,7 +19,7 @@ The command writes uniquely named `Reports/BaselineComparison-*.json` and `.csv`
 
 ## Deleted recovery is off by default
 
-The customer workflow should recover current files automatically, not resurrect every deleted draft/photo. Future native deleted recovery must be explicit opt-in and separately labeled; it is still an open implementation task.
+The customer workflow recovers current files automatically, not every deleted draft/photo. Optional `fv recovery extract N --include-deleted` now performs bounded forensic-only deleted recovery, separate from normal live-file selection and these comparison scores. See [recovery scope](DELETED_AND_FRAGMENT_RECOVERY.md).
 
 For this comparison, a matching path **and byte count** in DMDE's archived UTF-16/UTF-8 `filelist.txt` can identify a confirmed deleted file. Those payloads are excluded from the default score but retained as `deleted_out_of_scope` rows. The type legend is documented in [DMDE's file panel manual](https://dmde.com/manual/filepanel.html).
 

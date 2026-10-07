@@ -100,12 +100,7 @@ pub(crate) fn partial_file_regions(analysis: &Analysis) -> Vec<Region> {
     let mut regions = vec![];
     for file in &analysis.unrecovered_files {
         let r = &file.record;
-        if file.reason.contains("ownership")
-            || file.reason.contains("ambiguous")
-            || r.clusters
-                .iter()
-                .any(|c| analysis.crosslinked_clusters.contains(c))
-        {
+        if !partial_file_safe(file, analysis) {
             continue;
         }
         let mut lbas = vec![];
@@ -138,6 +133,16 @@ pub(crate) fn partial_file_regions(analysis: &Analysis) -> Vec<Region> {
         publish(&mut lbas, &mut length, &mut regions);
     }
     regions
+}
+
+pub(crate) fn partial_file_safe(file: &UnrecoveredFile, analysis: &Analysis) -> bool {
+    !file.reason.contains("ownership")
+        && !file.reason.contains("ambiguous")
+        && !file
+            .record
+            .clusters
+            .iter()
+            .any(|c| analysis.crosslinked_clusters.contains(c))
 }
 
 #[cfg(test)]

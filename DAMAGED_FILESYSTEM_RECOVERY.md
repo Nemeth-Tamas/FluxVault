@@ -32,7 +32,7 @@ The report's `analysis.unrecovered_files` retains skipped file candidates, their
 - `unmapped_tail_bytes`: file bytes for which incomplete allocation metadata could not locate a source sector. No LBA is invented.
 - Other rejections, such as ownership conflicts or inconsistent sizes, remain explicit even when no unreadable data range is present. An empty hole list does **not** certify the file.
 
-Missing directory regions remain separately recorded; names/entries hidden in them are not invented. Generation 4 can salvage self-contained validated embedded objects from readable partial-file runs, preserving their parent association and raw extents without exporting the incomplete parent. General raw partial-fragment export remains open.
+Missing directory regions remain separately recorded; names/entries hidden in them are not invented. Generation 4 salvages self-contained validated embedded objects without exporting the incomplete parent. Native recovery now additionally preserves raw readable runs as separate `.bin` fragments under Recovery, with precise logical offsets, physical extents, missing ranges and source/hash-bound reuse. They do not enter whole-file inventories/conversion. See [fragment and optional deleted recovery](DELETED_AND_FRAGMENT_RECOVERY.md).
 
 ## Saved-evidence checks — 2026-10-06
 
@@ -55,4 +55,4 @@ $env:FLUXVAULT_FAT12_TEST_PROJECT = 'C:\Users\User\Desktop\FluxVault-Test\Custom
 cargo test --lib real_saved_pilot_payloads -- --ignored --nocapture
 ```
 
-Next: deeper evidence-ranked metadata reconstruction, explicit deleted-file recovery, additional signatures and partial-fragment salvage. Bounded orphan-chain/signature recovery is implemented in generation 4; full historical yield equivalence and 136-disk acceptance remain separate work.
+Next: deeper evidence-ranked metadata reconstruction, erased fragmented deleted chains/directories, additional signatures and document-aware salvage. Bounded orphan/signature recovery, raw readable partial-fragment preservation and opt-in forensic deleted recovery are implemented; full historical yield equivalence and 136-disk acceptance remain separate work.
