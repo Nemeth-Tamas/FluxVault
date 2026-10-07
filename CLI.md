@@ -1,4 +1,17 @@
-# FluxVault CLI
+# FluxVault CLI — advanced reference
+
+For your first run, use [the beginner tutorial](TUTORIAL.md). For daily commands, use [the cheat sheet](CHEATSHEET.md). This reference explains optional controls and evidence semantics; it is not a sequence to paste and run in full.
+
+- [Everyday workflow](#everyday-short-workflow)
+- [Saved conversion state](#saved-conversion-state)
+- [Capture packing and format discovery](#capture-packing-and-format-discovery)
+- [Read failures and restart](#read-failures-and-restart)
+- [Installation and command catalog](#installation-and-command-catalog)
+- [USB acquisition: optional advanced path](#usb-acquisition-optional-advanced-path)
+- [Tools and expert Greaseweazle operations](#tools-and-expert-greaseweazle-operations)
+- [Native saved-file recovery](#native-file-recovery-from-damaged-saved-images)
+
+Examples use PowerShell. `fv` and `fluxvault` are identical aliases. Physical acquisition examples need an identified protected floppy; saved-image processing never needs one inserted.
 
 ## Everyday short workflow
 
@@ -21,7 +34,11 @@ Interactive recovery/scan displays a temporary ASCII bar with disk identity, pha
 
 `scan --conversion-workers N` accepts 1–16 and persists the request at custody commit. Background conversion caps it to available logical CPUs minus two (minimum one); status records requested/effective counts. Isolated LibreOffice profiles and a shared balanced queue interleave estimated long/short jobs, retaining stable report order. Four is the conservative default; more is not guaranteed faster. Whole-project ownership prevents competing report/delivery writers, while short snapshots permit acquisition publication outside Office work. See [BACKGROUND_PROCESSING.md](BACKGROUND_PROCESSING.md).
 
+## Saved conversion state
+
 Saved conversion state is atomically replaced, with immutable current/prior snapshots retained in `Reports/ConversionHistory` for audit. Equivalent DOS/canonical Windows paths no longer invalidate source/output hash bindings. Changed outputs, changed sources and malformed snapshots are still refused; history is internal, not customer delivery content.
+
+## Capture packing and format discovery
 
 `storage benchmark N` uses saved raw or transparently materialized packed evidence: select the largest verified capture, measure Deflate levels 1/6 and verify byte-identical decompression. Samples are capped at 128 MiB; experimental compressed bytes are discarded. It does **not** pack or retire evidence. Saved 007 measured 77.16% smaller at level 6.
 
@@ -31,7 +48,9 @@ Packing uses one background worker with streaming 64 KiB buffers, a 512 MiB capt
 
 For existing evidence, `storage pack N [--capture-attempt N]` **keeps raw**; `--retire-raw` explicitly reclaims space after verified publication. `--capture-storage raw` opts scans out. Retirement is reversible by extracting the single SCP member; archival packages include/verify containers and binding metadata. A copy of the real pilot packed all 26 captures 1,032,982,606 -> 243,529,973 bytes (76.42% smaller) in 27.07 s, with 20/20 disks hash-healthy. Original pilot captures remain unchanged.
 
-The runner treats explicit `Command Failed:`/`ERROR:`/`Fatal Error:` output as operation failure even if the host exits zero. In particular, `No Index` preserves failed metadata and gives reseating guidance rather than a misleading missing-SCP error. A resumed empty first capture (no raw artifact or completed raw record/decode) may restart its elapsed acquisition budget after explicit custody confirmation; old budget starts and failed attempt files are retained. Any full/partial raw evidence blocks that reset. Completed disks/cursor are preserved.
+## Read failures and restart
+
+The runner treats explicit `Command Failed:`/`ERROR:`/`Fatal Error:` output as failure even if the host exits zero. No Index retains failed evidence and gives same-disk reseating guidance. Default recovery uses independently persisted stage clocks: failed/reseat attempts consume their stage allowance, but earlier stages cannot consume Detective's allowance. The historical expert `whole_job` policy retains a guarded empty-first-capture restart path. Completed disks/cursor and incomplete evidence remain preserved. See [policy scope and migration](POLICIES.md).
 
 Guided `scan` handles specifically classified **No Index capture failures** without immediately exiting: a red **REMOVE AND REINSERT SAME DISK** cue appears after the host process stops. Check the same label/open protection hole, seating, power and door/lever, then reconfirm its number (or Enter with `--no-verify`). Wrong numbers, EOF and `QUIT` never start a retry. Up to two confirmed reseat retries are offered per disk per invocation; persistent failure stops with unchanged custody. Retry evidence gets new attempt slots, and failed metadata/partial SCPs remain intact. Timeout, mixed host errors, decoder/tool/integrity errors still stop normally. Reseating cannot be sensed electronically here; confirmation is the operator's assertion. Recovery budgets and read-only protections remain enforced. Telemetry retains the failed operations even after a successful retry.
 
@@ -41,9 +60,11 @@ Offline reference comparison: `fv benchmark compare --baseline ZIP [--include-de
 
 For setup and the recorded live checks, see [GREASEWEAZLE_PREFLIGHT.md](GREASEWEAZLE_PREFLIGHT.md). The working shop drive is the Mitsumi on selector **B**; the original NEC has a faulty head/read path.
 
-Build with `cargo build --release`; the executable is `target\release\fluxvault.exe` on Windows. To install a copy and optionally add its directory to your user `PATH`, run `powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath` from the repository root; omit `-AddToPath` to copy without changing PATH, or add `-WhatIf` to preview. Open a new terminal after a PATH change. Running `fluxvault` without arguments shows command help; the desktop GUI has been removed. The release executable and installer were previously checked from PowerShell/CMD and with a disposable directory. No installation or PATH change was performed in your user profile.
+## Installation and command catalog
 
-From a project folder (or any subfolder), for example:
+Build with `cargo build --release`; the executable is `target\release\fluxvault.exe`. Install the current copy with `powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath` from the repository; omit `-AddToPath` to avoid changing PATH, or add `-WhatIf` to preview. Reopen the terminal after a PATH change. **Repeat installation after a new build**: installed `fv.exe`/`fluxvault.exe` are copies. Alternatively run the full release path using PowerShell's `&` operator. [Beginner setup](TUTORIAL.md#1-install-or-refresh-the-short-command).
+
+This is a **catalog, not a batch recipe**. Choose one relevant command from a project folder. Physical recover/scan/capture commands access the inserted floppy; do not paste the whole block:
 
 ```powershell
 fluxvault status
@@ -63,7 +84,7 @@ fluxvault greaseweazle preview
 fluxvault greaseweazle info
 fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
-fluxvault greaseweazle capture 7 --gw-drive A --source-write-protected
+fluxvault greaseweazle capture 7 --gw-drive B --source-write-protected
 fluxvault greaseweazle decode 7
 fluxvault greaseweazle status 7
 fluxvault greaseweazle compare 7
@@ -87,9 +108,15 @@ Use `--project C:\path\to\project` to select a project explicitly. Add `--json` 
 
 `disk show N` summarizes saved attempts. Add `--details` for their hashes, bad-sector LBAs, retry counts, and evidence paths; JSON includes those fields without an extra flag. Neither view accesses the floppy drive.
 
+## USB acquisition: optional advanced path
+
+Windows `A:` is the USB floppy drive letter, **not** Greaseweazle selector A/B. This guarded path is optional and distinct from the default `fv scan` workflow.
+
 `fluxvault drive list` enumerates removable drives without reading inserted media. `fluxvault drive probe --drive A:` opens only an enumerated drive read-only, reads at most the first 512 bytes, and reports geometry and the Windows write-protection result. A positive software result is **not proof that this USB adapter enforces physical write protection**. `fluxvault acquire --drive A: --disk N --retries 2 --write-blocker-verified` requires an operator hardware-protection assertion, a positive Windows protection report, and plausible floppy geometry; the imaging backend checks protection again when it opens the drive read-only. On 2026-09-26, Windows reported `protected` for customer floppy 007 and the CLI completed a read-only 1.44 MB acquisition. That attempt had one unresolved sector; all other 2,879 sectors matched the earlier clean archived image byte-for-byte. This validates the CLI read path, not the adapter's physical write-blocking behavior.
 
 `fluxvault scan --drive A: --write-blocker-verified` runs a guided single-drive loop from the project's current disk number. After each physical swap, type `READ` to image the inserted disk or `QUIT` to stop; other input does not start a read. `--count N` caps the number of disks in that session, and `--retries N` sets the same bounded sector retries as `acquire`. A completed partial image advances numbering and appears in the recovery queue; a failed acquisition does not advance it. Scan prompts and progress use stderr, leaving final `--json` output machine-readable. The multi-disk loop itself has only been tested with synthetic acquisitions; the one-disk `acquire` path has been tested live as described above.
+
+## Tools and expert Greaseweazle operations
 
 `fluxvault tools check` runs 7-Zip, LibreOffice, and Greaseweazle version checks and records executed commands in the project tool audit log (or the application audit log when no project is selected). `tools show`, `tools set NAME PATH`, and `tools clear NAME` manage per-user tool paths. `greaseweazle preview` prints safe raw-capture and file-to-file decode command examples without executing anything; `greaseweazle info` runs an audited, read-only device/firmware query. `recovery queue` shows unfinished cases; `recovery compare N`, `recovery backup N`, `recovery composite N`, and `recovery fat N` operate on saved evidence. `recovery import N --source DIR --dmde-log FILE` copies external DMDE results into guarded project recovery locations without overwriting an earlier import. `extract all` and `extract disk N` need 7-Zip, not LibreOffice. `files manifest` refreshes the recovered-file inventory. `conversion plan` builds delivery paths without LibreOffice; `conversion run` executes bounded, audited Office conversion. `conversion issues` reads saved exceptions. `conversion retry [SOURCE]` reloads the project-scoped conversion state after a restart, retries all saved issues or the selected source, and rejects changed source hashes or paths. `process` runs the existing-image recovery, extraction, conversion, audit, and workbook pipeline.
 
@@ -105,7 +132,7 @@ The capture/decode path was **live-tested on 2026-10-05** with V4.1, host 1.23, 
 fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 ```
 
-No USB scan is required. Expert `recover` retains its **ibm.1440** default; `--profile auto` enables saved-flux discovery, or pin DD with `--profile ibm.720`. Confirm identity/protection first. Default passes remain Fast (2 revolutions, 0 retries), Normal (3, 2), Recovery (5, 3), Detective (8, 5), stopping on complete map, two non-improving passes, four passes or 600 seconds. Later passes target problem/control cylinders using the selected format. No routine drive swapping or speculative repair.
+No USB scan is required. Expert `recover` retains its **ibm.1440** default; `--profile auto` enables saved-flux discovery, or pin DD with `--profile ibm.720`. Confirm identity/protection first. Default stages are Fast (2 revolutions, 0 retries), Normal (3, 2), Recovery (5, 3), Detective (8, 5). They stop on a complete map, two non-improving passes, or configured pass/time limits. Each stage defaults to 600 seconds of capture time, not 600 shared by the whole disk; a stubborn disk can use roughly 40 minutes plus offline work. Later passes target problem/control cylinders using the selected format. No routine drive swapping or speculative repair.
 
 Raw captures and decodes remain separately hashed. A durable per-disk journal in `Flux/Recovery` reuses a saved whole-disk decode when available, resumes saved raw evidence after decode failure, and verifies completed artifacts on repeat invocation instead of reading again. A per-project/disk lock blocks duplicate jobs for that disk. CLI `scan`, `recover`, `capture`, and `info` share an OS-held reservation at `%APPDATA%\FluxVault\.fluxvault-greaseweazle.lock`, across projects using that settings location. It releases when the owning process exits; the remaining lock file is harmless. Direct `gw.exe`, separate Windows users/settings locations, and library consumers are outside this CLI reservation. Matching controls help detect disk swaps but cannot prove identity.
 
@@ -116,7 +143,7 @@ fluxvault disk select 1
 fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
 ```
 
-Use the project's next unscanned number (or a fresh project). Each swap requires the displayed number (`004` or `4`); bare `READ`, a different number, or arbitrary input starts no read. Legacy `READ 004` also works. `QUIT`/`Q` or end-of-input stops feeding. `--count N` caps results finalized this invocation, including resumed numbering commits. Plain `scan` reuses saved selector/profile/map/policy/end target; fresh projects use B, ibm.1440 and the normal policy. `--acquisition-only` skips downstream work. Every numbered confirmation includes the prompt's physical write-protect check.
+Use the project's next unscanned number (or a fresh project). Each swap requires the displayed number (`004` or `4`); bare `READ`, a different number, or arbitrary input starts no read. Legacy `READ 004` also works. `QUIT`/`Q` or end-of-input stops feeding. `--count N` caps results finalized this invocation, including resumed numbering commits. Plain `scan` reuses saved selector/profile/map/policy/end target; fresh projects use B, automatic supported IBM 720 KB/1.44 MB discovery and the normal policy. `--acquisition-only` skips downstream work. Every numbered confirmation includes the prompt's physical write-protect check.
 
 Each disk uses the existing bounded recovery service. A verified terminal result—including partial/unrecoverable-within-policy—advances the project number. Operation failure keeps it selected. Numbered custody, pending result and completion history are atomically recorded in the internal project-root `.fluxvault-gw-scan.json`; an OS-held `.fluxvault-gw-scan.lock` prevents duplicate project scans. Control files and partial metadata commits are excluded from packages. Do not manually edit the journal or change disk selection from another session.
 
@@ -124,13 +151,13 @@ On restart, a pending result is verified against the committed single-disk journ
 
 New scans enqueue each verified image for coalesced background extraction/conversion/audit/workbook work while feeding continues. Worker stages stay in logs so swap cues remain clear. After feeding, drain and reconcile the whole project. `processing status` is read-only; `processing resume` drains saved jobs offline and retries failed outputs once through existing bounded policy. Unchanged failures are not relaunched for every disk arrival. `--processing-mode tail` retains the serial tail; older journals default to tail. `--acquisition-only` skips downstream work. Failed work preserves evidence/jobs/numbering. JSON includes session/project results and background outcome; exit 3 is attention, not delivery certification.
 
-Mock-executable tests cover numbered confirmations, two-disk acquisition, disconnected-board failure, bounded partial recovery, restart on both sides of the numbering commit, changed-image refusal and cross-project contention. A separately running scan is terminated in the lock test; a new session then acquires the released reservation without starting a host tool. The guided batch itself still needs multi-disk hardware acceptance.
+Mock-executable tests cover numbered confirmations, two-disk acquisition, disconnected-board failure, bounded partial recovery, restart on both sides of the numbering commit, changed-image refusal and cross-project contention. A separately running scan is terminated in the lock test; a new session then acquires the released reservation without starting a host tool. Live 001–020, 053–064 and 021–032 cohorts now exercise the guided batch; full physical 136-disk acceptance remains separate.
 
 ### Measured pilot runs
 
 For the first twenty numbered customer disks, see [PILOT_20.md](PILOT_20.md). `scan --profile-map FILE` accepts a regular workstation JSON file (maximum 64 KiB) of the form `{"schema_version":1,"profiles":[{"disk":9,"profile":"ibm.720"}]}`. Entries override the default/`--profile` for their disk only; formats must be exactly `ibm.1440` or `ibm.720`. Duplicate/invalid numbers, unknown fields and unsupported schemas/formats are refused. The resolved map is persisted with pending scan settings and recorded in telemetry, along with each read's chosen profile; changing it while a disk is pending is refused. Older journals without a map retain their existing default-profile behavior. This supports known mixed batches, not automatic physical format detection.
 
-Normal GW scans preflight 7-Zip and LibreOffice before displaying a custody prompt or starting acquisition. Failures preserve the cursor and do not create a pending scan job. `--acquisition-only` explicitly skips these downstream requirements. Tools are rechecked when processing actually runs, so a later failure still retains all saved evidence. `policies/pilot-short.json` provides an opt-in three-pass, 180-second acquisition policy for the small pilot; default recovery limits are unchanged.
+Normal GW scans preflight 7-Zip and LibreOffice before displaying a custody prompt or starting acquisition. Failures preserve the cursor and do not create a pending scan job. `--acquisition-only` explicitly skips these downstream requirements. Tools are rechecked when processing actually runs, so a later failure still retains all saved evidence. `policies/pilot-short.json` provides an opt-in three-pass, 180-seconds-per-stage acquisition policy for the small pilot; default recovery limits are unchanged.
 
 `greaseweazle scan --last-disk 136 --gw-drive B --source-write-protected` stops at an absolute numbered endpoint, including after restarts. `--count` remains a separate per-invocation cap; both can be used together. The end target is persisted with pending settings, and changing it for a pending job is refused. Existing scan journals without the new optional field remain readable.
 
@@ -151,11 +178,12 @@ By default `recover` runs the project-wide `process` chain afterward (recovery/e
     {"name": "Recovery", "revolutions": 5, "retries": 3}
   ],
   "max_seconds": 600,
+  "time_limit_scope": "per_stage",
   "no_improvement_limit": 2
 }
 ```
 
-Limits: 1–8 passes, 30–1800 seconds, 1–3 non-improving passes, 1–10 revolutions and 0–10 retries per pass. Resume requires the same disk, policy, profile, and selector. Failed/interrupted captures retain numbered partial evidence; only completed raw artifacts can be decoded without a new physical read.
+Limits: 1–8 passes, 30–1800 seconds per stage by default, 1–3 non-improving passes, 1–10 revolutions and 0–10 retries per pass. Resume requires the same disk, policy, profile, and selector. Failed/interrupted captures retain numbered partial evidence; only completed raw artifacts can be decoded without a new physical read.
 
 `greaseweazle decode N` uses the latest completed SCP attempt by default, or `--capture-attempt N`, and verifies the source hash before running file-to-file `gw convert`. Derived images are kept separately under `Flux/Derived`, with their own hash and provenance, and are **not promoted into Images or treated as clean sectors**. The decoder records any `Found X sectors of Y` summary reported by Greaseweazle. For standard IBM 80-cylinder profiles, it records exact missing LBAs only if the entire reported grid is present and consistent; otherwise the map stays unknown. This is still Greaseweazle's report, not independent verification of each image sector. `greaseweazle status N` re-hashes saved raw and derived evidence, highlights missing/changed files, and shows reported sector counts/map availability without needing the board or host tool. Both decode and status return exit code 3 because sector-quality integration and delivery certification remain open. No physical drive is accessed for decode or status. `gw read --format` without `--raw` can regenerate flux rather than preserving what the disk emitted; FluxVault always pairs them for raw SCP captures, as documented by the [Greaseweazle image-type guide](https://github.com/keirf/greaseweazle/wiki/Supported-Image-Types).
 
@@ -177,7 +205,7 @@ fluxvault recovery extract 7
 
 This command needs no physical disk or external extraction tool. `extract disk N`, `extract all`, and `process` also try the same native fallback automatically for partial images, failed extraction/listing, or zero-file extraction. Those wider commands still require their normal external tools.
 
-Native recovery requires a hash-matching image, a recognized completed acquisition log/map, readable boot-sector geometry, and a supported unpartitioned FAT12 volume (512-byte sectors, at most 4 MiB). It traverses intact directory entries and FAT chains, including fragmented files and nested directories. A readable FAT copy can supply an entry missing from the other; readable copies that disagree are refused. Missing directory sectors, chain cycles, cross-links, size mismatches and unreadable file content are recorded rather than guessed.
+Native recovery requires a hash-matching saved image and recognized completed acquisition log/map. Readable directory/FAT-chain recovery supports unpartitioned FAT12 volumes with 512-byte sectors, at most 4 MiB. Geometry may come from readable BPB metadata or the warned, corroborated standard-layout fallback described in [DAMAGED_FILESYSTEM_RECOVERY.md](DAMAGED_FILESYSTEM_RECOVERY.md). With no usable layout, bounded signature recovery can search readable regions without claiming original filesystem reconstruction. Missing directories, FAT disagreement, loops, cross-links, size mismatches and unreadable content remain explicit exceptions rather than guessed bytes.
 
 Current files are published separately under `Extracted/NNN/attempt_NNN_native_v4` (or `legacy_native_v4`), preserving earlier extraction/manual recovery. Provenance is in `Recovery/NNN/attempt_NNN_fat12_v4.json`, with source/per-file hashes, content/metadata LBAs, allocation links, skipped entries, directory gaps, name evidence and signature-candidate extents/validation. Old generations remain intact; running recovery/extraction can publish the improved generation without a new acquisition. Inventory/provenance is rechecked before reuse/delivery mirroring. Existing differing files/reports are not silently replaced.
 

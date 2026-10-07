@@ -1,5 +1,7 @@
 # FluxVault — TODO
 
+For operating the current build, start with [README](README.md), [the beginner/advanced tutorial](TUTORIAL.md), or [the quick cheat sheet](CHEATSHEET.md). This checklist includes future commands and goals; it is not an instruction sequence to run.
+
 > CLI-first floppy archival, forensic imaging, recovery, conversion, audit, and customer-delivery suite. Work from a project folder in PowerShell using `fluxvault` commands; there is no desktop GUI.
 >
 > **Primary rule:** Source floppy media is read-only. FluxVault may write images, logs, extracted files, reports, and packages to the workstation, but it must never intentionally write to a customer floppy.

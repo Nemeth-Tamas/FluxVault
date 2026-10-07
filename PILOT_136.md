@@ -1,6 +1,8 @@
 # The first 136-disk pilot
 
-**Current checkpoint:** the first 20-disk pilot is complete. New projects identify supported IBM formats, pack captures and process files in the background. Inconclusive completed format trials become preserved raw-only exceptions so feeding can continue. Tool/integrity failures still stop. Run the short live gates on this build before the full session; [PILOT_20.md](PILOT_20.md) contains historical measurements.
+**Start here if you are new:** [the beginner tutorial](TUTORIAL.md) covers setup and ordinary scans. This runbook is for a measured batch; [the cheat sheet](CHEATSHEET.md) is the shorter daily reference.
+
+**Current checkpoint:** live 001–020, 053–064, repeat 009/058 and 021–032 cohorts are complete. New projects identify supported IBM formats, pack captures and process files in the background. Inconclusive completed format trials preserve raw-only exceptions so feeding can continue; tool/integrity failures still stop. Repeat small checks after hardware changes or when validating a new read-path build before a large run. The full physical 136-disk benchmark remains separate; [PROGRESS.md](PROGRESS.md) records current results and [PILOT_20.md](PILOT_20.md) is historical.
 
 **Goal:** read the numbered customer collection on the working Mitsumi/Greaseweazle station, preserve evidence, run the saved-file processing chain, and collect a useful performance/recovery baseline. This is a controlled single-station pilot, not a promise that every damaged disk will yield every file or that the six-hour dual-drive target has been met.
 
@@ -46,7 +48,7 @@ In a second terminal, `fv processing status` shows saved-file progress without d
 
 New projects default to **automatic IBM 720 KB/1.44 MB discovery**, with bounded passes. Nearly complete coherent HD needs one offline decode; otherwise both profiles are tried without another physical read. If both complete but cannot select a convincing format, raw evidence and trial reports are verified and saved as `raw_format_exception`; an amber cue permits removal/next insertion, with no fake sector image or known bad-sector count. This remains attention in status, recovery queue, processing and benchmark summaries, and blocks an automatic all-clear package. Decoder/tool failures still stop. Fixed profiles/maps remain expert controls; do not change a pending job's mode.
 
-Archive inspection found 134 HD-sized images, 009 DD-sized, and a 417,792-byte image for 133; the latter does not establish its physical geometry. Supported automatic discovery has passed saved 007/009 tests, not universal format acceptance. Use a short 009 live check to validate the new path before scaling up. Nonstandard/severely damaged 133 handling remains open.
+Archive inspection found 134 HD-sized images, 009 DD-sized, and a 417,792-byte image for 133; the latter does not establish physical geometry. Supported automatic discovery has passed saved checks and the live 009 repeat (720 KB, matching the earlier image hash), not universal format acceptance. Nonstandard/severely damaged 133 handling remains open.
 
 New scans default to verified packed retention. One background worker packs completed captures while swaps continue; original SCP size/hash and all bytes survive in `.scp.zip` plus binding metadata. Raw working copies retire only after verification. `--capture-storage raw` opts out; old journals keep raw storage. `storage resume` finishes pending packing offline. Original pilot/archive evidence stays separate. On a copy of all 26 captures, this reclaimed 76.42% of raw working space; it is not a new acquisition-throughput measurement.
 

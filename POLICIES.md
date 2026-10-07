@@ -2,7 +2,9 @@
 
 **You do not need to make a policy file.** A policy is simply the program's recovery budget: how many attempts it may make, how thorough they may be, and when it must stop. It prevents one stubborn floppy from consuming the whole afternoon or being reread indefinitely. FluxVault chooses whether to continue from the recorded results; you do not pick a pass at every disk.
 
-## The normal command
+Start with [the beginner tutorial](TUTORIAL.md) if you have not made a project yet. This page explains optional budgets, not another required setup step.
+
+## Beginner: leave the policy alone
 
 ```powershell
 fv scan
@@ -29,7 +31,7 @@ If a later stage exhausts its allowance, its interrupted capture stays separate 
 
 Policies without `time_limit_scope` now use `per_stage`, including existing saved scan settings. Unfinished older jobs are upgraded once when resumed, preserving completed passes, failed captures and original timestamps; the pending stage gets its new independent allowance. Already completed jobs are verified/reused, never reopened automatically. To explicitly retain the previous whole-disk budget, set `"time_limit_scope": "whole_job"` in a policy for a new job. Its historical empty-first-capture restart and partial-save behavior remain supported.
 
-## Custom files are optional expert controls
+## Advanced: custom files are optional
 
 Only if you want different limits, copy `policies/pilot-short.json`, edit your copy, and supply `--policy 'C:\path\to\my-policy.json'` when starting a new scan/job. Do not change a pending job's policy. Its saved values must match so a restart cannot silently change the plan.
 

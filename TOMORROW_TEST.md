@@ -1,8 +1,10 @@
-# Tomorrow: two short checks, ready-to-review results
+# Hardware test launcher: fresh scan, resume, or collect
 
-Use the freshly rebuilt executable through this launcher. No installation, policy file or format map required. Each invocation without `-Project` creates a **new** isolated project under `Desktop\FluxVault-Test` and prints its path.
+For ordinary scanning, follow [the beginner tutorial](TUTORIAL.md). This optional test launcher uses the freshly built executable directly and collects review-ready results. No installation, policy file or format map required. Each invocation without `-Project` creates a **new** isolated project under `Desktop\FluxVault-Test` and prints its path.
 
-## 1. Customer 009: DD smoke test
+## Beginner: fresh one-disk checks
+
+### Customer 009: DD smoke test
 
 Insert **customer 009** in the working Mitsumi/Greaseweazle drive (selector B), write-protect hole open:
 
@@ -13,7 +15,7 @@ $pilot = 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\scripts\s
 
 Check the displayed label, press Enter, and wait for the swap/finished banner before removing the disk. The bar should stay animated while reading and disappear before the next instruction. The expected supported geometry is 720 KB / 1,440 sectors. A clean read does not mean the historical carved Word/JPEG candidates have been recovered; that gap remains explicit in the comparison.
 
-## 2. Customer 058: investigate the reference difference
+### Customer 058: reference-difference check
 
 Insert **customer 058**, with the protection hole open:
 
@@ -23,7 +25,7 @@ Insert **customer 058**, with the protection hole open:
 
 Its last scan had a clean sector image but several document-byte differences versus the old DMDE archive. Some archived versions are deleted/ambiguous drafts. A fresh, isolated repeat helps separate reproducible captured content from historical archive differences. This command does not reconstruct or overwrite customer files with guesses.
 
-## Optional next cohort
+## Advanced: a fresh numbered cohort
 
 If both checks behave well and you have time, feed 021–032:
 
@@ -43,18 +45,11 @@ Paste the final **FLUXVAULT TEST SUMMARY** and tell me:
 
 The launcher writes unique `Reports/TestSummary-*.txt/.json`, benchmark snapshots and the baseline file comparison. I can inspect detailed local logs from the printed project path; no need to upload customer files or a huge ZIP.
 
-## Resume or collect without hardware
+## Advanced: resume or collect saved results
 
-**Current 021–032 cohort stopped at 023 (2026-10-07).** The No Index reseat prompts worked: 022 saved with two missing sectors and advanced normally. On 023, the old shared 600-second budget expired during Detective. Its three completed passes remain intact (2,859 readable sectors, 21 missing, no conflicts). At the operator's request, the rebuilt executable now grants **ten minutes per stage**. Insert **023** in the working Mitsumi/Greaseweazle drive B, protection hole open, and resume this exact project:
+The recorded 009/058 repeat checks and 021–032 cohort are already complete. These examples are for a **new test or your own interrupted project**, not instructions to insert historical pending disk 023. The saved project/scan prompt determines the next disk; an old document does not.
 
-```powershell
-$pilot = 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\scripts\start-pilot.ps1'
-& $pilot -FirstDisk 21 -LastDisk 32 -NoVerify -Project 'C:\Users\User\Desktop\FluxVault-Test\Customer-021-032-Test-59ed47d3e9214caba22730cfa88e291e'
-```
-
-It continues at 023, not 021. Confirm the displayed 023 prompt with Enter; it reuses Fast/Normal/Recovery and retries **Detective only**, with a fresh independent 600-second allowance and a new capture number. The failed attempt 004 stays intact. Wait for the **SAVED / REMOVE 023 / INSERT 024** banner, then insert 024 and continue. It may be red if sectors remain unresolved; that still permits swapping. No Index failures offer two same-disk reseat/reconfirm retries per invocation. Never advance the physical label until the saved-result swap banner asks for the next disk. If you already completed 023 under the prior build, its completed result stays reusable and the scan continues at its saved cursor instead.
-
-Resume **the same** printed project/range after interruption; never `init` it again or reset its disk cursor:
+To resume a physical scan, use **the same printed project/range** and insert only the disk its prompt requests. Never `init` it again or reset its cursor:
 
 ```powershell
 & $pilot -FirstDisk 21 -LastDisk 32 -NoVerify -Project 'C:\paste\the\printed\project'

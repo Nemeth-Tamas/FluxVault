@@ -1,240 +1,130 @@
-# FluxVault command cheat sheet
+# FluxVault cheat sheet
 
-**For the person swapping floppies, not writing software.** These examples are for **PowerShell on Windows**. Copy one line at a time. FluxVault reads source floppies; its images, logs, and reports are written to the project folder.
+**PowerShell · Windows · `fv` = `fluxvault`**
 
-> [!IMPORTANT]
-> `A:` is the **Windows USB floppy drive**. Greaseweazle's `--gw-drive A` is a **different drive selector**. Do not use a customer disk to test write protection. The USB acquisition commands require an independently verified write blocker and a positive Windows protection report; the flag does not bypass either check.
+New here? Follow [the tutorial](TUTORIAL.md). This is the quick reference after setup. Physical scanning defaults to the tested Greaseweazle/Mitsumi station on selector B. USB commands are in the advanced reference.
 
-**Tomorrow's short test:** [TOMORROW_TEST.md](TOMORROW_TEST.md) has two paste-ready commands and a launcher that creates a fresh project and gathers the results. [The 136-disk runbook](PILOT_136.md) covers the larger run; [the completed 20-disk pilot](PILOT_20.md) is historical.
+## Beginner: everyday commands
 
-**Reference comparison:** `fv benchmark compare --baseline 'C:\path\archive.zip'` checks source-file hashes offline. On that command, `--include-deleted` expands comparison only. Separate optional deleted recovery uses `fv recovery extract 59 --include-deleted`; it stays forensic-only and never changes normal delivery. See [comparison scope](BASELINE_COMPARISON.md) and [deleted/partial recovery](DELETED_AND_FRAGMENT_RECOVERY.md).
-
-**Better results, automatically:** processing prefers verified recovery improvements without losing earlier generations. When an original gets a better delivery name, an unchanged copy created by FluxVault can move into recoverable `Recovery/DeliveryQuarantine`; edited/untracked copies remain safe. `fv conversion plan` shows maintenance totals, and reports explain every move. No additional scan command or choice is required. [Details](RECOVERY_SELECTION.md).
-
-**Everyday short command:** the installer now provides `fv` as well as `fluxvault`. `fv scan` runs the Greaseweazle loop using saved project settings; enter just the displayed number (`004`), or `QUIT`. See [Policies without homework](POLICIES.md) for optional expert controls. Explicit `scan --drive A:` remains the guarded USB workflow.
-
-**Even less typing (opt-in):** `fv scan --no-verify` lets you press **Enter after each swap** instead of typing the number. Check the label yourself: the warning means label typing is skipped, not that hashes or read-only protections are disabled. `QUIT` still stops; add the flag each time you want this mode.
-
-**At a glance:** cyan **WAITING FOR YOU / INSERT**, green **DONE / REMOVE / INSERT**, red **PARTIAL SAVED / REMOVE / INSERT** or **FAILED**. A partial-saved banner explicitly says it is safe to swap; a failed read does not advance the number. Amber remains for warnings and raw-only format exceptions. Every cue has a plain-text label. After the last disk, **BATCH FINISHED** means remove it; the saved next number is not an insertion request. `--color never` disables colors.
-
-**While reading:** an interactive ASCII loading bar shows reported track visitation and elapsed time, then clears before the swap banner. It stays animated during quiet tool operations; unknown progress uses a moving marker, not a made-up percentage. Each reread resets its track count. Visiting all tracks does not mean every sector was recovered. Redirected output/JSON keeps ordinary stage messages without animation.
-
-**No Index:** wait for the red **REMOVE AND REINSERT SAME DISK** cue. Remove/reseat that same numbered floppy, check its protection hole, then reconfirm (Enter in `--no-verify` mode). Do not advance to the next disk. The scan offers two reseat retries before stopping; `QUIT` stops safely and keeps the pending number. Other errors still stop for inspection.
-
-**Recovery time limit:** Fast, Normal, Recovery and Detective each get **up to ten minutes of capture time** by default—not ten minutes shared by the whole disk. A stubborn disk can use roughly 40 minutes plus offline work; clean disks finish early. Reseat retries share that stage's remaining allowance. If a later stage runs out, the next configured stage can still try; earlier verified passes remain usable and unfinished flux stays separate. Follow the final red **PARTIAL SAVED** banner to swap. Unexpected early tool timeouts, no completed usable pass or changed evidence still stop. Resume with the same project and range, not a fresh `init`.
-
-**Keep swapping:** new projects extract/convert/update reports in the background. `fv processing status` in another terminal shows progress without hiding your swap prompt; after interruption, `fv processing resume` finishes saved-image work offline. Old journals keep tail mode; `fv scan --processing-mode background` opts them in. [How background work behaves](BACKGROUND_PROCESSING.md).
-
-**Conversion workers:** `fv scan --conversion-workers 4` saves the requested count. Default is four; 1–16 are supported, capped during background scanning to leave two logical CPUs for acquisition. Idle workers take the next queued file; more workers may not be faster. For saved files alone: `fv process --conversion-workers 12`.
-
-**Capture size experiment:** `fv storage benchmark 7` measures lossless compression on a saved capture of disk 007 and verifies exact decompression. It does not change any captures.
-
-**New projects need no format list:** `fv scan --last-disk 136` identifies supported 720 KB/1.44 MB formats. Completed captures pack in the background; exact bytes/hash survive. If two completed format trials remain inconclusive, an amber **RAW-ONLY FORMAT EXCEPTION SAVED** banner permits the next swap. It is preserved raw evidence, not a successful image/extraction; tool/integrity failures still stop. Old projects keep saved modes.
-
-**Saved-capture tools:** `fv greaseweazle identify 9` identifies format without hardware. `fv storage pack 7` makes a verified container but keeps raw; add `--retire-raw` explicitly to reclaim space. `fv storage resume` finishes durable packing tasks after interruption without a disk in the drive. Normal decode/recovery commands handle packed evidence transparently.
-
-## 1. Get to a working prompt
-
-The current built executable is in the repository. To use it from any folder as `fluxvault`, run this once from PowerShell:
+### Install or refresh once
 
 ```powershell
 Set-Location 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault'
 powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath
 ```
 
-**Close and reopen PowerShell** after installation, then check:
+Reopen PowerShell, then `fv --help`. Reinstall after a new build to refresh the copied executable. No installation wanted? Use the full executable path with `& $fv`; [example](TUTORIAL.md#1-install-or-refresh-the-short-command).
+
+### New batch: create, enter, scan
+
+Choose a **fresh folder name**. Do not initialize an existing archive to resume it.
 
 ```powershell
-fluxvault --help
+fv init 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
+Set-Location 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
+fv scan --last-disk 20 --no-verify
 ```
 
-If the installer says the release executable is missing, run `cargo build --release` in the repository first. If you do not want to install anything, run `.\target\release\fluxvault.exe` from the repository instead of `fluxvault` in the examples below.
+Check the label and open write-protect hole, insert the displayed disk, then press Enter. Omit `--no-verify` to type its number instead (`001` or `1`). `QUIT` stops at a waiting prompt. Never remove a disk while reading.
 
-## 2. Open the existing test project
+No policy/format file is needed. New scans identify supported 720 KB/1.44 MB formats, recover within limits, process saved files in the background and pack captures.
 
-This project **already exists**. Do not run `init` on it.
+### Existing batch: enter, inspect, continue
 
 ```powershell
-Set-Location 'C:\Users\User\Desktop\FluxVault-Test'
-fluxvault status
-fluxvault disk list
-fluxvault recovery queue
+Set-Location 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
+fv status
+fv scan --last-disk 20 --no-verify
 ```
 
-FluxVault finds the project from the current folder or one of its subfolders. From elsewhere, add `--project 'C:\Users\User\Desktop\FluxVault-Test'` to a command.
+Insert the **displayed next/pending disk**, not necessarily 001. Repeat original settings/endpoint; do not run `init` or reset numbering. `--no-verify` skips label typing only and must be supplied each session.
 
-For a **brand-new** project in a different location:
+### After scanning
 
 ```powershell
-fluxvault init 'C:\path\to\New-Archive'
-Set-Location 'C:\path\to\New-Archive'
-fluxvault status
+fv status
+fv recovery queue
+fv conversion issues
+fv benchmark report
 ```
 
-## 3. The everyday floppy loop (USB drive)
-
-First confirm which drive Windows sees. `drive list` does not read a disk; `drive probe` reads only the first 512 bytes, without writing.
+Saved work interrupted? No floppy needed:
 
 ```powershell
-fluxvault drive list
-fluxvault drive probe --drive A:
+fv processing resume
+fv storage resume
 ```
 
-Only after independent hardware-protection verification, insert a physically write-protected floppy and scan it. For a **known numbered disk**, this makes a new, numbered image attempt; it does not overwrite an earlier attempt:
+### Delivery, when checks allow
 
 ```powershell
-fluxvault acquire --drive A: --disk 7 --retries 2 --write-blocker-verified
-fluxvault disk show 7 --details
+fv audit
+New-Item -ItemType Directory -Path 'C:\Users\User\Desktop\FluxVault-Delivery' -Force
+fv finalize --destination 'C:\Users\User\Desktop\FluxVault-Delivery'
 ```
 
-For a **sequence of disks**, select the starting number, then let FluxVault prompt after each swap:
+Destination must exist outside the project. Finalize blocks automatic packaging if unresolved attention remains. Keep the project; a ZIP is not proof of complete recovery.
 
-```powershell
-fluxvault disk select 8
-fluxvault scan --drive A: --count 10 --retries 2 --write-blocker-verified
-```
+## Beginner: read the banner
 
-At each prompt, insert the correctly numbered floppy and type `READ`. Type `QUIT` to end the session. A partial image still advances the sequence and enters the recovery queue; a failed acquisition does not advance it. `--count 10` is a safety cap, not a requirement to have ten disks ready. Omit it to keep going until `QUIT`.
-
-> [!NOTE]
-> `--retries 2` means two bounded retry passes after the initial read. FluxVault will refuse acquisition if Windows does not report the floppy as protected. Do not try to work around that with customer media.
-
-## 4. What to type after scanning
-
-| You want to... | Type this |
+| Cue | Meaning |
 | --- | --- |
-| See overall progress | `fluxvault status` |
-| See all imaged disks | `fluxvault disk list` |
-| Inspect one disk and its bad sectors | `fluxvault disk show 7 --details` |
-| See which disks need attention | `fluxvault recovery queue` |
-| See suggested recovery actions | `fluxvault recovery plan` |
-| Compare repeat USB reads of disk 7 | `fluxvault recovery compare 7` |
-| Verify saved image/extraction evidence | `fluxvault audit` |
+| Cyan **WAITING FOR YOU** | Insert/check/confirm displayed disk. |
+| **READING / DO NOT REMOVE** | Wait; recovery stages may run automatically. |
+| Green **DONE / REMOVE / INSERT** | Saved; swap. |
+| Red **PARTIAL SAVED / REMOVE / INSERT** | Saved with unresolved sectors; still swap. |
+| Amber **RAW-ONLY FORMAT EXCEPTION SAVED** | Raw preserved, no compatible image claimed; follow swap cue. |
+| Red **REMOVE AND REINSERT SAME DISK** | Reseat same disk and reconfirm. |
+| Red **FAILED** | Keep the same number/project; inspect error. |
+| **BATCH FINISHED / REMOVE** | Remove last disk; no further insertion. |
 
-The following commands operate on **saved images and files**, not the physical floppy:
+Exit codes: **0** completed · **3** attention/partial · **2** input/operation error. Red partial-saved is not failed. The bar shows activity/reported track visits, not recovered-sector yield.
 
-```powershell
-fluxvault extract all
-fluxvault files manifest
-fluxvault conversion plan
-fluxvault conversion run
-fluxvault conversion issues
-fluxvault report export
-```
+## Advanced: optional shortcuts
 
-`extract all` needs 7-Zip. `conversion run` needs LibreOffice. Check what FluxVault can find with `fluxvault tools check`; `fluxvault tools show` shows configured paths. If a tool is installed somewhere unusual, use `fluxvault tools set sevenzip 'C:\path\to\7z.exe'` or `fluxvault tools set libreoffice 'C:\path\to\soffice.exe'`.
+### Start at 053, end at 064
 
-For the saved-image processing chain in one command, use:
+Select the start **before the first scan in a new project**:
 
 ```powershell
-fluxvault process
+fv disk select 53
+fv scan --last-disk 64 --no-verify
 ```
 
-This runs recovery/extraction, conversion, audit, and report work. It does **not** guarantee every damaged floppy has yielded every original file. Review the recovery queue, conversion issues, and audit before delivery.
+Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count N` caps this invocation. Completed jobs are reused, not reread; use [the fresh-test launcher](TOMORROW_TEST.md) for repeat-read measurements.
 
-## 5. When a disk has bad sectors
+### Saved-file tools: no physical disk needed
 
-Start with the evidence; do not guess missing bytes:
-
-```powershell
-fluxvault disk show 7 --details
-fluxvault recovery plan 7
-fluxvault recovery compare 7
-```
-
-If there are multiple saved USB attempts, the guarded offline recovery commands can preserve a backup and try evidence-based reconstruction:
-
-```powershell
-fluxvault recovery backup 7
-fluxvault recovery composite 7
-fluxvault recovery fat 7
-fluxvault extract disk 7
-```
-
-`composite` uses corroborated saved-sector evidence; `fat` reconstructs only provable mirrored FAT sectors. Neither is permission to invent or silently certify damaged customer data. Some disks will still need attention.
-
-To recover intact files from a damaged **saved** FAT12 image, without inserting the disk:
-
-```powershell
-fluxvault recovery extract 7
-```
-
-`process` and the extraction commands try this automatically too. Standalone `recovery extract` needs no 7-Zip or LibreOffice. It saves intact readable files and validated signature candidates separately, preserves earlier/manual extraction, and records exceptions. Success still returns **3 (partial/attention)**—that is expected. Names from intact entries are preserved; carved names are reconstructed and delivery-labeled **Signature-Recovered**. Generation 4 can find orphaned or embedded document/picture candidates without guessing missing bytes. Known deleted/free allocation is excluded when a readable layout exists; a raw fallback labels live/deleted ownership unknown. Reports use `Recovery\007\attempt_NNN_fat12_v4.json`, outputs `_native_v4`; see [automatic carving and actual recovered Word documents](CARVING_RECOVERY.md).
-
-Readable parts of incomplete live files now also save automatically as separate **raw fragments**, with exact offsets and holes. Nothing extra to type; they are evidence, not complete documents. If you deliberately want deleted candidates too: `fv recovery extract 7 --include-deleted`. These stay under `Recovery`, outside normal conversion/delivery. [What the new recovery can and cannot prove](DELETED_AND_FRAGMENT_RECOVERY.md).
-
-## 6. Greaseweazle: start once, feed the disks
-
-For the first measured customer run, follow [the 136-disk pilot guide](PILOT_136.md). Scans now save a local benchmark automatically; `fluxvault benchmark report` exports it again without touching hardware. For a restart-safe numbered endpoint, use `--last-disk 136` instead of a per-invocation `--count 136`.
-
-The tested **Mitsumi drive with the straight ribbon uses selector B**. The original NEC is faulty; do not use it as the production drive. See [setup and live checks](GREASEWEAZLE_PREFLIGHT.md). Check the host/board after connecting:
-
-```powershell
-fluxvault tools check
-fluxvault greaseweazle info
-fluxvault greaseweazle preview
-```
-
-For a batch of protected **1.44 MB** disks, use a new project or select its next unscanned number. No USB scan is required first:
-
-```powershell
-fluxvault disk select 1
-fluxvault greaseweazle scan --gw-drive B --source-write-protected --count 10
-```
-
-At each prompt, check the floppy's label and open write-protect hole, insert it, then type the displayed number, such as **`001`**. When FluxVault says **GW SWAP**, remove it and insert the next numbered floppy. Type **`QUIT`** to finish early. Omit `--count 10` to keep going until `QUIT`.
-
-The program performs bounded recovery automatically, saves each result, and advances the number—even for a completed partial result. An operation error keeps that disk selected. New scans process saved files between swaps, then drain and reconcile at the end; old journals retain tail mode. `--count` counts results finalized in this invocation, including interrupted numbering commits recovered on restart.
-
-Restart with the same command/settings. Saved completed evidence is checked before an interrupted number advance; that step reads no disk. An interrupted physical job asks you to confirm the same numbered floppy again before it can continue. The final summary tells you the next number. Avoid changing disk selection in another terminal during a scan.
-
-For just one specifically numbered floppy:
-
-```powershell
-fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
-```
-
-FluxVault captures and decodes, rereads only problem areas within bounded limits, then runs extraction/conversion/audit/report processing. After it finishes, remove the disk and run the command with the next disk's number. It stops after two non-improving passes rather than endlessly hammering the disk.
-
-New scans identify supported **720 KB / 1.44 MB** formats automatically. Expert `recover` still defaults to 1.44 MB; add `--profile auto` or pin `--profile ibm.720`. An explicit scan profile/map overrides discovery. FluxVault reserves the Greaseweazle across your CLI sessions and project folders, so another `scan`, `recover`, `capture`, or `info` reports that it is busy instead of competing for the board.
-
-Repeat the same command/settings to resume an interrupted job. A completed job is verified/reused, not physically reread. Partial results keep missing sectors explicit—no bytes are guessed. The downstream pipeline automatically salvages intact FAT12 files, corroborated missing-boot layouts, generation-4 orphan/signature candidates and readable raw partial fragments. Deleted recovery is separate opt-in; deeper directory/erased-fragmented-chain reconstruction remains unfinished. See [damaged-filesystem recovery](DAMAGED_FILESYSTEM_RECOVERY.md), [automatic carving](CARVING_RECOVERY.md) and [deleted/fragment recovery](DELETED_AND_FRAGMENT_RECOVERY.md). Clean maps can still contain lower-confidence single-capture sectors; they are not delivery certification. Add `--acquisition-only` to skip downstream processing.
-
-Optional **offline** evidence checks:
-
-```powershell
-fluxvault greaseweazle status 7
-fluxvault disk show 7 --details
-fluxvault recovery queue
-```
-
-Expert separate capture/decode commands remain available:
-
-```powershell
-fluxvault greaseweazle capture 7 --profile ibm.1440 --gw-drive B --source-write-protected
-fluxvault greaseweazle decode 7
-fluxvault greaseweazle consensus 7
-```
-
-Only `capture` in that last block accesses the disk. `consensus` requires two distinct saved raw captures; repeated decodes of one SCP do not count. `recover` already records confidence/provenance automatically; these expert commands are not required for its normal use.
-
-## 7. Delivery, only when checks are clear
-
-Create the destination folder **outside** the project first. `finalize` processes the saved images and only packages when recovery, conversion, and audit allow it:
-
-```powershell
-New-Item -ItemType Directory -Path 'C:\CustomerPackages' -Force
-fluxvault finalize --destination 'C:\CustomerPackages'
-```
-
-If it reports attention, inspect `recovery queue`, `conversion issues`, and `audit`. Do not treat an archival ZIP as proof that all source bytes were recovered.
-
-## Quick interpretation
-
-| Result | Meaning |
+| Task | Command |
 | --- | --- |
-| Exit code `0` | Command completed. |
-| Exit code `3` | Partial result or attention needed; **not necessarily a crash**. |
-| Exit code `2` | Invalid input or operation error; read the message. |
+| Inspect attempts/LBAs/hashes | `fv disk show 59 --details` |
+| Background progress | `fv processing status` |
+| Process saved images through full chain | `fv process` |
+| Request 12 Office workers offline | `fv process --conversion-workers 12` |
+| Native partial-file recovery | `fv recovery extract 59` |
+| Deleted candidates, forensic-only | `fv recovery extract 59 --include-deleted` |
+| Extract eligible saved disks | `fv extract all` |
+| Refresh inventory | `fv files manifest` |
+| Mirror originals/plan conversions | `fv conversion plan` |
+| Run Office conversions | `fv conversion run` |
+| Retry saved conversion issues | `fv conversion retry` |
+| Export workbook | `fv report export` |
+| Identify saved raw format | `fv greaseweazle identify 9` |
+| Pack capture, keep raw | `fv storage pack 7` |
+| Pack, explicitly retire verified raw | `fv storage pack 7 --retire-raw` |
 
-Useful extras: `fluxvault --help` lists every command; `--json` gives machine-readable output. For detailed behavior and limitations, see [CLI.md](CLI.md) and [TODO.md](TODO.md).
+Normal scans/processing need their saved-file tools; standalone native extraction needs neither 7-Zip nor LibreOffice. Deleted candidates and raw fragments are not complete/live customer documents.
+
+### Settings and diagnostics
+
+- `fv tools check` checks host tools; `fv greaseweazle info` checks board readiness.
+- `fv scan --conversion-workers 4` saves a 1–16 worker request; background work caps it to leave two logical CPUs available.
+- Fast/Normal/Recovery/Detective each get up to ten minutes of capture time. Clean/no-improvement stops finish earlier; stubborn disks can take roughly 40 minutes plus offline work.
+- `--project 'C:\full\project\path'` selects a project without changing folder.
+- `--json` gives machine-readable output; progress stays on stderr.
+- `--color never` removes colored scan cues; text instructions remain.
+- `fv --help` lists implemented commands. There is no GUI or two-drive production command yet.
+
+Selection/cleanup are automatic: verified richer generations become preferred, earlier evidence stays intact, and eligible obsolete original copies move into recoverable `Recovery/DeliveryQuarantine`. Edited/untracked/pre-ledger copies and old Office derivatives stay preserved. [Details](RECOVERY_SELECTION.md).
+
+More: [CLI reference](CLI.md) · [policies](POLICIES.md) · [background work](BACKGROUND_PROCESSING.md) · [136-disk runbook](PILOT_136.md) · [archive comparison](BASELINE_COMPARISON.md).
