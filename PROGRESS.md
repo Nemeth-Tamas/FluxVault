@@ -1,6 +1,6 @@
-# FluxVault progress — 2026-10-06 offline preparation
+# FluxVault progress — 2026-10-07 live checks and reseat handling
 
-The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats, losslessly pack verified raw captures, and continuously extract/recover/convert/audit saved images in the background. Unrecognized formats become explicit raw-only attention records rather than stopping numbered feeding. Existing projects retain their saved settings. This checkpoint uses saved captures and mock hardware only; the next hardware session should smoke-test overlapping work before scaling up.
+The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats, losslessly pack verified raw captures, and continuously extract/recover/convert/audit saved images in the background. Unrecognized formats become explicit raw-only attention records rather than stopping numbered feeding. Existing projects retain their saved settings. Live 009/058 and the 053–064 background cohort passed; new No Index reseat handling is mock-tested and awaits the operator's 022 acceptance check.
 
 ## How close?
 
@@ -8,10 +8,18 @@ The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finish
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
 | Single-Greaseweazle 136-disk benchmark readiness | approximately 95% | Real saved-evidence processing and deterministic 136-job/scan soaks pass; numbered/Enter swaps, limits, resume, telemetry, raw-only exceptions and packed storage exist. Live overlap and full-cohort acceptance remain the final readiness gate. |
-| Whole TODO list | 304 / 448 = 67.9% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
+| Whole TODO list | 307 / 452 = 67.9% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
 | Fully autonomous recovery/product ambition | approximately 65% | Routine acquisition and durable downstream scheduling work. Severe filesystem damage/carving, additional format decoders and two-station custody/resource control remain substantial work. |
 
 These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
+
+## Live repeatability and No Index reseat checkpoint (2026-10-07)
+
+- Fresh automatic-DD 009: 1,440/1,440 sectors, 109.8 s, one read, image SHA-256 `b10cfe96525bb0aec3952c84c8d6df124b908fb170cd33ce94395dd90c4cc7c2` matches the earlier pilot. Its one JPEG also matches; the five historical carving candidates remain unresolved.
+- Fresh 058: 2,880/2,880 sectors, 105.1 s, one read, five successful conversions. Image SHA-256 `f5f170bfb69527f26e392bee94887fb67a54a947cd2f76ba6834a133d0825770` and all five payload hashes match the earlier 053–064 run. Four changed/three missing historical reference rows reproduce; no cause of archive differences is inferred. Both checks drained/packed without operation errors. The operator confirms the read animation works.
+- In the 021–032 cohort, 021 saved normally with seven baseline matches; 022 returned real `Command Failed: GetFluxStatus: No Index` despite host exit 0. The failure was safely detected, with failed metadata retained and cursor 022 pending, but previously required restarting the CLI.
+- Guided scan now offers a red remove/reinsert **same disk** prompt with explicit confirmation, including Enter-only mode. Two reseat retries per disk/invocation; no blind retries or numbering advance. Generic/mixed host failures, timeouts and integrity/verification errors remain terminal. Existing budget/protection/journal guards are unchanged; failed attempts remain recorded in telemetry and their partial metadata/SCPs are never overwritten.
+- Five new unit tests and two executable tests cover classification, bounded retries, wrong labels, EOF/QUIT, restart, per-disk reset, immutable partial evidence and JSON/read-only contracts. The new live 022 retry remains the operator acceptance step; [resume command](TOMORROW_TEST.md#resume-or-collect-without-hardware). 255 regular tests pass, 11 environment-dependent tests remain ignored; formatting/all-target checking and release build pass.
 
 ## Next-test preparation and actual file baseline
 

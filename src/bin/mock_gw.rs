@@ -55,7 +55,23 @@ fn main() {
             println!("  Firmware: 1.23");
         }
         "read" => {
-            if env::var("MOCK_GW_NO_INDEX").is_ok() {
+            let no_index_attempt =
+                env::var("MOCK_GW_NO_INDEX_ATTEMPTS")
+                    .ok()
+                    .is_some_and(|targets| {
+                        let name = args
+                            .last()
+                            .and_then(|a| std::path::Path::new(a).file_name())
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        targets
+                            .split(',')
+                            .any(|stem| !stem.is_empty() && name == format!("{stem}.partial.scp"))
+                    });
+            if env::var("MOCK_GW_NO_INDEX").is_ok() || no_index_attempt {
+                if env::var("MOCK_GW_NO_INDEX_PARTIAL").is_ok() {
+                    fs::write(args.last().unwrap(), b"synthetic interrupted raw flux").unwrap();
+                }
                 println!("Command Failed: GetFluxStatus: No Index");
                 return; // Reproduce the real host's misleading exit-zero behavior.
             }

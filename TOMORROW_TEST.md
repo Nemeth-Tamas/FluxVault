@@ -45,6 +45,15 @@ The launcher writes unique `Reports/TestSummary-*.txt/.json`, benchmark snapshot
 
 ## Resume or collect without hardware
 
+**Current 021–032 cohort stopped at 022 (2026-10-07).** The saved 021 is complete with seven matching baseline payloads; 022's first attempt returned No Index and remains pending. After updating to the reseat-prompt build, remove/reinsert **022**, check the open protection hole, and resume this exact project:
+
+```powershell
+$pilot = 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\scripts\start-pilot.ps1'
+& $pilot -FirstDisk 21 -LastDisk 32 -NoVerify -Project 'C:\Users\User\Desktop\FluxVault-Test\Customer-021-032-Test-59ed47d3e9214caba22730cfa88e291e'
+```
+
+It continues at 022, not 021. A subsequent No Index capture failure produces a red same-disk reseat/reconfirm prompt rather than exiting immediately; two retries are allowed per disk/invocation. Failed metadata/partial captures stay saved. Never advance the physical label until the saved-result swap banner asks for the next disk.
+
 Resume **the same** printed project/range after interruption; never `init` it again or reset its disk cursor:
 
 ```powershell

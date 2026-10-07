@@ -437,6 +437,8 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 - [x] Add ordinary `scan` for GW with saved per-project defaults and an installer-provided `fv` alias; preserve explicit guarded USB scans and expert overrides.
 - [x] Explain built-in/saved recovery budgets as optional expert configuration rather than mandatory operator homework (`POLICIES.md`).
 - [x] Reproduce/fix host exit-zero `Command Failed: No Index` reporting; preserve failed metadata and allow an operator-confirmed expired empty-first-capture restart without resetting jobs that contain raw evidence.
+  - [x] Keep guided scanning open after a specifically classified No Index capture failure: red same-disk remove/reinsert cue, explicit reconfirmation (number/Enter mode), two bounded reseat retries per disk/invocation, preserved failed metadata/partial flux and normal stop for other errors. Mock tests cover wrong labels, EOF/QUIT, retry cap, verification refusal, next-disk reset and cross-process custody/JSON/telemetry.
+  - [ ] Validate the new reseat prompt on live 022 while resuming the existing 021–032 project; retain historical failed attempts and complete the remaining cohort.
 
 **Current operator-time target:** first run up to 20 customer disks (001–020), stopping earlier with `QUIT` if needed; collect real timing/recovery data before expanding to 136. Disk 009's archived image is 720 KB, so the cohort must switch formats rather than decode everything as HD. See `PILOT_20.md`.
 
@@ -462,6 +464,8 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 - [ ] Pass small clean/damaged live smoke tests with telemetry before starting the full pilot; inspect fixed-profile behavior on known DD/nonstandard media.
   - [x] Customer 007 live guided smoke test: 2,880/2,880 sectors, one capture, 18 extracted files with all payload hashes matching the archived originals, 18 successful document conversions, clean evidence audit/workbook and benchmark exports. Whole-image hashes differ at five LBAs; do not claim byte-identical media or infer the cause.
   - [x] Customer 009 live mapped-DD smoke test: 1,440/1,440 sectors, one capture, exact 737,280-byte image, one reachable FAT file, clean evidence audit/workbook and benchmark exports; actual profile switch used with the short policy.
+  - [x] Fresh 009 automatic-DD smoke test (2026-10-07): 1,440 readable sectors, one capture/109.8 s, correct automatic format, background drain/packed retention and verified JPEG; image/payload bytes identical to the earlier physical pilot.
+  - [x] Fresh 058 repeat (2026-10-07): 2,880 readable sectors, one capture/105.1 s, five successful document conversions; image and all extracted payload hashes match the earlier 053–064 scan. Historical archive differences reproduce, not acquisition drift. Operator confirms read animation/clearing works.
   - [ ] Compare live 009 against the archive's signature-carved outputs (including a large legacy Word candidate and JPEG), distinguishing deleted/orphaned content, recovery-tool reports and actual reachable files. A clean FAT extraction is not equivalence to legacy carving, and whole-image/payload hashes currently differ.
 - [ ] Run the first 136-disk physical pilot and collect benchmark/audit/recovery artifacts, preserving the original script archive for comparison.
 - [ ] Compare pilot source/recovered-file hashes and yield against the script/DMDE baseline, then prioritize changes using measured failure/throughput data.

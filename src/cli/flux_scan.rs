@@ -26,6 +26,7 @@ use super::{
 
 const JOURNAL: &str = ".fluxvault-gw-scan.json";
 const LOCK: &str = ".fluxvault-gw-scan.lock";
+const MAX_NO_INDEX_RESEATS: usize = 2;
 
 pub(super) struct ScanOptions {
     pub profile: GreaseweazleProfile,
@@ -578,6 +579,8 @@ where
     let mut results = Vec::new();
     let mut resumed_advances = 0usize;
     let mut waiting: Option<(u32, Instant)> = None;
+    let mut no_index_reseats = 0usize;
+    let mut reseat_error: Option<String> = None;
     loop {
         if options.count.is_some_and(|limit| results.len() >= limit) {
             break;
@@ -631,16 +634,30 @@ where
                     "Enter assigns the displayed number. Check the label and OPEN protection hole.\nRead-only access and all image/hash/provenance verification remain ON.",
                 )?;
             }
-            terminal::banner(
-                output,
-                options.color,
-                Cue::Action,
-                &format!("GW {} / WAITING FOR YOU / INSERT {disk:03}", options.drive),
-                &format!(
-                    "Check disk label {disk:03} and OPEN write-protect hole. Format: {}",
-                    options.format_label(disk)?
-                ),
-            )?;
+            if let Some(error) = &reseat_error {
+                terminal::banner(
+                    output,
+                    options.color,
+                    Cue::Error,
+                    &format!(
+                        "NO INDEX {disk:03} / REMOVE AND REINSERT SAME DISK / RETRY {no_index_reseats} OF {MAX_NO_INDEX_RESEATS}"
+                    ),
+                    &format!(
+                        "Physical read has stopped; safe to remove the floppy.\nRemove and fully reinsert disk {disk:03}, check label/protection, drive power and closed door/lever.\nDo NOT insert the next disk. No read starts until you confirm again; QUIT stops safely.\nAttempt evidence retained.\n{error}"
+                    ),
+                )?;
+            } else {
+                terminal::banner(
+                    output,
+                    options.color,
+                    Cue::Action,
+                    &format!("GW {} / WAITING FOR YOU / INSERT {disk:03}", options.drive),
+                    &format!(
+                        "Check disk label {disk:03} and OPEN write-protect hole. Format: {}",
+                        options.format_label(disk)?
+                    ),
+                )?;
+            }
             if options.no_verify {
                 writeln!(
                     output,
@@ -687,11 +704,13 @@ where
                 );
             }
             *project = fresh;
+            let reseat_confirmed = reseat_error.take().is_some();
             journal.pending = Some(Pending { disk, result: None });
             save(&path, &journal)?; // Custody persists before any physical operation.
             telemetry.record(
                 "read_confirmed",
                 json!({"disk":disk,"profile":profile.argument(),
+                "reseat_after_no_index":reseat_confirmed,
                 "identity_confirmation":if options.no_verify && words.is_empty() {"enter_only"} else {"numbered"},
                 "operator_wait_ms":benchmark::milliseconds(waiting.take().unwrap().1.elapsed())}),
             )?;
@@ -709,17 +728,31 @@ where
                     result
                 }
                 Err(error) => {
+                    let retryable = crate::flux_capture::is_no_index_capture_failure(&error)
+                        && no_index_reseats < MAX_NO_INDEX_RESEATS;
                     telemetry.record(
                         "recovery_failed",
                         json!({"disk":disk,"phase":"acquisition",
-                        "elapsed_ms":benchmark::milliseconds(started.elapsed()),"error":error}),
+                        "elapsed_ms":benchmark::milliseconds(started.elapsed()),"error":error,
+                        "reseat_retry_available":retryable,"reseat_retries_used":no_index_reseats}),
                     )?;
+                    if retryable {
+                        no_index_reseats += 1;
+                        reseat_error = Some(error);
+                        // Pending custody stays on this disk. A new confirmation
+                        // is required, even in Enter-only mode; no blind retry.
+                        continue;
+                    }
                     terminal::banner(
                         output,
                         options.color,
                         Cue::Error,
                         &format!("READ FAILED {disk:03} / NUMBER NOT ADVANCED"),
-                        "Evidence retained. No automatic next-disk read; inspect the error before retrying.",
+                        if crate::flux_capture::is_no_index_capture_failure(&error) {
+                            "No Index persisted after two confirmed reseat retries. Evidence retained; check disk seating/drive/power before manually resuming this same project. No next-disk read started."
+                        } else {
+                            "Evidence retained. No automatic next-disk read; inspect the error before retrying."
+                        },
                     )?;
                     return Err(error);
                 }
@@ -834,6 +867,8 @@ where
             ),
         )?;
         results.push(result);
+        no_index_reseats = 0;
+        reseat_error = None;
     }
     let mut attention =
         journal.pending.is_some() || journal.completed.iter().any(|r| r.status != "acquired");
@@ -1423,6 +1458,184 @@ mod tests {
         )
         .unwrap();
         assert_eq!(project.current_disk_number(), 2);
+    }
+
+    fn no_index_error() -> String {
+        format!(
+            "{}Command Failed: GetFluxStatus: No Index",
+            crate::flux_capture::NO_INDEX_ERROR_PREFIX
+        )
+    }
+
+    #[test]
+    fn no_index_reseat_rejects_next_number_and_advances_once_after_same_disk_confirmation() {
+        for enter_only in [false, true] {
+            let fixture = Fixture::new();
+            let mut project = fixture.project();
+            let mut opts = options();
+            opts.no_verify = enter_only;
+            opts.last_disk = Some(1);
+            opts.color = true;
+            let input: &[u8] = if enter_only { b"\n2\n\n" } else { b"1\n2\n1\n" };
+            let mut reads = 0;
+            let mut verified = 0;
+            let mut output = Vec::new();
+            let response = run_with_io(
+                &mut project,
+                &opts,
+                Cursor::new(input),
+                &mut output,
+                |p, disk| {
+                    assert_eq!(disk, 1);
+                    assert_eq!(p.current_disk_number(), 1);
+                    reads += 1;
+                    if reads == 1 {
+                        Err(no_index_error())
+                    } else {
+                        Ok(result(p, disk, false))
+                    }
+                },
+                |_, _| {
+                    verified += 1;
+                    Ok(())
+                },
+                skipped,
+            )
+            .unwrap();
+            assert_eq!(response.exit_code, 0);
+            assert_eq!((reads, verified, project.current_disk_number()), (2, 1, 2));
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains("NO INDEX 001 / REMOVE AND REINSERT SAME DISK / RETRY 1 OF 2"));
+            assert!(text.contains("safe to remove"));
+            assert!(text.contains("No read started"));
+            assert!(!text.contains("INSERT 002"));
+            assert!(text.contains("\x1b[1;31m"));
+            let stats = benchmark::report(&project).unwrap();
+            assert_eq!(stats.unique_committed_disks, 1);
+            assert_eq!(stats.recovery_errors, 1);
+            assert_eq!(stats.confirmed_insertions, 2);
+            assert_eq!(
+                load(&fixture.0.join(JOURNAL), &opts)
+                    .unwrap()
+                    .completed
+                    .len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn no_index_eof_quit_or_wrong_label_never_blindly_retries_and_resume_keeps_custody() {
+        for input in [b"1\n".as_slice(), b"1\nQUIT\n", b"1\n2\nQUIT\n"] {
+            let fixture = Fixture::new();
+            let mut project = fixture.project();
+            let mut opts = options();
+            opts.last_disk = Some(1);
+            let mut reads = 0;
+            let response = run_with_io(
+                &mut project,
+                &opts,
+                Cursor::new(input),
+                &mut Vec::new(),
+                |_, _| {
+                    reads += 1;
+                    Err(no_index_error())
+                },
+                |_, _| panic!("no image to verify"),
+                skipped,
+            )
+            .unwrap();
+            assert_eq!(
+                (response.exit_code, reads, project.current_disk_number()),
+                (3, 1, 1)
+            );
+            let pending = load(&fixture.0.join(JOURNAL), &opts)
+                .unwrap()
+                .pending
+                .unwrap();
+            assert_eq!(pending.disk, 1);
+            assert!(pending.result.is_none());
+            let resumed = run_with_io(
+                &mut project,
+                &opts,
+                Cursor::new(b"1\n"),
+                &mut Vec::new(),
+                |p, disk| Ok(result(p, disk, false)),
+                |_, _| Ok(()),
+                skipped,
+            )
+            .unwrap();
+            assert_eq!(resumed.exit_code, 0);
+            assert_eq!(project.current_disk_number(), 2);
+        }
+    }
+
+    #[test]
+    fn repeated_no_index_stops_after_two_reseats_without_advancing_number() {
+        let fixture = Fixture::new();
+        let mut project = fixture.project();
+        let opts = options();
+        let mut reads = 0;
+        let mut output = Vec::new();
+        let error = run_with_io(
+            &mut project,
+            &opts,
+            Cursor::new(b"1\n1\n1\n1\n"),
+            &mut output,
+            |_, _| {
+                reads += 1;
+                Err(no_index_error())
+            },
+            |_, _| panic!("no image"),
+            skipped,
+        )
+        .unwrap_err();
+        assert!(error.contains("No Index"));
+        assert_eq!(reads, 3);
+        assert_eq!(project.current_disk_number(), 1);
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("after two confirmed reseat retries")
+        );
+        assert_eq!(benchmark::report(&project).unwrap().recovery_errors, 3);
+    }
+
+    #[test]
+    fn misleading_no_index_text_and_verification_errors_still_stop_immediately() {
+        let fixture = Fixture::new();
+        let mut project = fixture.project();
+        let opts = options();
+        let mut reads = 0;
+        assert!(
+            run_with_io(
+                &mut project,
+                &opts,
+                Cursor::new(b"1\n1\n"),
+                &mut Vec::new(),
+                |_, _| {
+                    reads += 1;
+                    Err("Decode failed for No Index.scp".into())
+                },
+                |_, _| Ok(()),
+                skipped
+            )
+            .is_err()
+        );
+        assert_eq!(reads, 1);
+        assert!(
+            run_with_io(
+                &mut project,
+                &opts,
+                Cursor::new(b"1\n1\n"),
+                &mut Vec::new(),
+                |p, disk| Ok(result(p, disk, false)),
+                |_, _| Err(no_index_error()),
+                skipped
+            )
+            .is_err()
+        );
+        assert_eq!(project.current_disk_number(), 1);
     }
 
     #[test]

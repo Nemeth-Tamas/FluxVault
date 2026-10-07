@@ -22,6 +22,34 @@ use crate::{
 
 const SCHEMA_VERSION: u32 = 1;
 
+// A classified capture failure, not a substring search over arbitrary paths or
+// decoder/integrity messages. Keep the public String error contract compatible.
+pub(crate) const NO_INDEX_ERROR_PREFIX: &str = "No Index capture stopped: ";
+pub(crate) fn is_no_index_capture_failure(error: &str) -> bool {
+    error.starts_with(NO_INDEX_ERROR_PREFIX)
+}
+
+fn only_no_index_host_errors(output: &str) -> bool {
+    let mut found = false;
+    for line in output.lines() {
+        if let crate::greaseweazle::GreaseweazleProgressEvent::Error(message) =
+            crate::greaseweazle::parse_progress_line(line)
+        {
+            if !message
+                .rsplit(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("No Index")
+            {
+                return false;
+            }
+            found = true;
+        }
+    }
+    found
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CaptureRequest {
     pub disk_number: u32,
@@ -845,12 +873,14 @@ pub fn capture_with_settings(
             )
         };
         record.detail = Some(reason);
-        if execution.output_text().contains("No Index") {
+        let no_index = !execution.timed_out && only_no_index_host_errors(&execution.output_text());
+        if no_index {
             record.detail.as_mut().unwrap().push_str(". No rotation/index signal: physical read has stopped. Reseat the same floppy fully, check the drive is powered and the door/lever closed, then confirm the same disk number again. This is not a bad-sector result.");
         }
         save_record(&partial_metadata, &record)?;
         return Err(format!(
-            "Raw capture failed; attempt evidence remains at {}: {}",
+            "{}Raw capture failed; attempt evidence remains at {}: {}",
+            if no_index { NO_INDEX_ERROR_PREFIX } else { "" },
             partial_metadata.display(),
             record.detail.as_deref().unwrap_or("unknown error")
         ));
@@ -1379,6 +1409,27 @@ mod tests {
     use super::*;
     use crate::greaseweazle::{BackendMode, GreaseweazleExecution};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn no_index_classification_requires_a_host_error_not_a_path_or_timeout_note() {
+        assert!(only_no_index_host_errors(
+            "Reading c=0-79:h=0-1\nCommand Failed: GetFluxStatus: No Index\n"
+        ));
+        for text in [
+            "Reading file No Index.scp",
+            "No Index",
+            "Command Failed: GetFluxStatus: No Index\nERROR: Permission denied",
+            "Command Failed: No Index found in saved filename",
+        ] {
+            assert!(!only_no_index_host_errors(text));
+        }
+        assert!(is_no_index_capture_failure(&format!(
+            "{NO_INDEX_ERROR_PREFIX}retained attempt"
+        )));
+        assert!(!is_no_index_capture_failure(
+            "Decoder changed image: No Index.scp"
+        ));
+    }
 
     #[derive(Default)]
     struct ArtifactBackend {

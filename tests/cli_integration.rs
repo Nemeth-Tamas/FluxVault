@@ -515,6 +515,243 @@ fn invoke_mock_with_input(
 }
 
 #[test]
+fn cli_no_index_reseats_preserve_attempts_same_disk_custody_and_json_contract() {
+    let root = std::env::temp_dir().join(format!(
+        "fv-cli-reseat-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &[
+                "tools",
+                "set",
+                "greaseweazle",
+                env!("CARGO_BIN_EXE_mock_gw")
+            ],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(&project, &app_data, &["disk", "select", "21"], false)
+            .status
+            .success()
+    );
+    let scan = [
+        "greaseweazle",
+        "scan",
+        "--gw-drive",
+        "B",
+        "--source-write-protected",
+        "--profile",
+        "ibm.1440",
+        "--last-disk",
+        "22",
+        "--no-verify",
+        "--acquisition-only",
+        "--json",
+        "--color",
+        "always",
+    ];
+    // Disk 21 needs one reseat. Disk 22 needs both allowed reseats, showing
+    // the cap resets per disk and failed attempts are never overwritten.
+    let output = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &scan,
+        false,
+        Some(b"\n\n\n\n\n"),
+        &[
+            (
+                "MOCK_GW_NO_INDEX_ATTEMPTS",
+                "021_attempt_001,022_attempt_001,022_attempt_002",
+            ),
+            ("MOCK_GW_NO_INDEX_PARTIAL", "1"),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["scanned"], 2);
+    assert_eq!(value["next_disk"], 23);
+    assert_eq!(value["pending_disk"], serde_json::Value::Null);
+    assert_eq!(
+        value["disks"][0]["capture_attempts"],
+        serde_json::json!([2])
+    );
+    assert_eq!(
+        value["disks"][1]["capture_attempts"],
+        serde_json::json!([3])
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains('\x1b'));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("NO INDEX 021 / REMOVE AND REINSERT SAME DISK / RETRY 1 OF 2"));
+    assert!(stderr.contains("NO INDEX 022 / REMOVE AND REINSERT SAME DISK / RETRY 2 OF 2"));
+    assert!(!stderr.contains("INSERT 023"));
+    let mut failures = Vec::new();
+    for stem in ["021_attempt_001", "022_attempt_001", "022_attempt_002"] {
+        let path = project.join(format!("Flux/{stem}.partial.json"));
+        let bytes = fs::read(&path).unwrap();
+        let failed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(failed["status"], "failed");
+        assert!(failed["detail"].as_str().unwrap().contains("No Index"));
+        failures.push((path, bytes));
+        let partial_raw = project.join(format!("Flux/{stem}.partial.scp"));
+        assert_eq!(
+            fs::read(&partial_raw).unwrap(),
+            b"synthetic interrupted raw flux"
+        );
+        failures.push((partial_raw, b"synthetic interrupted raw flux".to_vec()));
+    }
+    let audit_path = project.join("Logs/external-tools.jsonl");
+    let rows: Vec<serde_json::Value> = fs::read_to_string(&audit_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let reads: Vec<_> = rows
+        .iter()
+        .filter(|r| r["arguments"][0] == "read")
+        .collect();
+    assert_eq!(reads.len(), 5);
+    assert_eq!(reads.iter().filter(|r| r["success"] == false).count(), 3);
+    assert!(rows.iter().all(|r| !matches!(
+        r["arguments"][0].as_str(),
+        Some("write" | "erase" | "clean" | "update")
+    )));
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(value["benchmark"]["summary"].as_str().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(report["unique_committed_disks"], 2);
+    assert_eq!(report["recovery_errors"], 3);
+    let resumed = invoke_mock_with_input(&project, &app_data, &scan, true, Some(b"\n"), &[]);
+    assert_eq!(resumed.status.code(), Some(0)); // Endpoint reuse needs no board/read.
+    assert_eq!(
+        fs::read_to_string(&audit_path)
+            .unwrap()
+            .lines()
+            .filter(
+                |line| serde_json::from_str::<serde_json::Value>(line).unwrap()["arguments"][0]
+                    == "read"
+            )
+            .count(),
+        5
+    );
+    for (path, bytes) in failures {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_no_index_enter_only_eof_retains_pending_disk_and_resumes_after_reseat() {
+    let root = std::env::temp_dir().join(format!(
+        "fv-cli-reseat-eof-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let app_data = root.join("app-data");
+    let project = root.join("project");
+    assert!(
+        invoke_with_mock_gw(
+            &root,
+            &app_data,
+            &["init", project.to_str().unwrap()],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &[
+                "tools",
+                "set",
+                "greaseweazle",
+                env!("CARGO_BIN_EXE_mock_gw")
+            ],
+            false
+        )
+        .status
+        .success()
+    );
+    let scan = [
+        "scan",
+        "--last-disk",
+        "1",
+        "--no-verify",
+        "--acquisition-only",
+        "--json",
+    ];
+    let quit = invoke_mock_with_input(
+        &project,
+        &app_data,
+        &scan,
+        false,
+        Some(b"\n"),
+        &[("MOCK_GW_NO_INDEX", "1")],
+    );
+    assert_eq!(
+        quit.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&quit.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&quit.stdout).unwrap();
+    assert_eq!(value["pending_disk"], 1);
+    assert_eq!(value["scanned"], 0);
+    assert_eq!(value["next_disk"], 1);
+    let failed_path = project.join("Flux/001_attempt_001.partial.json");
+    let failed_bytes = fs::read(&failed_path).unwrap();
+    let resumed = invoke_mock_with_input(&project, &app_data, &scan, false, Some(b"\n"), &[]);
+    assert_eq!(
+        resumed.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert_eq!(
+        value["disks"][0]["capture_attempts"],
+        serde_json::json!([2])
+    );
+    assert_eq!(value["next_disk"], 2);
+    assert_eq!(fs::read(failed_path).unwrap(), failed_bytes);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cli_mixed_format_scan_switches_at_009_and_binds_resume_to_the_saved_map() {
     let root = std::env::temp_dir().join(format!(
         "fluxvault-cli-mixed-pilot-{}-{}",
