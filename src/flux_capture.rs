@@ -25,6 +25,7 @@ const SCHEMA_VERSION: u32 = 1;
 // A classified capture failure, not a substring search over arbitrary paths or
 // decoder/integrity messages. Keep the public String error contract compatible.
 pub(crate) const NO_INDEX_ERROR_PREFIX: &str = "No Index capture stopped: ";
+pub(crate) const CAPTURE_TIMEOUT_ERROR_PREFIX: &str = "Capture timed out: ";
 pub(crate) fn is_no_index_capture_failure(error: &str) -> bool {
     error.starts_with(NO_INDEX_ERROR_PREFIX)
 }
@@ -880,7 +881,13 @@ pub fn capture_with_settings(
         save_record(&partial_metadata, &record)?;
         return Err(format!(
             "{}Raw capture failed; attempt evidence remains at {}: {}",
-            if no_index { NO_INDEX_ERROR_PREFIX } else { "" },
+            if no_index {
+                NO_INDEX_ERROR_PREFIX
+            } else if execution.timed_out {
+                CAPTURE_TIMEOUT_ERROR_PREFIX
+            } else {
+                ""
+            },
             partial_metadata.display(),
             record.detail.as_deref().unwrap_or("unknown error")
         ));

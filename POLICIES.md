@@ -25,6 +25,8 @@ Both stop early when the reported sector map is complete. Later passes target un
 
 Acquisition limits are not a total processing stopwatch: decoding, hashing, evidence verification, extraction and document conversion add their own work/timeouts. A completed job is verified/reused on restart, not automatically reread. If the first attempt produced **no raw file at all**, an explicitly confirmed retry can restart its bounded acquisition window after expiry, preserving the failed attempt and old start time. A job with any full/partial raw evidence does not receive that reset.
 
+When a reread is cut short by the remaining **whole-job** budget, FluxVault verifies and saves the earlier completed passes as a partial result, then offers the normal red swap banner. The interrupted capture is retained for diagnosis, not used as decoded evidence or sent to the completed-capture packer. An expired interrupted job can publish those earlier passes on restart without another physical read. This does not hide an unexpected per-operation timeout or corrupted evidence: those still stop, as does a timeout with no completed usable pass.
+
 ## Custom files are optional expert controls
 
 Only if you want different limits, copy `policies/pilot-short.json`, edit your copy, and supply `--policy 'C:\path\to\my-policy.json'` when starting a new scan/job. Do not change a pending job's policy. Its saved values must match so a restart cannot silently change the plan.

@@ -19,6 +19,8 @@
 
 **No Index:** wait for the red **REMOVE AND REINSERT SAME DISK** cue. Remove/reseat that same numbered floppy, check its protection hole, then reconfirm (Enter in `--no-verify` mode). Do not advance to the next disk. The scan offers two reseat retries before stopping; `QUIT` stops safely and keeps the pending number. Other errors still stop for inspection.
 
+**Recovery time limit:** if the overall budget expires during a reread, earlier verified passes can still produce a red **PARTIAL SAVED** swap banner. Follow that banner and continue to the next disk; unfinished flux stays separate. An unexpected tool timeout, no completed usable pass, or changed evidence still stops. Resume an interrupted scan with the same project and range, not a fresh `init`.
+
 **Keep swapping:** new projects extract/convert/update reports in the background. `fv processing status` in another terminal shows progress without hiding your swap prompt; after interruption, `fv processing resume` finishes saved-image work offline. Old journals keep tail mode; `fv scan --processing-mode background` opts them in. [How background work behaves](BACKGROUND_PROCESSING.md).
 
 **Conversion workers:** `fv scan --conversion-workers 4` saves the requested count. Default is four; 1–16 are supported, capped during background scanning to leave two logical CPUs for acquisition. Idle workers take the next queued file; more workers may not be faster. For saved files alone: `fv process --conversion-workers 12`.

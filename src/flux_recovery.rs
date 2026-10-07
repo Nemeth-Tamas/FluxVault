@@ -565,12 +565,11 @@ fn recover_impl(
                 external_tools::current_unix_ms().saturating_sub(j.started_unix_ms) / 1000,
             );
             if remaining == 0 {
-                return Err(
-                    "Capture time ceiling reached before starting the physical read".to_owned(),
-                );
+                reason = "time_limit";
+                break;
             }
             backend.set_operation_timeout(Duration::from_secs(remaining.min(300)));
-            let captured = flux_capture::capture_with_settings(
+            let captured = match flux_capture::capture_with_settings(
                 project,
                 CaptureRequest {
                     disk_number: disk,
@@ -580,7 +579,29 @@ fn recover_impl(
                 },
                 &stage.settings,
                 backend,
-            )?;
+            ) {
+                Ok(captured) => captured,
+                Err(error)
+                    if error.starts_with(flux_capture::CAPTURE_TIMEOUT_ERROR_PREFIX)
+                        && remaining <= 300
+                        && external_tools::current_unix_ms().saturating_sub(j.started_unix_ms)
+                            / 1000
+                            >= policy.max_seconds
+                        && j.stages.iter().any(|s| s.decode_attempt.is_some()) =>
+                {
+                    // A bounded policy deadline is a normal recovery stop,
+                    // not loss of the earlier independently verified passes.
+                    // Never decode/promote an unfinished SCP or reset budget.
+                    reads += 1;
+                    reason = "time_limit";
+                    progress(&format!(
+                        "Recovery time limit reached during {} pass. Interrupted capture retained separately; saving verified earlier passes as a partial result.",
+                        pass.name
+                    ));
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
             if captured.attempt_number != j.stages[index].capture_attempt {
                 return Err("Capture slot changed during recovery".to_owned());
             }
@@ -1080,6 +1101,8 @@ fn publish(
         "profile": j.profile,
         "policy": j.policy,
         "stages": j.stages,
+        "stop_reason": reason,
+        "incomplete_capture_attempts": j.stages.iter().filter(|s| s.decode_attempt.is_none()).map(|s| s.capture_attempt).collect::<Vec<_>>(),
         "image_sha256": sha256,
         "sectors": e.sectors,
         "note": "Single-capture sectors have lower confidence. Unreadable/conflicting sectors are explicitly zero-filled. No customer-delivery certification."
@@ -1155,7 +1178,12 @@ fn publish(
         }
         .to_owned(),
         stop_reason: reason.to_owned(),
-        capture_attempts: j.stages.iter().map(|s| s.capture_attempt).collect(),
+        capture_attempts: j
+            .stages
+            .iter()
+            .filter(|s| s.decode_attempt.is_some())
+            .map(|s| s.capture_attempt)
+            .collect(),
         image,
         image_sha256: sha256,
         provenance,

@@ -45,14 +45,14 @@ The launcher writes unique `Reports/TestSummary-*.txt/.json`, benchmark snapshot
 
 ## Resume or collect without hardware
 
-**Current 021–032 cohort stopped at 022 (2026-10-07).** The saved 021 is complete with seven matching baseline payloads; 022's first attempt returned No Index and remains pending. After updating to the reseat-prompt build, remove/reinsert **022**, check the open protection hole, and resume this exact project:
+**Current 021–032 cohort stopped at 023 (2026-10-07).** The No Index reseat prompts worked: 022 saved with two missing sectors and advanced normally. On 023, the 600-second recovery budget expired during Detective. Its three completed passes remain intact (2,859 readable sectors, 21 missing, no conflicts). The rebuilt executable publishes that verified partial from saved evidence instead of requiring another read. Resume this exact project:
 
 ```powershell
 $pilot = 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\scripts\start-pilot.ps1'
 & $pilot -FirstDisk 21 -LastDisk 32 -NoVerify -Project 'C:\Users\User\Desktop\FluxVault-Test\Customer-021-032-Test-59ed47d3e9214caba22730cfa88e291e'
 ```
 
-It continues at 022, not 021. A subsequent No Index capture failure produces a red same-disk reseat/reconfirm prompt rather than exiting immediately; two retries are allowed per disk/invocation. Failed metadata/partial captures stay saved. Never advance the physical label until the saved-result swap banner asks for the next disk.
+It continues at 023, not 021. Confirm the displayed 023 prompt with Enter; this pending job uses its saved passes without another physical read. Wait for its red **PARTIAL SAVED / REMOVE 023 / INSERT 024** banner, then insert 024 and continue. The interrupted Detective SCP/metadata are retained separately, never decoded as a finished capture. No Index failures still offer two same-disk reseat/reconfirm retries per invocation. Never advance the physical label until the saved-result swap banner asks for the next disk.
 
 Resume **the same** printed project/range after interruption; never `init` it again or reset its disk cursor:
 
