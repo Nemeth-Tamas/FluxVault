@@ -1071,6 +1071,111 @@ mod tests {
         saved_cohort(true);
     }
 
+    #[test]
+    #[ignore = "requires FLUXVAULT_CARVING_SOURCE_PROJECT and FLUXVAULT_CARVING_OUTPUT; new isolated saved-image generation preference validation"]
+    fn saved_generation_preference_promotes_carving_without_losing_earlier_payloads() {
+        saved_cohort(false);
+        let project = ProjectState::open_without_session(PathBuf::from(
+            std::env::var("FLUXVAULT_CARVING_OUTPUT").unwrap(),
+        ))
+        .unwrap();
+        let stats = imaging::load_project_statistics(&project.images_dir()).unwrap();
+        let mut generations = Vec::new();
+        let mut source_hashes = Vec::new();
+        let mut expected_extra = 0;
+        for disk in stats.disks {
+            let attempt = imaging::load_attempts_for_disk(&project.images_dir(), disk.disk_number)
+                .unwrap()
+                .into_iter()
+                .find(|a| a.attempt_number == disk.best_attempt_number)
+                .unwrap();
+            let directory = project
+                .extracted_dir()
+                .join(format!("{:03}", disk.disk_number));
+            let current =
+                directory.join(format!("attempt_{:03}_native_v4", attempt.attempt_number));
+            let held = directory.join(".held-native-v4");
+            let previous =
+                directory.join(format!("attempt_{:03}_native_v3", attempt.attempt_number));
+            let mut report: RecoveryReport = serde_json::from_slice(
+                &fs::read(current.join(extraction::FAT12_REPORT_NAME)).unwrap(),
+            )
+            .unwrap();
+            // Model the documented pre-carving generation from genuine reachable
+            // payloads. This is a migration fixture, not an historical v3 capture.
+            expected_extra += report.carving.as_ref().map_or(0, |c| c.files.len());
+            report.carving = None;
+            report.native_engine_version = 3;
+            report.method = "native_fat12_readable_chains".into();
+            fs::create_dir(&previous).unwrap();
+            for (path, _, _) in report.payloads() {
+                let target = previous.join(&path);
+                fs::create_dir_all(target.parent().unwrap()).unwrap();
+                fs::copy(current.join(path), target).unwrap();
+            }
+            let bytes = serde_json::to_vec_pretty(&report).unwrap();
+            fs::write(previous.join(extraction::FAT12_REPORT_NAME), &bytes).unwrap();
+            let source = project.images_dir().join(&attempt.image_file);
+            extraction::write_native_managed_metadata(
+                &previous,
+                &source,
+                &attempt.sha256,
+                hash(&bytes),
+            )
+            .unwrap();
+            source_hashes.push((source, attempt.sha256));
+            fs::rename(&current, &held).unwrap();
+            generations.push((current, held, previous));
+        }
+        let before = conversion::build_conversion_plan(&planning(&project), &|_| {}).unwrap();
+        for (current, held, _) in &generations {
+            fs::rename(held, current).unwrap();
+        }
+        let after = conversion::build_conversion_plan(&planning(&project), &|_| {}).unwrap();
+        assert_eq!(after.mirrored_files, expected_extra);
+        assert_eq!(after.reused_files, before.mirrored_files);
+        assert_eq!(after.retired_mirrors, 0);
+        let manifest = crate::manifest::build_manifest(
+            &crate::manifest::ManifestRequest {
+                extracted_root: project.extracted_dir(),
+                images_directory: project.images_dir(),
+                reports_directory: project.reports_dir(),
+            },
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            manifest.file_count,
+            after.mirrored_files + after.reused_files
+        );
+        for (current, _, previous) in generations {
+            let disk = current.parent().unwrap();
+            assert_eq!(
+                extraction::select_managed(disk, None)
+                    .unwrap()
+                    .unwrap()
+                    .directory,
+                current
+            );
+            let marker: serde_json::Value = serde_json::from_slice(
+                &fs::read(previous.join(".fluxvault-extraction.json")).unwrap(),
+            )
+            .unwrap();
+            extraction::verify_managed_extraction(
+                &previous,
+                marker["source_sha256"].as_str().unwrap(),
+            )
+            .unwrap();
+        }
+        let repeated = conversion::build_conversion_plan(&planning(&project), &|_| {}).unwrap();
+        assert_eq!(repeated.mirrored_files, 0);
+        assert_eq!(repeated.reused_files, manifest.file_count);
+        for (source, expected) in source_hashes {
+            assert_eq!(hash(&read_snapshot(&source).unwrap()), expected);
+        }
+        fs::write(project.reports_dir().join("RecoverySelectionValidation.json"),serde_json::to_vec_pretty(&serde_json::json!({"fixture":"modeled pre-carving generations built from actual saved reachable payloads","before_originals":before.mirrored_files,"preferred_originals":manifest.file_count,"additional_originals":after.mirrored_files,"reused_after_restart":repeated.reused_files,"source_hashes_unchanged":true})).unwrap()).unwrap();
+    }
+
     fn saved_cohort(include_deleted: bool) {
         let source = ProjectState::open_without_session(PathBuf::from(
             std::env::var("FLUXVAULT_CARVING_SOURCE_PROJECT").unwrap(),
@@ -1602,6 +1707,115 @@ mod tests {
         );
         drop(archive);
         fs::remove_dir_all(destination).unwrap();
+        // A modeled later report cannot discard validated naming evidence just
+        // because its directory has a higher numeric generation suffix.
+        let later = project.extracted_dir().join("001/attempt_001_native_v5");
+        let mut report: RecoveryReport = serde_json::from_slice(
+            &fs::read(
+                recovered
+                    .output_directory
+                    .join(extraction::FAT12_REPORT_NAME),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(&later).unwrap();
+        for (path, _, _) in report.payloads() {
+            let target = later.join(&path);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::copy(recovered.output_directory.join(path), target).unwrap();
+        }
+        let original_names = report
+            .analysis
+            .as_ref()
+            .unwrap()
+            .validated_long_names
+            .clone();
+        report
+            .analysis
+            .as_mut()
+            .unwrap()
+            .validated_long_names
+            .clear();
+        let source = project.images_dir().join("001_attempt_001.img");
+        let bytes = serde_json::to_vec_pretty(&report).unwrap();
+        fs::write(later.join(extraction::FAT12_REPORT_NAME), &bytes).unwrap();
+        extraction::write_native_managed_metadata(&later, &source, &sha, hash(&bytes)).unwrap();
+        let selected = extraction::select_managed(later.parent().unwrap(), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            selected.directory.canonicalize().unwrap(),
+            recovered.output_directory.canonicalize().unwrap()
+        );
+        report.analysis.as_mut().unwrap().validated_long_names = original_names;
+        let bytes = serde_json::to_vec_pretty(&report).unwrap();
+        fs::write(later.join(extraction::FAT12_REPORT_NAME), &bytes).unwrap();
+        extraction::write_native_managed_metadata(&later, &source, &sha, hash(&bytes)).unwrap();
+        assert_eq!(
+            extraction::select_managed(later.parent().unwrap(), None)
+                .unwrap()
+                .unwrap()
+                .directory,
+            later
+        );
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn preference_uses_catalogued_best_acquisition_not_the_newest_recovery_folder() {
+        let (project, attempt, original) = fixture(&[]);
+        let first = recover(&project, &attempt).unwrap();
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&attempt.metadata_path).unwrap()).unwrap();
+        let image = "001_attempt_002.img";
+        let log = project.logs_dir().join("001_attempt_002.log");
+        fs::write(project.images_dir().join(image), &original).unwrap();
+        fs::write(&log,format!("BEGIN | disk=1 | attempt=2\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track=18 | bytes_per_sector=512 | total_sectors=2880 | total_bytes=1474560\nBAD_SECTOR | lba=34\nEND | status=PARTIAL | bytes=1474560 | sha256={}\n",attempt.sha256)).unwrap();
+        metadata["attempt_number"] = serde_json::json!(2);
+        metadata["timestamp_unix_ms"] = serde_json::json!(2);
+        metadata["status"] = serde_json::json!("PARTIAL");
+        metadata["image_file"] = serde_json::json!(image);
+        metadata["log_file"] = serde_json::json!(log);
+        metadata["bad_sector_count"] = serde_json::json!(1);
+        metadata["bad_sectors"] = serde_json::json!([{"lba":34,"cylinder":0,"head":1,"sector":17}]);
+        fs::write(
+            project.images_dir().join("001_attempt_002.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        let second = imaging::load_attempts_for_disk(&project.images_dir(), 1)
+            .unwrap()
+            .into_iter()
+            .find(|a| a.attempt_number == 2)
+            .unwrap();
+        recover(&project, &second).unwrap();
+        assert_eq!(
+            extraction::select_managed(&project.extracted_dir().join("001"), None)
+                .unwrap()
+                .unwrap()
+                .directory
+                .canonicalize()
+                .unwrap(),
+            first.output_directory.canonicalize().unwrap()
+        );
+        let plan = conversion::build_conversion_plan(&planning(&project), &|_| {}).unwrap();
+        assert_eq!(plan.mirrored_files, 2);
+        // Equal source bytes do not authorize changing the recorded acquisition
+        // identity to a different catalogue entry.
+        let marker = first.output_directory.join(".fluxvault-extraction.json");
+        let inventory = first.output_directory.join(".fluxvault-inventory.json");
+        for path in [marker, inventory] {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            value["source_image"] = serde_json::json!(image);
+            fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+        }
+        assert!(
+            extraction::select_managed(&project.extracted_dir().join("001"), Some(1))
+                .unwrap_err()
+                .contains("selected acquisition")
+        );
         fs::remove_dir_all(project.root()).unwrap();
     }
 

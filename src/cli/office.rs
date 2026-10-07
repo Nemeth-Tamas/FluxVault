@@ -34,17 +34,22 @@ pub(super) fn run(
                     "mirrored_files": result.mirrored_files,
                     "reused_files": result.reused_files,
                     "conversion_candidates": result.conversion_candidates,
+                    "retired_mirrors": result.retired_mirrors,
+                    "preserved_obsolete_mirrors": result.preserved_obsolete_mirrors,
+                    "cleanup_reports": result.cleanup_reports,
                     "path_map": result.path_map,
                     "conversion_plan": result.conversion_plan
                 })
                 .to_string()
             } else {
                 format!(
-                    "Conversion plan: {} disks, {} source files mirrored ({} reused), {} Office candidates.\nPath map: {}\nPlan: {}",
+                    "Conversion plan: {} disks, {} source files mirrored ({} reused), {} Office candidates.\nDelivery maintenance: {} originals moved to recoverable quarantine; {} obsolete copies preserved.\nPath map: {}\nPlan: {}",
                     result.disk_count,
                     result.mirrored_files,
                     result.reused_files,
                     result.conversion_candidates,
+                    result.retired_mirrors,
+                    result.preserved_obsolete_mirrors,
                     result.path_map.display(),
                     result.conversion_plan.display()
                 )

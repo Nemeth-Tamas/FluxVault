@@ -9,6 +9,8 @@
 
 **Reference comparison:** `fv benchmark compare --baseline 'C:\path\archive.zip'` checks source-file hashes offline. On that command, `--include-deleted` expands comparison only. Separate optional deleted recovery uses `fv recovery extract 59 --include-deleted`; it stays forensic-only and never changes normal delivery. See [comparison scope](BASELINE_COMPARISON.md) and [deleted/partial recovery](DELETED_AND_FRAGMENT_RECOVERY.md).
 
+**Better results, automatically:** processing prefers verified recovery improvements without losing earlier generations. When an original gets a better delivery name, an unchanged copy created by FluxVault can move into recoverable `Recovery/DeliveryQuarantine`; edited/untracked copies remain safe. `fv conversion plan` shows maintenance totals, and reports explain every move. No additional scan command or choice is required. [Details](RECOVERY_SELECTION.md).
+
 **Everyday short command:** the installer now provides `fv` as well as `fluxvault`. `fv scan` runs the Greaseweazle loop using saved project settings; enter just the displayed number (`004`), or `QUIT`. See [Policies without homework](POLICIES.md) for optional expert controls. Explicit `scan --drive A:` remains the guarded USB workflow.
 
 **Even less typing (opt-in):** `fv scan --no-verify` lets you press **Enter after each swap** instead of typing the number. Check the label yourself: the warning means label typing is skipped, not that hashes or read-only protections are disabled. `QUIT` still stops; add the flag each time you want this mode.

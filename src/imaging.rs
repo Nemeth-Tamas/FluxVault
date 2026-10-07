@@ -1159,6 +1159,15 @@ pub fn compare_latest_attempts(attempts: &[AttemptSummary]) -> Option<AttemptCom
     })
 }
 
+pub(crate) fn best_attempt(attempts: &[AttemptSummary]) -> Option<&AttemptSummary> {
+    attempts.iter().min_by(|left, right| {
+        left.attention_required
+            .cmp(&right.attention_required)
+            .then_with(|| left.bad_sectors.len().cmp(&right.bad_sectors.len()))
+            .then_with(|| right.attempt_number.cmp(&left.attempt_number))
+    })
+}
+
 pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, String> {
     let mut statistics = ProjectStatistics::default();
 
@@ -1217,12 +1226,7 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
             continue;
         };
 
-        let Some(best) = attempts.iter().min_by(|left, right| {
-            left.attention_required
-                .cmp(&right.attention_required)
-                .then_with(|| left.bad_sectors.len().cmp(&right.bad_sectors.len()))
-                .then_with(|| right.attempt_number.cmp(&left.attempt_number))
-        }) else {
+        let Some(best) = best_attempt(&attempts) else {
             continue;
         };
 

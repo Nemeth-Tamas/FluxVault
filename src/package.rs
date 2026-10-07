@@ -217,7 +217,11 @@ fn collect_project_files(project: &Path) -> Result<Vec<PackageFile>, String> {
                         path.display()
                     ));
                 }
-                if should_exclude(&path) {
+                if should_exclude(&path)
+                    || is_delivery_quarantine(
+                        path.strip_prefix(project).map_err(|e| e.to_string())?,
+                    )
+                {
                     continue;
                 }
                 if *directory == "Reports" && kind.is_dir() {
@@ -294,9 +298,21 @@ fn is_customer_report(name: &str, latest_workbook: Option<&str>) -> bool {
         "recoveryexceptions.txt",
     ];
     EXACT.contains(&normalized.as_str())
+        || (normalized.starts_with("recoveryselection-") && normalized.ends_with(".json"))
+        || (normalized.starts_with("deliverycleanup-") && normalized.ends_with(".json"))
         || (normalized.starts_with("finalaudit")
             && (normalized.ends_with(".csv") || normalized.ends_with(".txt")))
         || latest_workbook.is_some_and(|latest| latest == name)
+}
+
+fn is_delivery_quarantine(relative: &Path) -> bool {
+    let mut parts = relative.iter();
+    parts
+        .next()
+        .is_some_and(|n| n.eq_ignore_ascii_case("Recovery"))
+        && parts
+            .next()
+            .is_some_and(|n| n.eq_ignore_ascii_case("DeliveryQuarantine"))
 }
 
 fn should_exclude(path: &Path) -> bool {
@@ -513,6 +529,7 @@ fn readme_text(project_name: &str, file_count: usize, total_bytes: u64) -> Strin
     );
     text.push_str("\r\nPacked flux: a managed .scp.zip contains one byte-identical original SCP, not regenerated flux. Its .scp.packed.json binds original/packed sizes and SHA-256. FluxVault decodes it transparently; a ZIP tool can restore the original SCP member.\r\n");
     text.push_str("\r\nForensic-only recovery: Recovery may contain raw .bin fragments of incomplete live files and explicitly requested deleted candidates. They are separate evidence, NOT complete/live customer documents. Read their source/offset/hash and missing-range reports; fragment counts do not increase recovered whole-file counts.\r\n");
+    text.push_str("\r\nRecoverySelection reports explain the preferred same-acquisition recovery generation; earlier forensic results remain included. DeliveryCleanup reports audit equivalent obsolete original copies moved into local Recovery/DeliveryQuarantine. Quarantined copies and private ownership journals are excluded from this package; edited/untracked originals and prior Office derivatives are preserved.\r\n");
     text
 }
 
@@ -642,6 +659,15 @@ mod tests {
             b"new",
         )
         .unwrap();
+        let quarantine = project.join("Recovery/DeliveryQuarantine/fixture/001");
+        fs::create_dir_all(&quarantine).unwrap();
+        fs::write(quarantine.join("old.doc"), b"obsolete copy").unwrap();
+        fs::write(
+            project.join("Reports/RecoverySelection-001-test.json"),
+            b"{}",
+        )
+        .unwrap();
+        fs::write(project.join("Reports/DeliveryCleanup-test.json"), b"{}").unwrap();
         let result = build_package(
             &PackageRequest {
                 project_root: project.clone(),
@@ -651,8 +677,8 @@ mod tests {
             &|_| {},
         )
         .unwrap();
-        assert_eq!(result.file_count, 6);
-        assert_eq!(result.total_bytes, 25);
+        assert_eq!(result.file_count, 8);
+        assert_eq!(result.total_bytes, 29);
         assert!(result.sha256_path.is_file());
         let mut zip = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
         assert_eq!(
@@ -662,6 +688,15 @@ mod tests {
         assert!(zip.by_name("Images/001.img").is_ok());
         assert!(zip.by_name("Extracted/001/customer.doc").is_ok());
         assert!(zip.by_name("Reports/EvidenceAudit.csv").is_ok());
+        assert!(
+            zip.by_name("Reports/RecoverySelection-001-test.json")
+                .is_ok()
+        );
+        assert!(zip.by_name("Reports/DeliveryCleanup-test.json").is_ok());
+        assert!(
+            zip.by_name("Recovery/DeliveryQuarantine/fixture/001/old.doc")
+                .is_err()
+        );
         assert!(zip.by_name("Reports/OfflineRecoveryDecisions.json").is_ok());
         assert!(
             zip.by_name("Reports/FluxVault_Jelentes_20260102.xlsx")
@@ -724,6 +759,15 @@ mod tests {
     #[test]
     fn customer_reports_include_native_recovery_exceptions_not_internal_markers() {
         assert!(is_customer_report("RecoveryExceptions.txt", None));
+        assert!(is_customer_report("RecoverySelection-001-abc.json", None));
+        assert!(is_customer_report("DeliveryCleanup-abc.json", None));
+        assert!(!is_customer_report("DeliveryMirrorHistory", None));
+        assert!(is_delivery_quarantine(Path::new(
+            "Recovery/DeliveryQuarantine/abc/001/old.doc"
+        )));
+        assert!(!is_delivery_quarantine(Path::new(
+            "Extracted/001/DeliveryQuarantine/customer.doc"
+        )));
         assert!(!is_customer_report("private-recovery-note.txt", None));
         for name in [
             "BaselineComparison-123.json",

@@ -84,9 +84,11 @@ pub(crate) fn build_manifest(
         let manual_files = collect_files(&disk_directory, true)?;
         let is_manual = !manual_files.is_empty();
         let (content_root, files) = if !is_manual {
-            let Some(managed_directory) = latest_managed_directory(&disk_directory)? else {
+            let Some(selection) = extraction::select_managed(&disk_directory, None)? else {
                 continue;
             };
+            extraction::record_selection(&request.reports_directory, disk_number, &selection)?;
+            let managed_directory = selection.directory;
             let files = collect_files(&managed_directory, false)?;
             (managed_directory, files)
         } else {
@@ -186,22 +188,6 @@ pub(crate) fn build_manifest(
         file_count,
         total_bytes,
     })
-}
-
-fn latest_managed_directory(disk_directory: &Path) -> Result<Option<PathBuf>, String> {
-    let mut candidates = fs::read_dir(disk_directory)
-        .map_err(|error| {
-            format!(
-                "Nem sikerült megvizsgálni az extraction mappát {}: {error}",
-                disk_directory.display()
-            )
-        })?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && path.join(EXTRACTION_MARKER).is_file())
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|path| extraction::managed_directory_order(path));
-    Ok(candidates.pop())
 }
 
 fn managed_source_sha256(directory: &Path) -> Result<String, String> {
@@ -341,7 +327,8 @@ mod tests {
         fs::create_dir_all(&images).unwrap();
         let content = b"test";
         fs::write(managed.join("file.doc"), content).unwrap();
-        let source_hash = "a".repeat(64);
+        fs::write(images.join("001.img"), b"source fixture").unwrap();
+        let source_hash = format!("{:x}", Sha256::digest(b"source fixture"));
         let file_hash = format!("{:x}", Sha256::digest(content));
         fs::write(
             managed.join(".fluxvault-extraction.json"),

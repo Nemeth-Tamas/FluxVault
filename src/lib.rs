@@ -8,6 +8,7 @@ pub mod composite;
 pub mod conversion;
 mod conversion_lock;
 pub mod conversion_run;
+mod delivery_maintenance;
 pub mod dmde_logs;
 pub mod external_tools;
 pub mod extraction;

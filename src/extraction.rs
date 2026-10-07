@@ -16,6 +16,9 @@ const EXTRACTION_SCHEMA_VERSION: u32 = 1;
 const MARKER_FILE_NAME: &str = ".fluxvault-extraction.json";
 const INVENTORY_FILE_NAME: &str = ".fluxvault-inventory.json";
 pub(crate) const FAT12_REPORT_NAME: &str = ".fluxvault-fat12.json";
+#[path = "recovery_selection.rs"]
+mod selection;
+pub(crate) use selection::{record_selection, select_managed};
 
 /// Numbered managed attempts outrank legacy output; native is the same attempt's fallback.
 pub(crate) fn managed_directory_order(path: &Path) -> (u32, u32, String) {
@@ -147,28 +150,10 @@ pub fn inspect_extraction_presence(
     } else {
         disk_directory.join(format!("attempt_{attempt_number:03}"))
     };
-
-    let native_directory = disk_directory.join(if attempt_number == 0 {
-        "legacy_native".to_owned()
-    } else {
-        format!("attempt_{attempt_number:03}_native")
-    });
-    let current_native_directory = disk_directory.join(if attempt_number == 0 {
-        format!("legacy_native_v{}", crate::fat12::RECOVERY_ENGINE_VERSION)
-    } else {
-        format!(
-            "attempt_{attempt_number:03}_native_v{}",
-            crate::fat12::RECOVERY_ENGINE_VERSION
-        )
-    });
-    if current_native_directory.is_dir() {
-        return inspect_candidate_directory(&current_native_directory);
-    }
-    if native_directory.is_dir() {
-        return inspect_candidate_directory(&native_directory);
-    }
-
-    if expected_directory.is_dir() {
+    if expected_directory.is_dir() && !expected_directory.join(MARKER_FILE_NAME).is_file() {
+        if let Some(selected) = select_managed(&disk_directory, Some(attempt_number))? {
+            return inspect_candidate_directory(&selected.directory);
+        }
         return inspect_candidate_directory(&expected_directory);
     }
 
@@ -182,6 +167,13 @@ pub fn inspect_extraction_presence(
                 total_bytes,
             });
         }
+    }
+
+    if let Some(selected) = select_managed(&disk_directory, Some(attempt_number))? {
+        return inspect_candidate_directory(&selected.directory);
+    }
+    if expected_directory.is_dir() {
+        return inspect_candidate_directory(&expected_directory);
     }
 
     Ok(ExtractionPresence::Missing { expected_directory })
@@ -999,6 +991,8 @@ mod tests {
         let root = test_root("automatic");
         let output_directory = root.join("001").join("attempt_001");
         fs::create_dir_all(&output_directory).unwrap();
+        fs::write(output_directory.join("one.txt"), vec![1u8; 21]).unwrap();
+        fs::write(output_directory.join("two.txt"), vec![2u8; 21]).unwrap();
         let marker = ExtractionMarker {
             schema_version: EXTRACTION_SCHEMA_VERSION,
             source_image: "001_attempt_001.img".to_owned(),
@@ -1012,6 +1006,18 @@ mod tests {
             &output_directory.join(MARKER_FILE_NAME),
             &marker,
             "test marker",
+        )
+        .unwrap();
+
+        write_json(
+            &output_directory.join(INVENTORY_FILE_NAME),
+            &ExtractionInventory {
+                schema_version: 1,
+                source_image: marker.source_image.clone(),
+                source_sha256: marker.source_sha256.clone(),
+                files: inventory_files(&output_directory).unwrap(),
+            },
+            "test inventory",
         )
         .unwrap();
 

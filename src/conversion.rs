@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
     path::{Component, Path, PathBuf},
@@ -34,6 +34,12 @@ pub struct ConversionPlanningResult {
     pub path_map: PathBuf,
     pub conversion_plan: PathBuf,
     pub jobs: Vec<ConversionJob>,
+    #[serde(default)]
+    pub retired_mirrors: usize,
+    #[serde(default)]
+    pub preserved_obsolete_mirrors: usize,
+    #[serde(default)]
+    pub cleanup_reports: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +167,12 @@ pub(crate) fn build_conversion_plan_reserved(
     disk_directories.sort_by_key(|(number, _)| *number);
 
     let mut claimed = BTreeMap::<String, String>::new();
+    let maintenance = crate::delivery_maintenance::Maintenance::open(
+        &request.converted_root,
+        &request.reports_directory,
+    )?;
+    let mut mirrors = Vec::new();
+    let mut protected = BTreeSet::new();
     let mut path_rows = Vec::new();
     let mut plan_rows = Vec::new();
     let mut jobs = Vec::new();
@@ -172,7 +184,9 @@ pub(crate) fn build_conversion_plan_reserved(
         send_stage(&format!(
             "Lemez {disk_number:03} delivery útvonalainak tervezése..."
         ));
-        let Some((content_root, files)) = selected_recovered_files(&disk_directory)? else {
+        let Some((content_root, files)) =
+            selected_recovered_files(&disk_directory, &request.reports_directory, disk_number)?
+        else {
             continue;
         };
         included_disks += 1;
@@ -192,6 +206,18 @@ pub(crate) fn build_conversion_plan_reserved(
             let original_delivery_relative = delivery_relative.clone();
 
             let source_sha256 = sha256_file(&source)?;
+            let clean_path = PathBuf::from(&floppy)
+                .join(&delivery_relative)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if let Some(previous) =
+                maintenance.previous_path(&clean_path, &forensic_text, &source_sha256)
+            {
+                let previous = PathBuf::from(previous);
+                if let Ok(relative) = previous.strip_prefix(&floppy) {
+                    delivery_relative = relative.to_path_buf();
+                }
+            }
             let forensic_key = forensic_text.to_ascii_lowercase();
             let mut ordinal = 2usize;
             loop {
@@ -212,27 +238,39 @@ pub(crate) fn build_conversion_plan_reserved(
             }
 
             let delivery_with_floppy = PathBuf::from(&floppy).join(&delivery_relative);
-            let target = request.converted_root.join(&delivery_with_floppy);
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|error| {
-                    format!(
-                        "Nem hozható létre a delivery mappa {}: {error}",
-                        parent.display()
-                    )
-                })?;
-            }
-            if same_file_hash(&target, &source_sha256).unwrap_or(false) {
+            let relative = delivery_with_floppy.to_string_lossy().replace('\\', "/");
+            let target =
+                crate::delivery_maintenance::safe_target(&request.converted_root, &relative)?;
+            let reused = same_file_hash(&target, &source_sha256).unwrap_or(false);
+            if reused {
                 reused_files += 1;
             } else {
-                fs::copy(&source, &target).map_err(|error| {
-                    format!(
-                        "Nem sikerült tükrözni az eredetit {} -> {}: {error}",
-                        source.display(),
-                        target.display()
-                    )
-                })?;
+                let mut input = fs::File::open(&source).map_err(|e| e.to_string())?;
+                let mut output = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .map_err(|e| {
+                        format!("New mirror reservation failed; existing files preserved: {e}")
+                    })?;
+                std::io::copy(&mut input, &mut output)
+                    .and_then(|_| output.sync_all())
+                    .map_err(|e| e.to_string())?;
+                if sha256_file(&target)? != source_sha256 {
+                    return Err(
+                        "Source changed during mirror creation; result preserved, not claimed"
+                            .into(),
+                    );
+                }
                 mirrored_files += 1;
             }
+            mirrors.push(maintenance.mirror(
+                relative,
+                clean_path,
+                forensic_text.clone(),
+                source_sha256.clone(),
+                !reused,
+            ));
 
             path_rows.push(PathMapRow {
                 floppy: floppy.clone(),
@@ -258,6 +296,17 @@ pub(crate) fn build_conversion_plan_reserved(
             let output_directory = target.parent().unwrap_or(&request.converted_root);
             let modern_path = output_directory.join(format!("{base}.{}", plan.modern_extension));
             let pdf_path = output_directory.join(format!("{base}.pdf"));
+            for path in [&modern_path, &pdf_path] {
+                let relative = path
+                    .strip_prefix(
+                        request
+                            .converted_root
+                            .canonicalize()
+                            .map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                protected.insert(relative.to_string_lossy().replace('\\', "/").to_uppercase());
+            }
             plan_rows.push(ConversionPlanRow {
                 floppy: floppy.clone(),
                 source_path: source.display().to_string(),
@@ -299,6 +348,13 @@ pub(crate) fn build_conversion_plan_reserved(
     let conversion_plan = request.reports_directory.join("ConversionPlan.csv");
     write_path_map(&path_map, &path_rows)?;
     write_conversion_plan(&conversion_plan, &plan_rows)?;
+    let cleanup = maintenance.finish(mirrors, protected)?;
+    if cleanup.retired > 0 || cleanup.preserved > 0 {
+        send_stage(&format!(
+            "Delivery maintenance: {} unchanged owned originals quarantined; {} modified/needed/conflicting copies preserved",
+            cleanup.retired, cleanup.preserved
+        ));
+    }
 
     Ok(ConversionPlanningResult {
         disk_count: included_disks,
@@ -308,26 +364,26 @@ pub(crate) fn build_conversion_plan_reserved(
         path_map,
         conversion_plan,
         jobs,
+        retired_mirrors: cleanup.retired,
+        preserved_obsolete_mirrors: cleanup.preserved,
+        cleanup_reports: cleanup.reports,
     })
 }
 
 fn selected_recovered_files(
     disk_directory: &Path,
+    reports: &Path,
+    disk: u32,
 ) -> Result<Option<(PathBuf, Vec<PathBuf>)>, String> {
     let manual = collect_files(disk_directory, true)?;
     if !manual.is_empty() {
         return Ok(Some((disk_directory.to_path_buf(), manual)));
     }
-    let mut managed = fs::read_dir(disk_directory)
-        .map_err(|error| format!("Nem olvasható {}: {error}", disk_directory.display()))?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && path.join(EXTRACTION_MARKER).is_file())
-        .collect::<Vec<_>>();
-    managed.sort_by_key(|path| crate::extraction::managed_directory_order(path));
-    let Some(directory) = managed.pop() else {
+    let Some(selection) = crate::extraction::select_managed(disk_directory, None)? else {
         return Ok(None);
     };
+    crate::extraction::record_selection(reports, disk, &selection)?;
+    let directory = selection.directory;
     let files = collect_files(&directory, false)?;
     Ok((!files.is_empty()).then_some((directory, files)))
 }
