@@ -1,4 +1,4 @@
-# FluxVault progress — 2026-10-07 automatic improved-image handoff
+# FluxVault progress — 2026-10-07 dual-station coordinator groundwork
 
 The routine path remains `fv init` -> `fv scan` -> swap/confirm until finished. Automatic format selection, packed captures and continuous saved-file processing work. The live 021–032 cohort completed with eight OK/four partial images, 37 successful conversions, no downstream errors and cursor 033. Native generation 4 automatically salvages validated orphan/signature/embedded candidates, with separate raw partial fragments and optional forensic-only deleted recovery. Safe offline composite/mirrored-FAT improvements now enter extraction and delivery automatically as replay-verified DERIVED attempts. Earlier evidence, operator-created recovery folders and existing scan settings remain preserved.
 
@@ -8,10 +8,17 @@ The routine path remains `fv init` -> `fv scan` -> swap/confirm until finished. 
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
 | Single-Greaseweazle 136-disk benchmark readiness | approximately 98% | Completed live mixed/damaged cohorts plus deterministic 136-job/scan soaks; the actual full 136-disk run and live ten-minute stage-exhaustion acceptance remain unproven. |
-| Whole TODO list | 322 / 457 = 70.5% checked | Literal checkbox count, including nested checkpoints and umbrella tasks; not a weighted engineering score. Reaching the day's 80% target needs 44 more checked items at this denominator. One bounded automatic improved-image handoff checkpoint is added; broader donor/format and production umbrellas remain open. |
+| Whole TODO list | 323 / 458 = 70.5% checked | Literal checkbox count, including nested checkpoints and umbrella tasks; not a weighted engineering score. Reaching the day's 80% target needs 44 more checked items at this denominator. A bounded dual-coordinator core checkpoint is added; live adapters and production acceptance remain open. |
 | Fully autonomous recovery/product ambition | approximately 72% | Routine scheduling, bounded salvage/fragments/deleted candidates, evidence-based generation preference and recoverable original-copy maintenance work. Deeper directories/erased fragmented allocation, additional formats, document-aware repair and two-station production control remain substantial. |
 
 These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
+
+## Dual-station coordinator groundwork (2026-10-07)
+
+- At the operator's request, the dual design is speed-first: both USB/GW read fresh disks, GW automatically recovers its own errors, and USB partials are set aside for later numbered GW selection while USB keeps feeding. Ordinary `scan` stays GW-only; dual mode is opt-in and excludes `--no-verify`.
+- Backend-independent core implements bounded atomic custody/receipt journals, independent station reservations, exact confirmation, removal-before-transfer, earlier-label recovery routing, generation-tagged restart tickets, source/backend/map/hash checks and cross-station readable-byte consistency. Existing/externally acquired labels are not reassigned; malformed/externally edited controls are preserved and refused. Two simulated workers show USB completing another disk while GW remains busy; a reopenable 136-label model completes 14 queued transfers without identity loss.
+- `scan --usb` now aliases the existing guarded USB loop (A: default), with number-only confirmations and legacy READ compatibility. `scan --double --plan` previews offline, and `production status` checks coordinator state. **No live dual adapter or console launcher ships in this slice.** Physical-device reservations, staged cross-station publication, shared background-owner wiring, station terminal views and live acceptance are the next boundary. See [DUAL_SCAN.md](DUAL_SCAN.md).
+- Validation: **347 routine tests pass**, 16 environment-dependent tests outside the routine suite; formatting/all-target checks and release build pass. Tiny synthetic acquisitions and mock concurrency are not physical throughput/yield validation. No source media accessed or scan defaults changed.
 
 ## Automatic improved-image handoff checkpoint (2026-10-07)
 

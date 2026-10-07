@@ -1826,7 +1826,7 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
     assert_eq!(quit_json["scanned"], 0);
     assert_eq!(quit_json["next_disk"], 1);
     assert_eq!(quit_json["source_media_access"], "read_only");
-    assert!(String::from_utf8_lossy(&quit.stderr).contains("Type READ"));
+    assert!(String::from_utf8_lossy(&quit.stderr).contains("Type 001"));
     let finalize = invoke(
         &nested,
         &[

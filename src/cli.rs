@@ -68,8 +68,13 @@ Usage:
                                     Read-only image; requires independently verified hardware
   fluxvault scan [--last-disk N] [--no-verify] [--conversion-workers N]
                                     Guided Greaseweazle scan; reuses saved project settings
+  fluxvault scan --usb [--drive A:] --write-blocker-verified
+                                    USB-only shortcut; numbered labels or legacy READ
+  fluxvault scan --double --plan [--last-disk N]
+                                    Offline dual-station preview ONLY; live adapter not ready
+  fluxvault production status       Inspect saved coordinator state offline
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
-                                    Guided read-only multi-disk loop; type READ for each disk
+                                    Guided read-only USB loop; confirm each numbered label
   fluxvault tools check [--project PATH]
                                     Check external tool versions and record audit
   fluxvault tools show              Show configured tool paths
@@ -140,6 +145,8 @@ Usage:
                                     Create and verify an archival ZIP
   fluxvault --help                  Show this help
 Options:
+  --usb                             scan: existing USB-only loop, default Windows A:
+  --double --plan                   scan: offline dual preview ONLY; live adapter not ready
   --json                            Output machine-readable JSON
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
@@ -236,6 +243,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut profile_map_path: Option<PathBuf> = None;
     let mut acquisition_only = false;
     let mut no_verify = false;
+    let mut usb_only = false;
+    let mut double = false;
+    let mut dual_plan = false;
     let mut color_mode = None;
     let mut positional = Vec::new();
     let mut index = 0;
@@ -251,6 +261,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             }
             "--details" => details = true,
             "--no-verify" => no_verify = true,
+            "--usb" => usb_only = true,
+            "--double" => double = true,
+            "--plan" => dual_plan = true,
             "--retire-raw" => retire_raw = true,
             "--processing-mode" => {
                 index += 1;
@@ -430,6 +443,72 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if details && !(positional.len() == 3 && positional[0] == "disk" && positional[1] == "show") {
         return Err("--details is only valid with disk show N".to_owned());
     }
+    if (usb_only || double || dual_plan) && positional != ["scan"] {
+        return Err("--usb, --double and --plan are only valid with plain scan".into());
+    }
+    if usb_only && double {
+        return Err("Choose --usb or --double, not both".into());
+    }
+    if dual_plan && !double {
+        return Err("--plan currently requires scan --double".into());
+    }
+    if double {
+        if no_verify {
+            return Err("Dual mode requires exact label verification; --no-verify cannot select earlier queued USB disks".into());
+        }
+        if !dual_plan {
+            return Err("The dual-station coordinator is implemented but its live reader/terminal adapter is not ready. Use scan --double --plan for an offline preview; ordinary scan remains GW-only".into());
+        }
+        if destination.is_some()
+            || acquisition_disk.is_some()
+            || acquisition_retries.is_some()
+            || scan_count.is_some()
+            || write_blocker_verified
+            || import_source.is_some()
+            || import_log.is_some()
+            || baseline_zip.is_some()
+            || include_deleted
+            || conversion_workers.is_some()
+            || gw_profile.is_some()
+            || automatic_format.is_some()
+            || packed_captures.is_some()
+            || background_processing.is_some()
+            || retire_raw
+            || gw_revolutions.is_some()
+            || gw_capture_attempt.is_some()
+            || source_write_protected
+            || recovery_policy.is_some()
+            || profile_map_path.is_some()
+            || acquisition_only
+            || color_mode.is_some()
+        {
+            return Err("Dual preview accepts only --project, --last-disk, --drive, --gw-drive and --json; no read is started".into());
+        }
+        let root = resolve_project_root(cwd, project_override.as_deref())?;
+        let project = ProjectState::open_without_session(root)?;
+        let mut value = crate::production::preview(&project, last_disk)?;
+        value["usb_drive"] = json!(drive_override.as_deref().unwrap_or("A:"));
+        value["gw_drive"] = json!(gw_drive.unwrap_or('B').to_string());
+        return Ok(CliResponse {
+            output: if json_output {
+                value.to_string()
+            } else {
+                format!(
+                    "DUAL-STATION PREVIEW ONLY - no drives opened, no settings saved.\nUSB {}: fresh first-pass images; partials set aside for GW.\nGW {}: fresh automatic scan/recovery, or type an earlier queued USB label.\nNext available fresh label: {}.\nExact labels required; --no-verify is unavailable in dual mode.\nCoordinator state/ownership and synthetic concurrent-worker tests exist; live reader and station-terminal wiring is the next slice.",
+                    value["usb_drive"].as_str().unwrap(),
+                    value["gw_drive"].as_str().unwrap(),
+                    value["next_fresh_disk"]
+                        .as_u64()
+                        .map(|n| format!("{n:03}"))
+                        .unwrap_or("range finished".into())
+                )
+            },
+            exit_code: 0,
+        });
+    }
+    if usb_only && drive_override.is_none() {
+        drive_override = Some("A:".into());
+    }
     // Keep explicitly selected USB scans intact; the ordinary folder command uses GW.
     if positional == ["scan"]
         && drive_override.is_none()
@@ -564,6 +643,19 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         None
     };
     let output = match positional.first().map(String::as_str) {
+        Some("production") if positional == ["production", "status"] && destination.is_none() => {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let state = crate::production::status(&project)?;
+            if json_output {
+                Ok(state.to_string())
+            } else {
+                Ok(format!(
+                    "Dual coordinator state (offline; live adapter not ready):\n{}",
+                    serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?
+                ))
+            }
+        }
         Some("processing")
             if destination.is_none() && positional.len() == 2 && positional[1] == "status" =>
         {

@@ -31,6 +31,7 @@ mod offline_images;
 pub mod package;
 pub mod pipeline;
 pub mod processing;
+pub mod production;
 pub mod project;
 mod project_work;
 pub mod recovery_backup;

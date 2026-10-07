@@ -176,6 +176,8 @@ The destination must exist **outside the project**. `finalize` processes saved f
 
 ## Advanced: optional controls
 
+For USB-only scanning, `fv scan --usb --write-blocker-verified` uses A: by default and asks for each disk number; existing protection checks still apply. Two-drive development currently has an **offline preview only**: `fv scan --double --plan --last-disk 136`. Live `--double` is not enabled yet. See [two-drive groundwork](DUAL_SCAN.md); ordinary `fv scan` remains GW-only.
+
 Ignore this section for a normal new scan. Replace example paths/numbers with your own as needed.
 
 ### Scan a numbered range

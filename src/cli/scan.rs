@@ -70,7 +70,7 @@ fn run_with_io<
         let next = disk.checked_add(1).ok_or("Disk number overflow")?;
         writeln!(
             output,
-            "Insert floppy {disk:03} in {drive} with its write-protect tab set. Type READ to image it, or QUIT to stop:"
+            "Insert floppy {disk:03} in USB {drive} with its write-protect tab set. Type {disk:03} to confirm its label (legacy READ also accepted), or QUIT to stop:"
         )
         .map_err(|error| format!("Cannot display scan prompt: {error}"))?;
         output
@@ -87,9 +87,13 @@ fn run_with_io<
         match answer.trim().to_ascii_uppercase().as_str() {
             "QUIT" | "Q" => break,
             "READ" => {}
+            number if number.parse::<u32>().ok() == Some(disk) => {}
             _ => {
-                writeln!(output, "No read started. Type READ or QUIT.")
-                    .map_err(|error| format!("Cannot display scan prompt: {error}"))?;
+                writeln!(
+                    output,
+                    "No read started. Type {disk:03} or QUIT (legacy READ also accepted)."
+                )
+                .map_err(|error| format!("Cannot display scan prompt: {error}"))?;
                 continue;
             }
         }
@@ -190,6 +194,45 @@ mod tests {
             String::from_utf8(output)
                 .unwrap()
                 .contains("No read started")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn usb_scan_accepts_exact_number_without_read_prefix_and_refuses_wrong_or_blank_labels() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-usb-numbered-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut project = ProjectState::create_without_session(root.clone()).unwrap();
+        let mut attempted = Vec::new();
+        let response = run_with_io(
+            &mut project,
+            ScanConfig {
+                json_output: true,
+                drive: Some("A:"),
+                count: Some(2),
+                write_blocker_verified: true,
+            },
+            Cursor::new(b"\n002\n1\n001\n002\n"),
+            &mut Vec::new(),
+            |_, disk| {
+                attempted.push(disk);
+                Ok(CliResponse {
+                    output: "synthetic".into(),
+                    exit_code: 0,
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(attempted, vec![1, 2]);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response.output).unwrap()["next_disk"],
+            3
         );
         fs::remove_dir_all(root).unwrap();
     }
