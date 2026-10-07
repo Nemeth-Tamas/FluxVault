@@ -1,4 +1,4 @@
-# FluxVault progress — 2026-10-07 live reseat and recovery deadline handling
+# FluxVault progress — 2026-10-07 independent recovery-stage budgets
 
 The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats, losslessly pack verified raw captures, and continuously extract/recover/convert/audit saved images in the background. Unrecognized formats become explicit raw-only attention records rather than stopping numbered feeding. Existing projects retain their saved settings. Live 009/058, the 053–064 background cohort and 022's No Index reseat prompts passed. A recovery-budget stop on 023 is now verified offline on a separate evidence copy; live 023–032 continuation remains the next acceptance check.
 
@@ -8,12 +8,20 @@ The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finish
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
 | Single-Greaseweazle 136-disk benchmark readiness | approximately 95% | Real saved-evidence processing and deterministic 136-job/scan soaks pass; numbered/Enter swaps, limits, resume, telemetry, raw-only exceptions and packed storage exist. Live overlap and full-cohort acceptance remain the final readiness gate. |
-| Whole TODO list | 309 / 454 = 68.1% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
+| Whole TODO list | 310 / 455 = 68.1% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
 | Fully autonomous recovery/product ambition | approximately 65% | Routine acquisition and durable downstream scheduling work. Severe filesystem damage/carving, additional format decoders and two-station custody/resource control remain substantial work. |
 
 These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
 
-## Recovery deadline checkpoint (2026-10-07)
+## Independent stage-budget checkpoint (2026-10-07)
+
+- At the operator's request, the default capture ceiling is now **600 seconds per stage**, not per disk. Fast/Normal/Recovery cannot consume Detective's allowance. The recovery runner passes the full remaining stage allowance to the host, removing its previous hidden 300-second cap. Four physical stages can consume roughly 40 minutes plus offline work; clean/no-improvement stops still apply.
+- Stage clocks persist spent capture time and an in-flight timestamp. Reseat failures share the clock, paused time between finished attempts is not charged, and an interrupted in-flight operation is conservatively charged on restart. Exhausted later stages preserve incomplete captures and can advance to the next configured stage using independently verified earlier evidence; only completed decoded captures enter result evidence/packing.
+- Missing policy scope fields now mean `per_stage`; an explicit expert `whole_job` option preserves the old behavior. Unfinished old jobs migrate once, retaining original timestamps, completed passes and failed captures. Completed jobs still verify/reuse without automatic reopening. Skipped stages reserve distinct attempt numbers so escalation/resume cannot duplicate capture IDs or overwrite evidence.
+- On a disposable copy of the actual pending 023 job, three completed stages verified and only Detective was requested: 600-second allowance, eight revolutions, five retries, new attempt 005. A synthetic guard intercepted the read before execution; board information came from the mock only. Original customer project/journal/captures were unchanged. Live acceptance is the operator's same-project 023 resume.
+- Verification: 267 regular tests pass, 12 environment-dependent tests remain outside the routine suite; the saved-023 intercepted-read regression was explicitly run and passed. Formatting/all-target checks pass; release rebuilt. Operator guidance and the short policy example reflect per-stage limits.
+
+## Previous whole-job deadline checkpoint (superseded default, 2026-10-07)
 
 - Live 022 passed its two guided No Index reseat retries, then saved a verified partial after captures 004–007: 2,878 readable sectors, two missing, no conflicts; cursor advanced to 023. Failed attempts remain intact. This validates the actual operator prompt, not just mocks.
 - Live 023 completed Fast/Normal/Recovery passes (74 -> 41 -> 21 missing), then its remaining 81-second Detective allowance expired at the 600-second whole-job ceiling. The runner correctly killed the process tree and kept failed metadata/unfinished flux; the recovery layer incorrectly treated that normal budget stop as a fatal scan error.

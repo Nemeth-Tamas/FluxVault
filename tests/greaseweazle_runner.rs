@@ -10,7 +10,7 @@ use std::{
 use fluxvault::{
     external_tools::{CommandAudit, run_audited_probe},
     flux_capture::{self, CaptureRequest},
-    flux_recovery::{self, RecoveryPolicy},
+    flux_recovery::{self, RecoveryPolicy, TimeLimitScope},
     greaseweazle::{
         GreaseweazleBackend, GreaseweazleCommand, GreaseweazleDeviceStatus, GreaseweazleExecution,
         GreaseweazleProfile, GreaseweazleProgressEvent, ProcessGreaseweazleBackend,
@@ -92,6 +92,240 @@ fn timeout_backend(project: &ProjectState, wait_for_deadline: bool) -> TimeoutRe
     }
 }
 
+fn whole_job_policy() -> RecoveryPolicy {
+    RecoveryPolicy {
+        time_limit_scope: TimeLimitScope::WholeJob,
+        ..RecoveryPolicy::default()
+    }
+}
+
+struct RecordingReadBackend {
+    inner: ProcessGreaseweazleBackend,
+    timeout: Duration,
+    read_timeouts: Vec<Duration>,
+    read_commands: Vec<GreaseweazleCommand>,
+    intercept_read: bool,
+}
+
+impl RecordingReadBackend {
+    fn new(project: &ProjectState, intercept_read: bool) -> Self {
+        Self {
+            inner: ProcessGreaseweazleBackend::new(
+                mock_gw_path(),
+                project.logs_dir().join("external-tools.jsonl"),
+            )
+            .unwrap()
+            .with_stream_to_stderr(false),
+            timeout: Duration::ZERO,
+            read_timeouts: vec![],
+            read_commands: vec![],
+            intercept_read,
+        }
+    }
+}
+
+impl GreaseweazleBackend for RecordingReadBackend {
+    fn mode(&self) -> fluxvault::greaseweazle::BackendMode {
+        self.inner.mode()
+    }
+    fn set_operation_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+        self.inner.set_operation_timeout(timeout);
+    }
+    fn execute(&mut self, command: &GreaseweazleCommand) -> Result<GreaseweazleExecution, String> {
+        if command.subcommand() == "read" {
+            self.read_timeouts.push(self.timeout);
+            self.read_commands.push(command.clone());
+            if self.intercept_read {
+                return Err("test stopped before physical read".into());
+            }
+        }
+        self.inner.execute(command)
+    }
+}
+
+#[test]
+fn old_job_age_does_not_reduce_the_next_stage_budget_or_overwrite_failed_evidence() {
+    let (project, root) = disposable_project("per-stage-legacy-resume");
+    let policy = RecoveryPolicy::default();
+    seed_partial_recovery(&project, &policy, 601_000);
+    let journal_path = root.join("Flux/Recovery/023_job.json");
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+    legacy["policy"]
+        .as_object_mut()
+        .unwrap()
+        .remove("time_limit_scope");
+    fs::write(&journal_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let partial = root.join("Flux/023_attempt_002.partial.scp");
+    fs::write(&partial, b"older interrupted flux").unwrap();
+    let mut backend = RecordingReadBackend::new(&project, false);
+    let result = flux_recovery::recover(
+        &project,
+        23,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        policy,
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "acquired");
+    assert_eq!(result.capture_attempts, vec![1, 3]);
+    assert_eq!(result.physical_reads_this_run, 1);
+    assert_eq!(backend.read_timeouts, vec![Duration::from_secs(600)]);
+    assert_eq!(fs::read(partial).unwrap(), b"older interrupted flux");
+    let journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(journal_path).unwrap()).unwrap();
+    assert_eq!(journal["started_unix_ms"], legacy["started_unix_ms"]);
+    assert_eq!(journal["stage_budget_version"], 1);
+    assert!(journal["stages"][1]["capture_started_unix_ms"].is_null());
+    assert!(journal["stages"][1]["capture_elapsed_ms"].as_u64().unwrap() > 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn per_stage_deadline_retains_partial_and_stops_at_the_pass_limit() {
+    let (project, root) = disposable_project("per-stage-deadline");
+    let policy = RecoveryPolicy {
+        max_seconds: 30,
+        passes: RecoveryPolicy::default().passes[..2].to_vec(),
+        ..RecoveryPolicy::default()
+    };
+    seed_partial_recovery(&project, &policy, 601_000);
+    let journal_path = root.join("Flux/Recovery/023_job.json");
+    let mut job: serde_json::Value =
+        serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+    job["stage_budget_version"] = serde_json::json!(1);
+    job["stages"][1]["capture_elapsed_ms"] = serde_json::json!(28_000);
+    fs::write(&journal_path, serde_json::to_vec(&job).unwrap()).unwrap();
+    let mut backend = timeout_backend(&project, true);
+    let result = flux_recovery::recover(
+        &project,
+        23,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        policy,
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.stop_reason, "stage_time_limit");
+    assert_eq!(result.status, "partial");
+    assert_eq!(result.capture_attempts, vec![1]);
+    assert_eq!(backend.reads, 1);
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(journal_path).unwrap()).unwrap();
+    assert!(saved["stages"][1]["capture_elapsed_ms"].as_u64().unwrap() >= 30_000);
+    assert!(saved["stages"][1]["capture_started_unix_ms"].is_null());
+    assert!(root.join("Flux/023_attempt_002.partial.json").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn per_stage_reseat_retry_keeps_spent_capture_time_and_old_failed_attempt() {
+    let (project, root) = disposable_project("per-stage-reseat-clock");
+    let policy = RecoveryPolicy::default();
+    seed_partial_recovery(&project, &policy, 601_000);
+    let mut failing = ProcessGreaseweazleBackend::new(
+        mock_gw_path(),
+        project.logs_dir().join("external-tools.jsonl"),
+    )
+    .unwrap()
+    .with_stream_to_stderr(false)
+    .with_env("MOCK_GW_NO_INDEX", "1");
+    let error = flux_recovery::recover(
+        &project,
+        23,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        policy.clone(),
+        &mut failing,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(error.starts_with("No Index capture stopped:"));
+    let journal_path = root.join("Flux/Recovery/023_job.json");
+    let mut job: serde_json::Value =
+        serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+    assert!(job["stages"][1]["capture_elapsed_ms"].as_u64().unwrap() > 0);
+    assert!(job["stages"][1]["capture_started_unix_ms"].is_null());
+    // Synthetic fixture simulates more time spent in this stage before reseating.
+    job["stages"][1]["capture_elapsed_ms"] = serde_json::json!(20_000);
+    fs::write(&journal_path, serde_json::to_vec(&job).unwrap()).unwrap();
+    let failed_path = root.join("Flux/023_attempt_002.partial.json");
+    let before = fs::read(&failed_path).unwrap();
+    let mut backend = RecordingReadBackend::new(&project, false);
+    let result = flux_recovery::recover(
+        &project,
+        23,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        policy,
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(backend.read_timeouts, vec![Duration::from_secs(580)]);
+    assert_eq!(result.capture_attempts, vec![1, 3]);
+    assert_eq!(fs::read(failed_path).unwrap(), before);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn exhausted_stage_escalates_without_resetting_its_clock_or_rereading_it() {
+    let (project, root) = disposable_project("per-stage-escalation");
+    let policy = RecoveryPolicy::default();
+    seed_partial_recovery(&project, &policy, 601_000);
+    let journal_path = root.join("Flux/Recovery/023_job.json");
+    let mut job: serde_json::Value =
+        serde_json::from_slice(&fs::read(&journal_path).unwrap()).unwrap();
+    job["stage_budget_version"] = serde_json::json!(1);
+    job["stages"][1]["capture_elapsed_ms"] = serde_json::json!(600_000);
+    fs::write(&journal_path, serde_json::to_vec(&job).unwrap()).unwrap();
+    let mut backend = RecordingReadBackend::new(&project, false);
+    let result = flux_recovery::recover(
+        &project,
+        23,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        policy,
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.status, "acquired");
+    assert_eq!(backend.read_timeouts, vec![Duration::from_secs(600)]);
+    assert!(
+        backend.read_commands[0]
+            .arguments()
+            .contains(&"--revs=5".into())
+    );
+    assert_eq!(result.capture_attempts, vec![1, 3]);
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(journal_path).unwrap()).unwrap();
+    assert_eq!(saved["stages"][1]["capture_elapsed_ms"], 600_000);
+    assert!(saved["stages"][1]["decode_attempt"].is_null());
+    let mut offline = ProcessGreaseweazleBackend::new_offline(
+        mock_gw_path(),
+        project.logs_dir().join("external-tools.jsonl"),
+    )
+    .unwrap();
+    let resumed = flux_recovery::recover(
+        &project,
+        23,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        RecoveryPolicy::default(),
+        &mut offline,
+        &|_| {},
+    )
+    .unwrap();
+    assert!(resumed.resumed);
+    assert_eq!(resumed.physical_reads_this_run, 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Seed only a disposable fixture: one verified decoded pass and a pending retry.
 fn seed_partial_recovery(project: &ProjectState, policy: &RecoveryPolicy, age_ms: u64) {
     let mut backend = ProcessGreaseweazleBackend::new(
@@ -139,6 +373,7 @@ fn recovery_deadline_during_read_saves_verified_partial_and_excludes_interrupted
     let (project, root) = disposable_project("recovery-deadline");
     let policy = RecoveryPolicy {
         max_seconds: 30,
+        time_limit_scope: TimeLimitScope::WholeJob,
         ..RecoveryPolicy::default()
     };
     seed_partial_recovery(&project, &policy, 28_000);
@@ -203,7 +438,7 @@ fn recovery_deadline_during_read_saves_verified_partial_and_excludes_interrupted
 #[test]
 fn expired_recovery_resumes_previous_pass_without_host_calls_or_partial_promotion() {
     let (project, root) = disposable_project("expired-partial-recovery");
-    let policy = RecoveryPolicy::default();
+    let policy = whole_job_policy();
     seed_partial_recovery(&project, &policy, 601_000);
     let partial = root.join("Flux/023_attempt_002.partial.scp");
     fs::write(&partial, b"old interrupted evidence").unwrap();
@@ -247,6 +482,7 @@ fn early_operation_timeout_is_not_softened_to_partial_success() {
     )
     .unwrap_err();
     assert!(error.starts_with("Capture timed out:"), "{error}");
+    assert_eq!(backend.timeout, Duration::from_secs(600));
     assert!(fs::read_dir(project.images_dir()).unwrap().next().is_none());
     let journal: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("Flux/Recovery/023_job.json")).unwrap())
@@ -279,7 +515,7 @@ fn timeout_without_any_completed_pass_never_publishes_an_image() {
 #[test]
 fn expired_recovery_still_refuses_tampered_completed_evidence() {
     let (project, root) = disposable_project("expired-tampered-recovery");
-    let policy = RecoveryPolicy::default();
+    let policy = whole_job_policy();
     seed_partial_recovery(&project, &policy, 601_000);
     fs::write(root.join("Flux/023_attempt_001.scp"), b"changed source").unwrap();
     let mut backend = ProcessGreaseweazleBackend::new_offline(
@@ -304,8 +540,8 @@ fn expired_recovery_still_refuses_tampered_completed_evidence() {
 }
 
 #[test]
-#[ignore = "requires the saved 023 deadline project via FLUXVAULT_DEADLINE_PROJECT; copies only, no hardware"]
-fn saved_customer_023_deadline_resumes_offline_on_an_isolated_copy() {
+#[ignore = "requires the saved 023 deadline project via FLUXVAULT_DEADLINE_PROJECT; copies only, mock info and intercepted read"]
+fn saved_customer_023_resumes_detective_with_full_stage_budget_on_an_isolated_copy() {
     let source = PathBuf::from(std::env::var_os("FLUXVAULT_DEADLINE_PROJECT").unwrap());
     let (project, root) = disposable_project("saved-023-deadline");
     for directory in ["Flux", "Flux/Derived", "Flux/Formats", "Flux/Recovery"] {
@@ -324,34 +560,44 @@ fn saved_customer_023_deadline_resumes_offline_on_an_isolated_copy() {
         serde_json::from_slice::<serde_json::Value>(&source_journal).unwrap()["policy"].clone(),
     )
     .unwrap();
-    let mut offline = ProcessGreaseweazleBackend::new_offline(
-        mock_gw_path(),
-        project.logs_dir().join("external-tools.jsonl"),
-    )
-    .unwrap();
-    let result =
-        flux_recovery::recover_auto(&project, 23, 'B', policy, &mut offline, &|_| {}).unwrap();
-    assert_eq!(result.status, "partial");
-    assert_eq!(result.stop_reason, "time_limit");
-    assert_eq!(result.missing_lbas.len(), 21);
-    assert!(result.conflicting_lbas.is_empty());
-    assert_eq!(result.capture_attempts, vec![1, 2, 3]);
-    assert_eq!(result.physical_reads_this_run, 0);
-    assert!(!project.logs_dir().join("external-tools.jsonl").exists());
-    let provenance: serde_json::Value =
-        serde_json::from_slice(&fs::read(result.provenance).unwrap()).unwrap();
-    assert_eq!(
-        provenance["incomplete_capture_attempts"],
-        serde_json::json!([4])
+    let old_partial = fs::read(root.join("Flux/023_attempt_004.partial.json")).unwrap();
+    let mut backend = RecordingReadBackend::new(&project, true);
+    let error =
+        flux_recovery::recover_auto(&project, 23, 'B', policy, &mut backend, &|_| {}).unwrap_err();
+    assert!(
+        error.contains("test stopped before physical read"),
+        "{error}"
     );
+    assert_eq!(backend.read_timeouts, vec![Duration::from_secs(600)]);
+    assert_eq!(backend.read_commands.len(), 1);
+    let arguments = backend.read_commands[0].arguments();
+    assert!(arguments.contains(&"--revs=8".to_owned()));
+    assert!(arguments.contains(&"--retries=5".to_owned()));
+    assert!(
+        arguments
+            .last()
+            .unwrap()
+            .ends_with("023_attempt_005.partial.scp")
+    );
+    assert_eq!(
+        fs::read(root.join("Flux/023_attempt_004.partial.json")).unwrap(),
+        old_partial
+    );
+    let resumed: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("Flux/Recovery/023_job.json")).unwrap())
+            .unwrap();
+    assert_eq!(resumed["stage_budget_version"], 1);
+    assert!(resumed["result"].is_null());
+    for stage in resumed["stages"].as_array().unwrap().iter().take(3) {
+        assert_eq!(stage["decode_attempt"], 1);
+    }
     assert_eq!(
         fs::read(source.join("Flux/Recovery/023_job.json")).unwrap(),
         source_journal
     );
     assert!(!source.join("Images/023_attempt_001.img").exists());
     eprintln!(
-        "Saved 023: 2,859 sectors verified, 21 missing, no conflicts, no host commands; image SHA-256 {}",
-        result.image_sha256
+        "Saved 023: three completed passes verified; Detective requested 600 seconds, 8 revolutions, 5 retries, fresh capture 005. Synthetic guard stopped before physical read."
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -1076,7 +1322,7 @@ fn no_index_exit_zero_is_a_failed_capture_and_empty_job_can_retry_after_expiry()
         4,
         GreaseweazleProfile::Ibm1440,
         'B',
-        RecoveryPolicy::default(),
+        whole_job_policy(),
         &mut failing,
         &|_| {},
     )
@@ -1112,7 +1358,7 @@ fn no_index_exit_zero_is_a_failed_capture_and_empty_job_can_retry_after_expiry()
             4,
             GreaseweazleProfile::Ibm1440,
             'B',
-            RecoveryPolicy::default(),
+            whole_job_policy(),
             &mut blocked,
             &|_| {}
         )
@@ -1140,7 +1386,7 @@ fn no_index_exit_zero_is_a_failed_capture_and_empty_job_can_retry_after_expiry()
         4,
         GreaseweazleProfile::Ibm1440,
         'B',
-        RecoveryPolicy::default(),
+        whole_job_policy(),
         &mut backend,
         &|_| {},
     )

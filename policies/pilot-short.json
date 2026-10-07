@@ -5,5 +5,6 @@
     { "name": "Recovery", "revolutions": 5, "retries": 2 }
   ],
   "max_seconds": 180,
+  "time_limit_scope": "per_stage",
   "no_improvement_limit": 2
 }

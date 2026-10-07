@@ -810,6 +810,26 @@ pub fn capture_with_settings(
     settings: &CaptureSettings,
     backend: &mut impl GreaseweazleBackend,
 ) -> Result<CaptureResult, String> {
+    capture_at_slot(project, request, settings, backend, None)
+}
+
+pub(crate) fn capture_with_settings_at_attempt(
+    project: &ProjectState,
+    request: CaptureRequest,
+    settings: &CaptureSettings,
+    backend: &mut impl GreaseweazleBackend,
+    attempt: u32,
+) -> Result<CaptureResult, String> {
+    capture_at_slot(project, request, settings, backend, Some(attempt))
+}
+
+fn capture_at_slot(
+    project: &ProjectState,
+    request: CaptureRequest,
+    settings: &CaptureSettings,
+    backend: &mut impl GreaseweazleBackend,
+    reserved_attempt: Option<u32>,
+) -> Result<CaptureResult, String> {
     settings.validate()?;
     MediaSafetyPolicy::assert_invariants();
     if request.disk_number == 0 {
@@ -819,7 +839,14 @@ pub fn capture_with_settings(
         return Err("Capture revolutions must be from 1 to 10".to_owned());
     }
     let flux_dir = project_flux_dir(project)?;
-    let attempt_number = next_capture_attempt(&flux_dir, request.disk_number)?;
+    let next = next_capture_attempt(&flux_dir, request.disk_number)?;
+    let attempt_number = reserved_attempt.unwrap_or(next);
+    if attempt_number < next
+        || next_capture_attempt_from(&flux_dir, request.disk_number, attempt_number)?
+            != attempt_number
+    {
+        return Err("Reserved capture slot is already occupied; no physical read started".into());
+    }
     let stem = format!("{:03}_attempt_{attempt_number:03}", request.disk_number);
     let partial_flux = flux_dir.join(format!("{stem}.partial.scp"));
     let final_flux = flux_dir.join(format!("{stem}.scp"));
@@ -1305,7 +1332,15 @@ pub(crate) fn raw_identity(
 }
 
 pub(crate) fn next_capture_attempt(directory: &Path, disk_number: u32) -> Result<u32, String> {
-    for attempt in 1..=999_999u32 {
+    next_capture_attempt_from(directory, disk_number, 1)
+}
+
+pub(crate) fn next_capture_attempt_from(
+    directory: &Path,
+    disk_number: u32,
+    minimum: u32,
+) -> Result<u32, String> {
+    for attempt in minimum.max(1)..=999_999u32 {
         let stem = format!("{disk_number:03}_attempt_{attempt:03}");
         let mut available = true;
         for suffix in [
@@ -1496,6 +1531,38 @@ mod tests {
         ));
         let project = ProjectState::create_without_session(root.clone()).unwrap();
         (project, root)
+    }
+
+    #[test]
+    fn reserved_capture_slots_skip_unused_stage_numbers_and_refuse_existing_evidence() {
+        let (project, root) = fixture();
+        let mut backend = ArtifactBackend::default();
+        let request = CaptureRequest {
+            disk_number: 7,
+            profile: GreaseweazleProfile::Ibm720,
+            drive: 'A',
+            revolutions: 2,
+        };
+        let settings = CaptureSettings::default();
+        let first = capture_with_settings_at_attempt(&project, request, &settings, &mut backend, 1)
+            .unwrap();
+        let before = fs::read(&first.flux_path).unwrap();
+        assert!(
+            capture_with_settings_at_attempt(&project, request, &settings, &mut backend, 1)
+                .is_err()
+        );
+        assert_eq!(backend.commands.len(), 1);
+        assert_eq!(fs::read(&first.flux_path).unwrap(), before);
+        let third = capture_with_settings_at_attempt(&project, request, &settings, &mut backend, 3)
+            .unwrap();
+        assert_eq!(third.attempt_number, 3);
+        assert_eq!(next_capture_attempt(&root.join("Flux"), 7).unwrap(), 2);
+        assert!(
+            capture_with_settings_at_attempt(&project, request, &settings, &mut backend, 3)
+                .is_err()
+        );
+        assert_eq!(backend.commands.len(), 2);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

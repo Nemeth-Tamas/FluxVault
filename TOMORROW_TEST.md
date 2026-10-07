@@ -45,14 +45,14 @@ The launcher writes unique `Reports/TestSummary-*.txt/.json`, benchmark snapshot
 
 ## Resume or collect without hardware
 
-**Current 021–032 cohort stopped at 023 (2026-10-07).** The No Index reseat prompts worked: 022 saved with two missing sectors and advanced normally. On 023, the 600-second recovery budget expired during Detective. Its three completed passes remain intact (2,859 readable sectors, 21 missing, no conflicts). The rebuilt executable publishes that verified partial from saved evidence instead of requiring another read. Resume this exact project:
+**Current 021–032 cohort stopped at 023 (2026-10-07).** The No Index reseat prompts worked: 022 saved with two missing sectors and advanced normally. On 023, the old shared 600-second budget expired during Detective. Its three completed passes remain intact (2,859 readable sectors, 21 missing, no conflicts). At the operator's request, the rebuilt executable now grants **ten minutes per stage**. Insert **023** in the working Mitsumi/Greaseweazle drive B, protection hole open, and resume this exact project:
 
 ```powershell
 $pilot = 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\scripts\start-pilot.ps1'
 & $pilot -FirstDisk 21 -LastDisk 32 -NoVerify -Project 'C:\Users\User\Desktop\FluxVault-Test\Customer-021-032-Test-59ed47d3e9214caba22730cfa88e291e'
 ```
 
-It continues at 023, not 021. Confirm the displayed 023 prompt with Enter; this pending job uses its saved passes without another physical read. Wait for its red **PARTIAL SAVED / REMOVE 023 / INSERT 024** banner, then insert 024 and continue. The interrupted Detective SCP/metadata are retained separately, never decoded as a finished capture. No Index failures still offer two same-disk reseat/reconfirm retries per invocation. Never advance the physical label until the saved-result swap banner asks for the next disk.
+It continues at 023, not 021. Confirm the displayed 023 prompt with Enter; it reuses Fast/Normal/Recovery and retries **Detective only**, with a fresh independent 600-second allowance and a new capture number. The failed attempt 004 stays intact. Wait for the **SAVED / REMOVE 023 / INSERT 024** banner, then insert 024 and continue. It may be red if sectors remain unresolved; that still permits swapping. No Index failures offer two same-disk reseat/reconfirm retries per invocation. Never advance the physical label until the saved-result swap banner asks for the next disk. If you already completed 023 under the prior build, its completed result stays reusable and the scan continues at its saved cursor instead.
 
 Resume **the same** printed project/range after interruption; never `init` it again or reset its disk cursor:
 

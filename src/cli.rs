@@ -165,7 +165,7 @@ Options:
   --revs N                         Raw-flux revolutions per track (1-10; default 3)
   --capture-attempt N              Capture to decode/identify/pack (default latest complete)
   --source-write-protected         Confirm the source floppy's physical tab is protected
-  --policy FILE                    JSON recovery policy for greaseweazle recover/scan
+  --policy FILE                    JSON recovery policy (default: 10 minutes PER STAGE)
   --acquisition-only               Skip downstream processing after recovery
   --no-verify                      GW scan: Enter confirms displayed disk; skips label typing ONLY
   --color auto|always|never         GW scan cues (default auto; respects NO_COLOR)

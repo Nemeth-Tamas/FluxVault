@@ -18,14 +18,16 @@ Every physical prompt asks you to check the label and open write-protect hole. T
 
 | Budget | What it allows |
 | --- | --- |
-| Built-in normal | Up to four escalating passes, 600-second acquisition ceiling, stop after two non-improving passes |
-| Today's saved pilot budget | Up to three passes, 180-second acquisition ceiling, stop after two non-improving passes |
+| Built-in normal | Up to four escalating stages, **600 seconds of capture time per stage**, stop after two completed non-improving passes |
+| Short example (`policies/pilot-short.json`) | Up to three stages, 180 seconds of capture time per stage, stop after two completed non-improving passes |
 
 Both stop early when the reported sector map is complete. Later passes target unresolved areas plus clean identity-control cylinders. More retries do not guarantee more files. Missing/conflicting bytes remain flagged, never guessed. Raw captures are retained.
 
-Acquisition limits are not a total processing stopwatch: decoding, hashing, evidence verification, extraction and document conversion add their own work/timeouts. A completed job is verified/reused on restart, not automatically reread. If the first attempt produced **no raw file at all**, an explicitly confirmed retry can restart its bounded acquisition window after expiry, preserving the failed attempt and old start time. A job with any full/partial raw evidence does not receive that reset.
+Fast, Normal, Recovery and Detective each have an independent allowance. Earlier stages do not consume Detective's ten minutes. A stubborn disk can therefore use up to approximately **40 minutes of physical capture time**, plus offline work; clean disks still stop after Fast. Failed/reseat attempts consume the same stage clock. Paused time between completed attempts is not charged, but an in-flight operation interrupted by a process crash is conservatively charged on restart rather than renewing its allowance.
 
-When a reread is cut short by the remaining **whole-job** budget, FluxVault verifies and saves the earlier completed passes as a partial result, then offers the normal red swap banner. The interrupted capture is retained for diagnosis, not used as decoded evidence or sent to the completed-capture packer. An expired interrupted job can publish those earlier passes on restart without another physical read. This does not hide an unexpected per-operation timeout or corrupted evidence: those still stop, as does a timeout with no completed usable pass.
+If a later stage exhausts its allowance, its interrupted capture stays separate and FluxVault can move to the next configured stage using verified earlier evidence. At the end, unresolved sectors produce the normal red partial-saved swap banner. Unfinished flux is never decoded or sent to the completed-capture packer. Unexpected early tool timeouts, corrupted evidence and no completed usable pass still stop. Offline decoding has its own bounded timeout and does not use the next stage's physical-read allowance.
+
+Policies without `time_limit_scope` now use `per_stage`, including existing saved scan settings. Unfinished older jobs are upgraded once when resumed, preserving completed passes, failed captures and original timestamps; the pending stage gets its new independent allowance. Already completed jobs are verified/reused, never reopened automatically. To explicitly retain the previous whole-disk budget, set `"time_limit_scope": "whole_job"` in a policy for a new job. Its historical empty-first-capture restart and partial-save behavior remain supported.
 
 ## Custom files are optional expert controls
 
@@ -34,7 +36,8 @@ Only if you want different limits, copy `policies/pilot-short.json`, edit your c
 | JSON field | Meaning |
 | --- | --- |
 | `passes` | Ordered attempts. Each has a descriptive `name`, `revolutions` captured per track, and host `retries` |
-| `max_seconds` | Acquisition-budget ceiling, 30–1800 seconds |
+| `max_seconds` | Capture-budget ceiling, 30–1800 seconds per stage by default |
+| `time_limit_scope` | `per_stage` (default, including omitted fields) or expert `whole_job` |
 | `no_improvement_limit` | Stop after this many consecutive passes that fail to reduce unresolved sectors, 1–3 |
 
 One to eight passes are allowed; each has 1–10 revolutions and 0–10 retries. Invalid settings are refused before reading. For everyday use, leave this alone and run `fv scan`.

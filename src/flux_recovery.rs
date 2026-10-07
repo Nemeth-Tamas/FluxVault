@@ -31,7 +31,17 @@ pub struct RecoveryPass {
 pub struct RecoveryPolicy {
     pub passes: Vec<RecoveryPass>,
     pub max_seconds: u64,
+    #[serde(default)]
+    pub time_limit_scope: TimeLimitScope,
     pub no_improvement_limit: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeLimitScope {
+    #[default]
+    PerStage,
+    WholeJob,
 }
 
 impl Default for RecoveryPolicy {
@@ -51,6 +61,7 @@ impl Default for RecoveryPolicy {
             })
             .collect(),
             max_seconds: 600,
+            time_limit_scope: TimeLimitScope::PerStage,
             no_improvement_limit: 2,
         }
     }
@@ -80,6 +91,12 @@ struct Stage {
     capture_attempt: u32,
     decode_attempt: Option<u32>,
     settings: CaptureSettings,
+    /// Cumulative physical capture time, including failed/reseat attempts.
+    #[serde(default)]
+    capture_elapsed_ms: u64,
+    /// Durable in-flight marker: a process restart cannot renew this budget.
+    #[serde(default)]
+    capture_started_unix_ms: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Journal {
@@ -92,9 +109,51 @@ struct Journal {
     started_unix_ms: u64,
     #[serde(default)]
     empty_capture_budget_restarts: Vec<u64>,
+    /// Missing in older whole-job journals; migrate unfinished jobs once only.
+    #[serde(default)]
+    stage_budget_version: u32,
     policy: RecoveryPolicy,
     stages: Vec<Stage>,
     result: Option<RecoveryResult>,
+}
+
+fn capture_remaining_ms(job: &Journal, index: usize, now: u64) -> u64 {
+    let spent = match job.policy.time_limit_scope {
+        TimeLimitScope::WholeJob => now.saturating_sub(job.started_unix_ms),
+        TimeLimitScope::PerStage => job.stages.get(index).map_or(0, |s| {
+            s.capture_elapsed_ms.saturating_add(
+                s.capture_started_unix_ms
+                    .map_or(0, |start| now.saturating_sub(start)),
+            )
+        }),
+    };
+    (job.policy.max_seconds * 1000).saturating_sub(spent)
+}
+
+fn finish_capture_clock(stage: &mut Stage, now: u64) {
+    if let Some(started) = stage.capture_started_unix_ms.take() {
+        stage.capture_elapsed_ms = stage
+            .capture_elapsed_ms
+            .saturating_add(now.saturating_sub(started));
+    }
+}
+
+fn stage_capture_slot(
+    flux: &Path,
+    disk: u32,
+    stages: &[Stage],
+    replacing: Option<usize>,
+) -> Result<u32, String> {
+    let reserved_next = stages
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != replacing)
+        .map(|(_, stage)| stage.capture_attempt)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or("Capture attempt limit reached")?;
+    flux_capture::next_capture_attempt_from(flux, disk, reserved_next)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,6 +419,7 @@ fn recover_impl(
             drive,
             started_unix_ms: external_tools::current_unix_ms(),
             empty_capture_budget_restarts: Vec::new(),
+            stage_budget_version: 1,
             policy: policy.clone(),
             stages: Vec::new(),
             result: None,
@@ -388,6 +448,9 @@ fn recover_impl(
     for stage in &j.stages {
         stage.settings.validate()?;
     }
+    if j.stage_budget_version > 1 {
+        return Err("Unsupported recovery stage budget version".to_owned());
+    }
     if !resumed && automatic_format && flux_capture::latest_capture_attempt(project, disk).is_ok() {
         let status = flux_capture::inspect_disk(project, disk)?;
         if let Some(capture) = status.captures.iter().rev().find(|c| {
@@ -408,6 +471,8 @@ fn recover_impl(
                     cylinders: None,
                     retries: 3,
                 }),
+                capture_elapsed_ms: 0,
+                capture_started_unix_ms: None,
             });
         }
     }
@@ -436,6 +501,8 @@ fn recover_impl(
                     cylinders: None,
                     retries: 3,
                 }),
+                capture_elapsed_ms: 0,
+                capture_started_unix_ms: None,
             });
         }
     }
@@ -445,9 +512,21 @@ fn recover_impl(
         result.physical_reads_this_run = 0;
         return Ok(result);
     }
+    if j.policy.time_limit_scope == TimeLimitScope::PerStage {
+        if j.stage_budget_version == 0 {
+            j.stage_budget_version = 1;
+            progress(
+                "Upgrading unfinished recovery to per-stage capture budgets; saved passes and failed attempts retained.",
+            );
+        }
+        for stage in &mut j.stages {
+            finish_capture_clock(stage, external_tools::current_unix_ms());
+        }
+    }
     // An operator-confirmed retry after an empty first capture gets a fresh bounded
     // window. Never reset a job that has any full/partial raw evidence or a decode.
     if resumed
+        && j.policy.time_limit_scope == TimeLimitScope::WholeJob
         && j.stages.len() <= 1
         && j.stages.iter().all(|s| s.decode_attempt.is_none())
         && external_tools::current_unix_ms().saturating_sub(j.started_unix_ms) / 1000
@@ -494,7 +573,6 @@ fn recover_impl(
             }
             continue;
         }
-        let elapsed = external_tools::current_unix_ms().saturating_sub(j.started_unix_ms) / 1000;
         let pending_raw = j.stages.get(index).is_some_and(|stage| {
             flux.join(format!(
                 "{disk:03}_attempt_{:03}.json",
@@ -502,8 +580,21 @@ fn recover_impl(
             ))
             .exists()
         });
-        if elapsed >= policy.max_seconds && !pending_raw {
-            reason = "time_limit";
+        if capture_remaining_ms(&j, index, external_tools::current_unix_ms()) == 0 && !pending_raw {
+            reason = if policy.time_limit_scope == TimeLimitScope::PerStage {
+                "stage_time_limit"
+            } else {
+                "time_limit"
+            };
+            if policy.time_limit_scope == TimeLimitScope::PerStage
+                && j.stages.iter().any(|s| s.decode_attempt.is_some())
+            {
+                progress(&format!(
+                    "{} stage capture budget exhausted; using verified earlier passes and advancing within the saved recovery policy.",
+                    pass.name
+                ));
+                continue;
+            }
             break;
         }
         if index >= j.stages.len() {
@@ -522,12 +613,14 @@ fn recover_impl(
                 Some(cs.into_iter().collect())
             };
             j.stages.push(Stage {
-                capture_attempt: flux_capture::next_capture_attempt(&flux, disk)?,
+                capture_attempt: stage_capture_slot(&flux, disk, &j.stages, None)?,
                 decode_attempt: None,
                 settings: CaptureSettings {
                     cylinders,
                     retries: pass.retries,
                 },
+                capture_elapsed_ms: 0,
+                capture_started_unix_ms: None,
             });
             save_journal(&state, &j)?;
         }
@@ -549,27 +642,48 @@ fn recover_impl(
                         .to_owned(),
                 );
             }
-            j.stages[index].capture_attempt = flux_capture::next_capture_attempt(&flux, disk)?;
+            j.stages[index].capture_attempt =
+                stage_capture_slot(&flux, disk, &j.stages, Some(index))?;
             save_journal(&state, &j)?;
             progress(&format!(
-                "{} pass: {}",
+                "{} pass: {} [capture budget: {:.1}s remaining; {}]",
                 pass.name,
                 stage
                     .settings
                     .cylinders
                     .as_ref()
                     .map(|v| format!("rereading cylinders {v:?}"))
-                    .unwrap_or_else(|| "reading the whole floppy".to_owned())
+                    .unwrap_or_else(|| "reading the whole floppy".to_owned()),
+                capture_remaining_ms(&j, index, external_tools::current_unix_ms()) as f64 / 1000.0,
+                if policy.time_limit_scope == TimeLimitScope::PerStage {
+                    "per stage"
+                } else {
+                    "whole job"
+                },
             ));
-            let remaining = policy.max_seconds.saturating_sub(
-                external_tools::current_unix_ms().saturating_sub(j.started_unix_ms) / 1000,
-            );
+            let remaining = capture_remaining_ms(&j, index, external_tools::current_unix_ms());
             if remaining == 0 {
-                reason = "time_limit";
+                reason = if policy.time_limit_scope == TimeLimitScope::PerStage {
+                    "stage_time_limit"
+                } else {
+                    "time_limit"
+                };
+                if policy.time_limit_scope == TimeLimitScope::PerStage {
+                    continue;
+                }
                 break;
             }
-            backend.set_operation_timeout(Duration::from_secs(remaining.min(300)));
-            let captured = match flux_capture::capture_with_settings(
+            let operation_ms = if policy.time_limit_scope == TimeLimitScope::PerStage {
+                remaining
+            } else {
+                remaining.min(300_000)
+            };
+            backend.set_operation_timeout(Duration::from_millis(operation_ms));
+            if policy.time_limit_scope == TimeLimitScope::PerStage {
+                j.stages[index].capture_started_unix_ms = Some(external_tools::current_unix_ms());
+                save_journal(&state, &j)?;
+            }
+            let capture_outcome = flux_capture::capture_with_settings_at_attempt(
                 project,
                 CaptureRequest {
                     disk_number: disk,
@@ -579,25 +693,37 @@ fn recover_impl(
                 },
                 &stage.settings,
                 backend,
-            ) {
+                j.stages[index].capture_attempt,
+            );
+            if policy.time_limit_scope == TimeLimitScope::PerStage {
+                finish_capture_clock(&mut j.stages[index], external_tools::current_unix_ms());
+                save_journal(&state, &j)?;
+            }
+            let captured = match capture_outcome {
                 Ok(captured) => captured,
                 Err(error)
                     if error.starts_with(flux_capture::CAPTURE_TIMEOUT_ERROR_PREFIX)
-                        && remaining <= 300
-                        && external_tools::current_unix_ms().saturating_sub(j.started_unix_ms)
-                            / 1000
-                            >= policy.max_seconds
+                        && operation_ms == remaining
+                        && capture_remaining_ms(&j, index, external_tools::current_unix_ms())
+                            == 0
                         && j.stages.iter().any(|s| s.decode_attempt.is_some()) =>
                 {
                     // A bounded policy deadline is a normal recovery stop,
                     // not loss of the earlier independently verified passes.
                     // Never decode/promote an unfinished SCP or reset budget.
                     reads += 1;
-                    reason = "time_limit";
+                    reason = if policy.time_limit_scope == TimeLimitScope::PerStage {
+                        "stage_time_limit"
+                    } else {
+                        "time_limit"
+                    };
                     progress(&format!(
-                        "Recovery time limit reached during {} pass. Interrupted capture retained separately; saving verified earlier passes as a partial result.",
+                        "Capture time limit reached during {} pass. Interrupted capture retained separately; verified earlier passes preserved.",
                         pass.name
                     ));
+                    if policy.time_limit_scope == TimeLimitScope::PerStage {
+                        continue;
+                    }
                     break;
                 }
                 Err(error) => return Err(error),
@@ -675,15 +801,8 @@ fn recover_impl(
                 d.decode_attempt
             }
             None => {
-                let remaining = policy.max_seconds.saturating_sub(
-                    external_tools::current_unix_ms().saturating_sub(j.started_unix_ms) / 1000,
-                );
                 // Finishing a saved raw capture offline never adds physical media stress.
-                backend.set_operation_timeout(Duration::from_secs(if remaining == 0 {
-                    60
-                } else {
-                    remaining.min(60)
-                }));
+                backend.set_operation_timeout(Duration::from_secs(60));
                 flux_capture::decode(project, disk, capture, Some(profile), backend)?.decode_attempt
             }
         };
@@ -1209,6 +1328,64 @@ fn publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn clock_job() -> Journal {
+        Journal {
+            schema_version: 1,
+            disk: 23,
+            profile: "ibm.1440".into(),
+            automatic_format: false,
+            drive: 'B',
+            started_unix_ms: 0,
+            empty_capture_budget_restarts: vec![],
+            stage_budget_version: 1,
+            policy: RecoveryPolicy::default(),
+            result: None,
+            stages: vec![Stage {
+                capture_attempt: 1,
+                decode_attempt: None,
+                settings: CaptureSettings::default(),
+                capture_elapsed_ms: 100_000,
+                capture_started_unix_ms: Some(1_000_000),
+            }],
+        }
+    }
+
+    #[test]
+    fn stage_clocks_are_independent_and_restart_cannot_renew_in_flight_time() {
+        let mut job = clock_job();
+        assert_eq!(capture_remaining_ms(&job, 0, 1_040_000), 460_000);
+        assert_eq!(capture_remaining_ms(&job, 1, 1_040_000), 600_000);
+        finish_capture_clock(&mut job.stages[0], 1_040_000);
+        finish_capture_clock(&mut job.stages[0], 1_080_000);
+        assert_eq!(job.stages[0].capture_elapsed_ms, 140_000);
+        assert_eq!(capture_remaining_ms(&job, 0, 99_000_000), 460_000);
+        job.stages[0].capture_started_unix_ms = Some(99_000_000);
+        finish_capture_clock(&mut job.stages[0], 99_010_000);
+        assert_eq!(job.stages[0].capture_elapsed_ms, 150_000);
+        assert_eq!(capture_remaining_ms(&job, 0, 99_020_000), 450_000);
+    }
+
+    #[test]
+    fn old_policy_defaults_to_per_stage_and_whole_job_is_an_explicit_expert_option() {
+        let mut policy = serde_json::to_value(RecoveryPolicy::default()).unwrap();
+        policy.as_object_mut().unwrap().remove("time_limit_scope");
+        assert_eq!(
+            serde_json::from_value::<RecoveryPolicy>(policy.clone())
+                .unwrap()
+                .time_limit_scope,
+            TimeLimitScope::PerStage
+        );
+        policy["time_limit_scope"] = json!("whole_job");
+        assert_eq!(
+            serde_json::from_value::<RecoveryPolicy>(policy.clone())
+                .unwrap()
+                .time_limit_scope,
+            TimeLimitScope::WholeJob
+        );
+        policy["time_limit_scope"] = json!("forever");
+        assert!(serde_json::from_value::<RecoveryPolicy>(policy).is_err());
+    }
 
     #[test]
     fn publishing_never_replaces_an_existing_image() {
