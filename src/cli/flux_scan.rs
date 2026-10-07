@@ -1879,6 +1879,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(project.current_disk_number(), 61);
+        drop(project);
+        let mut project = ProjectState::open_without_session(fixture.0.clone()).unwrap();
+        assert_eq!(project.current_disk_number(), 61);
         assert!(
             run_with_io(
                 &mut project,
@@ -1893,6 +1896,9 @@ mod tests {
         );
         assert_eq!(project.current_disk_number(), 61);
         opts.count = None;
+        drop(project);
+        let mut project = ProjectState::open_without_session(fixture.0.clone()).unwrap();
+        assert_eq!(project.current_disk_number(), 61);
         run_with_io(
             &mut project,
             &opts,

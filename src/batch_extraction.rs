@@ -166,7 +166,7 @@ pub(crate) fn run_single_disk_extraction(
                 Ok(result) => (
                     "partial_recovered",
                     format!(
-                        "{reason}; {} complete files recovered natively, {} entries skipped; disk remains partial",
+                        "{reason}; {} readable/validated payloads recovered natively, {} entries skipped; disk remains partial",
                         result.files, result.skipped_entries
                     ),
                     result.files,
@@ -204,7 +204,7 @@ pub(crate) fn run_single_disk_extraction(
                         Ok(result) => (
                             "partial_recovered",
                             format!(
-                                "{reason}; {} complete files recovered natively; completeness remains unverified",
+                                "{reason}; {} readable/validated payloads recovered natively; completeness remains unverified",
                                 result.files
                             ),
                             result.files,
@@ -225,7 +225,7 @@ pub(crate) fn run_single_disk_extraction(
                         Ok(result) => (
                             "partial_recovered",
                             format!(
-                                "{reason}; {} complete files recovered natively; completeness remains unverified",
+                                "{reason}; {} readable/validated payloads recovered natively; completeness remains unverified",
                                 result.files
                             ),
                             result.files,
@@ -572,7 +572,7 @@ fn try_native_row(
         Ok(result) => {
             row.status = "PARTIAL: NATIVE RECOVERY".to_owned();
             row.reason = format!(
-                "{}; native FAT12 recovered {} complete files, skipped {} entries; report: {}",
+                "{}; native recovery recovered {} readable/validated payloads, skipped {} entries; report: {}",
                 row.reason,
                 result.files,
                 result.skipped_entries,

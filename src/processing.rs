@@ -781,6 +781,67 @@ mod tests {
     }
 
     #[test]
+    fn failed_136_job_cohort_reopens_drains_once_and_keeps_source_bindings() {
+        let project = project();
+        let root = project.root().to_path_buf();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let first = std::sync::atomic::AtomicBool::new(true);
+        let worker = injected(&project, move |_, _| {
+            if first.swap(false, Ordering::SeqCst) {
+                started_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            }
+            Err("simulated downstream worker failure; evidence retained".into())
+        });
+        let mut sources = vec![];
+        let first_disk = acquisition(&project, 1);
+        sources.push((first_disk.image.clone(), first_disk.image_sha256.clone()));
+        worker.enqueue(&first_disk).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        for disk in 2..=136 {
+            let result = acquisition(&project, disk);
+            sources.push((result.image.clone(), result.image_sha256.clone()));
+            worker.enqueue(&result).unwrap();
+            worker.enqueue(&result).unwrap();
+        }
+        release_tx.send(()).unwrap();
+        let failed = worker.finish();
+        assert!((1..=2).contains(&failed.runs));
+        assert!(!failed.errors.is_empty());
+        assert_eq!(status(&project).unwrap()["pending"], 136);
+        assert_eq!(
+            status(&project).unwrap()["jobs"].as_array().unwrap().len(),
+            136
+        );
+        drop(project);
+        let reopened = ProjectState::open_without_session(root).unwrap();
+        let resumed = injected(&reopened, |_, _| Ok(json!({"exit_code":3}))).finish();
+        assert_eq!(resumed.runs, 1);
+        assert_eq!(resumed.processed_jobs, 136);
+        assert!(resumed.errors.is_empty());
+        let saved = status(&reopened).unwrap();
+        assert_eq!(saved["pending"], 0);
+        assert_eq!(saved["jobs"].as_array().unwrap().len(), 136);
+        // A mock pipeline is not a real integrity audit: no false all-clear.
+        assert_eq!(saved["attention"], 136);
+        assert_eq!(
+            injected(&reopened, |_, _| panic!("completed jobs must not loop"))
+                .finish()
+                .runs,
+            0
+        );
+        for (image, expected) in sources {
+            assert_eq!(
+                format!("{:x}", Sha256::digest(fs::read(image).unwrap())),
+                expected
+            );
+        }
+        assert_eq!(reopened.current_disk_number(), 1);
+        fs::remove_dir_all(reopened.root()).unwrap();
+    }
+
+    #[test]
     fn changed_image_is_retained_failed_and_resumes_only_after_binding_restored() {
         let project = project();
         let result = acquisition(&project, 1);

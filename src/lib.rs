@@ -2,6 +2,7 @@ pub mod audit;
 pub mod baseline;
 pub mod batch_extraction;
 pub mod benchmark;
+pub mod carving;
 pub mod cli;
 pub mod composite;
 pub mod conversion;

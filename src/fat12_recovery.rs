@@ -1,5 +1,6 @@
-//! Guarded materialization of intact FAT12 files from immutable saved images.
+//! Guarded materialization of intact FAT12 files and validated signature candidates.
 use crate::{
+    carving,
     dmde_logs::DmdeLogStatus,
     extraction::{self, ExtractionPresence},
     fat12,
@@ -25,8 +26,38 @@ pub struct RecoveryReport {
     pub source_sha256: String,
     pub disk: u32,
     pub attempt: u32,
-    pub analysis: fat12::Analysis,
+    pub analysis: Option<fat12::Analysis>,
+    #[serde(default)]
+    pub carving: Option<carving::Analysis>,
+    #[serde(default)]
+    pub filesystem_error: Option<String>,
     pub warning: String,
+}
+
+impl RecoveryReport {
+    pub(crate) fn payloads(&self) -> Vec<(String, u64, String)> {
+        let mut files = self
+            .analysis
+            .iter()
+            .flat_map(|a| &a.recovered_files)
+            .map(|f| (f.path.clone(), f.bytes as u64, f.sha256.clone()))
+            .chain(
+                self.carving
+                    .iter()
+                    .flat_map(|a| &a.files)
+                    .map(|f| (f.path.clone(), f.bytes as u64, f.sha256.clone())),
+            )
+            .collect::<Vec<_>>();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
+    }
+    fn bad_lbas(&self) -> &[u64] {
+        self.analysis
+            .as_ref()
+            .map(|a| a.bad_lbas.as_slice())
+            .or_else(|| self.carving.as_ref().map(|a| a.bad_lbas.as_slice()))
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,6 +71,11 @@ pub struct RecoveryResult {
     pub report_path: PathBuf,
     pub source_sha256: String,
     pub files: usize,
+    pub carved_files: usize,
+    pub orphan_chains_scanned: usize,
+    pub rejected_candidates: usize,
+    pub carving_warning: Option<String>,
+    pub carving_limits_reached: bool,
     pub bytes: u64,
     pub skipped_entries: usize,
     pub validated_long_names: usize,
@@ -162,7 +198,7 @@ pub fn recover_attempt(
         if report.disk != disk
             || report.attempt != attempt.attempt_number
             || report.native_engine_version != fat12::RECOVERY_ENGINE_VERSION
-            || report.analysis.bad_lbas != expected_bad
+            || report.bad_lbas() != expected_bad
         {
             return Err("Native recovery evidence/settings changed; reuse refused".into());
         }
@@ -170,26 +206,74 @@ pub fn recover_attempt(
         return Ok(result(&report, output, report_path, true));
     }
     progress("Native FAT12: checking directories, FAT copies and intact file chains...");
-    let analysis = fat12::analyze(&snapshot, &attempt.bad_sectors)?;
-    if let Some(warning) = &analysis.layout_evidence.warning {
+    let (analysis, filesystem_error) = match fat12::analyze(&snapshot, &attempt.bad_sectors) {
+        Ok(a) => (Some(a), None),
+        Err(error) => (None, Some(error)),
+    };
+    if let Some(warning) = analysis
+        .as_ref()
+        .and_then(|a| a.layout_evidence.warning.as_ref())
+    {
         progress(&format!("Native FAT12 layout WARNING: {warning}"));
     }
-    let report = RecoveryReport { schema_version:1, native_engine_version:fat12::RECOVERY_ENGINE_VERSION, method:"native_fat12_readable_chains".into(),
+    progress(
+        "Native recovery: validating orphan-chain/signature candidates from readable image bytes...",
+    );
+    let (regions, chains, issues, hashes) = if let Some(a) = &analysis {
+        let (mut regions, chains, issues) = fat12::orphan_regions(&snapshot, a);
+        regions.extend(fat12::partial_file_regions(a));
+        (
+            regions,
+            chains,
+            issues,
+            a.recovered_files
+                .iter()
+                .map(|f| f.sha256.clone())
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        (
+            carving::raw_readable_regions(&snapshot, &attempt.bad_sectors),
+            0,
+            vec![],
+            vec![],
+        )
+    };
+    let mut carved = carving::analyze(&snapshot, &attempt.bad_sectors, &regions, &hashes)?;
+    carved.orphan_chains_scanned = chains;
+    carved.allocation_issues = issues;
+    carved.bad_lbas.sort_unstable();
+    if carved.limits_reached {
+        progress(
+            "Native recovery WARNING: signature validation work ceiling reached; this search is not exhaustive.",
+        );
+    }
+    if analysis.is_none() || !carved.files.is_empty() {
+        carved.allocation_warning = Some("Reconstructed candidate names; original live/deleted ownership unknown. Known deleted chains and free clusters are excluded when FAT layout is readable; unknown filesystems cannot establish deletion status. Structural validation is not original-content/customer certification.".into());
+    }
+    let report = RecoveryReport { schema_version:1, native_engine_version:fat12::RECOVERY_ENGINE_VERSION, method:"native_fat12_and_validated_carving".into(),
         source_image:image.file_name().unwrap_or_default().to_string_lossy().to_string(), source_sha256:source_sha256.clone(),
-        disk, attempt:attempt.attempt_number, analysis,
-        warning:"Recovered bytes came only from acquisition-reported readable sectors. See layout_evidence: missing boot metadata may use an explicitly warned standard-layout hypothesis, never fabricated boot bytes or certified original geometry. Long names require intact sequence/checksum/UTF-16/padding; invalid names use safe recorded short aliases. Missing directory regions and deleted/orphaned files are not reconstructed. Single-capture sector confidence is not upgraded. Complete file bytes do not certify complete disk/customer recovery.".into() };
+        disk, attempt:attempt.attempt_number, analysis, carving:Some(carved), filesystem_error,
+        warning:"Recovered bytes came only from acquisition-reported readable sectors. Layout hypotheses never fabricate boot bytes. Carved names/paths are reconstructed, not original; recorded extents bind every payload to the saved image. No missing bytes are guessed or joined across holes. Known deleted/free allocation is excluded when readable FAT metadata exists; raw fallback cannot determine live/deleted status. Pixel/CRC/container validation does not prove document semantics or original custody. Single-capture confidence is unchanged; disk/customer completeness remains unverified.".into() };
     let staging = extracted.join(format!(
         ".tmp-native-{disk:03}-{}-{}",
         std::process::id(),
         crate::external_tools::current_unix_ms()
     ));
     fs::create_dir(&staging).map_err(|e| format!("Cannot reserve native recovery staging: {e}"))?;
-    for record in &report.analysis.recovered_files {
+    for record in report.analysis.iter().flat_map(|a| &a.recovered_files) {
         let path = safe_file_path(&staging, &record.path)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         write_new(&path, &fat12::file_bytes(&snapshot, record))?;
+    }
+    for record in report.carving.iter().flat_map(|a| &a.files) {
+        let path = safe_file_path(&staging, &record.path)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        write_new(&path, &carving::file_bytes(&snapshot, record)?)?;
     }
     let serialized = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
     write_new(&staging.join(extraction::FAT12_REPORT_NAME), &serialized)?;
@@ -205,12 +289,13 @@ pub fn recover_attempt(
         .map_err(|e| format!("Native staging retained; cannot publish: {e}"))?;
     save_report_copy(&report_path, &serialized)?;
     progress(&format!(
-        "Native FAT12: {} complete files recovered; {} entries skipped; {} directory sectors unavailable; {} validated long names; {} name fallbacks",
-        report.analysis.recovered_files.len(),
-        report.analysis.skipped.len(),
-        report.analysis.directory_gaps.len(),
-        report.analysis.validated_long_names.len(),
-        report.analysis.name_fallbacks.len()
+        "Native recovery: {} intact reachable files, {} validated signature candidates; {} rejected candidates; completeness remains unverified",
+        report
+            .analysis
+            .as_ref()
+            .map_or(0, |a| a.recovered_files.len()),
+        report.carving.as_ref().map_or(0, |a| a.files.len()),
+        report.carving.as_ref().map_or(0, |a| a.rejected.len())
     ));
     Ok(result(&report, output, report_path, false))
 }
@@ -223,24 +308,48 @@ fn result(
 ) -> RecoveryResult {
     RecoveryResult {
         native_engine_version: report.native_engine_version,
-        layout_method: report.analysis.layout_evidence.method.clone(),
-        layout_warning: report.analysis.layout_evidence.warning.clone(),
+        layout_method: report.analysis.as_ref().map_or_else(
+            || "signature_only_unknown_filesystem".into(),
+            |a| a.layout_evidence.method.clone(),
+        ),
+        layout_warning: report
+            .analysis
+            .as_ref()
+            .and_then(|a| a.layout_evidence.warning.clone())
+            .or_else(|| report.filesystem_error.clone()),
         disk: report.disk,
         attempt: report.attempt,
         output_directory,
         report_path,
         source_sha256: report.source_sha256.clone(),
-        files: report.analysis.recovered_files.len(),
-        bytes: report
+        files: report.payloads().len(),
+        carved_files: report.carving.as_ref().map_or(0, |a| a.files.len()),
+        orphan_chains_scanned: report
+            .carving
+            .as_ref()
+            .map_or(0, |a| a.orphan_chains_scanned),
+        rejected_candidates: report.carving.as_ref().map_or(0, |a| a.rejected.len()),
+        carving_warning: report.carving.as_ref().and_then(|a| {
+            a.allocation_warning.clone().or_else(|| {
+                a.limits_reached
+                    .then(|| "Signature work ceiling reached; search is not exhaustive.".into())
+            })
+        }),
+        carving_limits_reached: report.carving.as_ref().is_some_and(|a| a.limits_reached),
+        bytes: report.payloads().iter().map(|f| f.1).sum(),
+        skipped_entries: report.analysis.as_ref().map_or(0, |a| a.skipped.len()),
+        validated_long_names: report
             .analysis
-            .recovered_files
-            .iter()
-            .map(|file| file.bytes as u64)
-            .sum(),
-        skipped_entries: report.analysis.skipped.len(),
-        validated_long_names: report.analysis.validated_long_names.len(),
-        name_fallbacks: report.analysis.name_fallbacks.len(),
-        directory_gaps: report.analysis.directory_gaps.clone(),
+            .as_ref()
+            .map_or(0, |a| a.validated_long_names.len()),
+        name_fallbacks: report
+            .analysis
+            .as_ref()
+            .map_or(0, |a| a.name_fallbacks.len()),
+        directory_gaps: report
+            .analysis
+            .as_ref()
+            .map_or_else(Vec::new, |a| a.directory_gaps.clone()),
         reused,
         customer_delivery_certified: false,
     }
@@ -356,6 +465,257 @@ mod tests {
     use super::*;
     use crate::{audit, batch_extraction, conversion, imaging, project::ProjectState};
 
+    fn rebind_fixture(
+        project: &ProjectState,
+        attempt: &AttemptSummary,
+        image: &[u8],
+    ) -> AttemptSummary {
+        let new_hash = hash(image);
+        fs::write(project.images_dir().join(&attempt.image_file), image).unwrap();
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&attempt.metadata_path).unwrap()).unwrap();
+        metadata["sha256"] = serde_json::json!(new_hash);
+        fs::write(
+            &attempt.metadata_path,
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        let log = fs::read_to_string(&attempt.log_file)
+            .unwrap()
+            .replace(&attempt.sha256, &new_hash);
+        fs::write(&attempt.log_file, log).unwrap();
+        imaging::load_attempts_for_disk(&project.images_dir(), 1)
+            .unwrap()
+            .remove(0)
+    }
+
+    #[test]
+    fn automatic_raw_fallback_handles_severe_damage_and_keeps_delivery_separate() {
+        let bad = (0..400).collect::<Vec<u64>>();
+        let (project, attempt, mut image) = fixture(&bad);
+        let payload = b"{\\rtf1 recovered from readable bytes}";
+        image[800 * 512..800 * 512 + payload.len()].copy_from_slice(payload);
+        let attempt = rebind_fixture(&project, &attempt, &image);
+        let request = batch_extraction::BatchExtractionRequest {
+            seven_zip_executable: std::env::current_exe().unwrap(),
+            images_directory: project.images_dir(),
+            logs_directory: project.logs_dir(),
+            extracted_root: project.extracted_dir(),
+            recovery_root: project.recovery_dir(),
+            reports_directory: project.reports_dir(),
+            command_audit_path: project.logs_dir().join("external-tools.jsonl"),
+        };
+        let batch = batch_extraction::run_single_disk_extraction(&request, 1, &|_| {}).unwrap();
+        assert_eq!(batch.file_count, 1);
+        let result = recover(&project, &attempt).unwrap();
+        assert!(result.reused);
+        assert_eq!(result.carved_files, 1);
+        let report: RecoveryReport =
+            serde_json::from_slice(&fs::read(&result.report_path).unwrap()).unwrap();
+        assert!(report.analysis.is_none());
+        let carving = report.carving.unwrap();
+        assert_eq!(carving.bad_lbas.len(), 400);
+        assert!(carving.allocation_warning.is_some());
+        assert_eq!(
+            carving.files[0].source_extents[0].source_byte_offset,
+            800 * 512
+        );
+        assert_eq!(
+            fs::read(result.output_directory.join(&carving.files[0].path)).unwrap(),
+            payload
+        );
+        let plan = conversion::build_conversion_plan(&planning(&project), &|_| {}).unwrap();
+        let mapping = fs::read_to_string(&plan.path_map).unwrap();
+        assert!(mapping.contains("Signature recovered"));
+        assert!(mapping.contains("Signature-Recovered"));
+        assert!(!mapping.contains("Native FAT12 readable-chain"));
+        let audit = audit::run_audit(&project, &|_| {}).unwrap();
+        assert_eq!(audit.verified_disks, 0);
+        assert_eq!(audit.attention_disks, 1);
+        assert!(!request.command_audit_path.exists());
+        assert_eq!(
+            fs::read(project.images_dir().join(&attempt.image_file)).unwrap(),
+            image
+        );
+        fs::write(
+            result.output_directory.join(&carving.files[0].path),
+            b"changed candidate",
+        )
+        .unwrap();
+        assert!(recover(&project, &attempt).is_err());
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn zero_candidate_unknown_filesystem_publishes_reusable_failure_evidence_not_files() {
+        let (project, attempt, _) = fixture(&[34]);
+        let image = vec![0; 2880 * 512];
+        let attempt = rebind_fixture(&project, &attempt, &image);
+        let result = recover(&project, &attempt).unwrap();
+        assert_eq!(result.files, 0);
+        assert!(recover(&project, &attempt).unwrap().reused);
+        let report: RecoveryReport =
+            serde_json::from_slice(&fs::read(&result.report_path).unwrap()).unwrap();
+        assert!(report.analysis.is_none() && report.filesystem_error.is_some());
+        assert!(!report.carving.unwrap().limits_reached);
+        assert!(
+            extraction::verify_managed_extraction(&result.output_directory, &attempt.sha256)
+                .is_ok()
+        );
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn carving_work_limit_warning_survives_reuse_even_without_exported_candidates() {
+        let (project, attempt, mut image) = fixture(&[34]);
+        for cluster in 10..=15 {
+            for copy in 0..2 {
+                fat12::tests::set_fat(
+                    &mut image,
+                    copy,
+                    cluster,
+                    if cluster == 15 { 0xfff } else { cluster + 1 },
+                );
+            }
+        }
+        for at in (41 * 512..47 * 512).step_by(2) {
+            image[at..at + 2].copy_from_slice(b"BM");
+        }
+        let attempt = rebind_fixture(&project, &attempt, &image);
+        let first = recover(&project, &attempt).unwrap();
+        assert_eq!(first.carved_files, 0);
+        assert!(first.carving_limits_reached);
+        assert!(
+            first
+                .carving_warning
+                .as_ref()
+                .unwrap()
+                .contains("not exhaustive")
+        );
+        let reused = recover(&project, &attempt).unwrap();
+        assert!(reused.reused);
+        assert_eq!(reused.carving_warning, first.carving_warning);
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn intact_embedded_candidate_survives_partial_parent_without_exporting_parent_or_slack() {
+        let (project, attempt, mut image) = fixture(&[34]);
+        fat12::tests::entry(&mut image, 19 * 512, b"PARTIAL BIN", 2, 1024 + 20, false);
+        image[19 * 512 + 32..19 * 512 + 64].fill(0);
+        for copy in 0..2 {
+            fat12::tests::set_fat(&mut image, copy, 2, 3);
+            fat12::tests::set_fat(&mut image, copy, 3, 4);
+            fat12::tests::set_fat(&mut image, copy, 4, 0xfff);
+        }
+        let good = b"{\\rtf1 embedded}";
+        image[35 * 512..35 * 512 + good.len()].copy_from_slice(good);
+        let slack = b"{\\rtf1 slack not a file}";
+        image[35 * 512 + 20..35 * 512 + 20 + slack.len()].copy_from_slice(slack);
+        let attempt = rebind_fixture(&project, &attempt, &image);
+        let result = recover(&project, &attempt).unwrap();
+        assert_eq!(result.files, 1);
+        assert_eq!(result.carved_files, 1);
+        let report: RecoveryReport =
+            serde_json::from_slice(&fs::read(&result.report_path).unwrap()).unwrap();
+        let a = report.analysis.unwrap();
+        assert!(a.recovered_files.is_empty());
+        assert_eq!(a.unrecovered_files[0].unreadable_ranges[0].file_offset, 512);
+        let carved = report.carving.unwrap();
+        assert_eq!(carved.files[0].parent_file.as_deref(), Some("PARTIAL.BIN"));
+        assert_eq!(
+            carved.files[0].recovery_method,
+            "readable_partial_file_embedded_signature"
+        );
+        assert_eq!(
+            fs::read(result.output_directory.join(&carved.files[0].path)).unwrap(),
+            good
+        );
+        assert!(!result.output_directory.join("PARTIAL.BIN").exists());
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires FLUXVAULT_CARVING_SOURCE_PROJECT and FLUXVAULT_CARVING_OUTPUT; saved images copied to a NEW project only"]
+    fn saved_cohort_native_carving_uses_isolated_images_and_preserves_every_source() {
+        let source = ProjectState::open_without_session(PathBuf::from(
+            std::env::var("FLUXVAULT_CARVING_SOURCE_PROJECT").unwrap(),
+        ))
+        .unwrap();
+        let output = PathBuf::from(std::env::var("FLUXVAULT_CARVING_OUTPUT").unwrap());
+        assert!(!output.exists());
+        let project = ProjectState::create_without_session(output).unwrap();
+        let stats = imaging::load_project_statistics(&source.images_dir()).unwrap();
+        let mut rows = vec![];
+        for disk in stats.disks {
+            let attempts =
+                imaging::load_attempts_for_disk(&source.images_dir(), disk.disk_number).unwrap();
+            let mut attempt = attempts
+                .into_iter()
+                .find(|a| a.attempt_number == disk.best_attempt_number)
+                .unwrap();
+            let original =
+                recovery_plan::resolve_image_path(&source.images_dir(), &attempt.image_file)
+                    .unwrap();
+            let before = read_snapshot(&original).unwrap();
+            attempt.image_file = original.file_name().unwrap().to_string_lossy().into();
+            fs::copy(&original, project.images_dir().join(&attempt.image_file)).unwrap();
+            // Keep the isolated project usable by ordinary offline CLI commands.
+            if !attempt.log_file.is_empty() {
+                let log = Path::new(&attempt.log_file);
+                let copied = project.logs_dir().join(log.file_name().unwrap());
+                fs::copy(log, &copied).unwrap();
+                attempt.log_file = copied.to_string_lossy().into();
+            }
+            if !attempt.legacy_image {
+                let mut metadata: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&attempt.metadata_path).unwrap()).unwrap();
+                metadata["image_file"] = serde_json::json!(attempt.image_file);
+                metadata["log_file"] = serde_json::json!(attempt.log_file);
+                attempt.metadata_path = project
+                    .images_dir()
+                    .join(attempt.metadata_path.file_name().unwrap());
+                fs::write(
+                    &attempt.metadata_path,
+                    serde_json::to_vec_pretty(&metadata).unwrap(),
+                )
+                .unwrap();
+            }
+            let result = recover_attempt(
+                &project.images_dir(),
+                &project.extracted_dir(),
+                &project.recovery_dir(),
+                disk.disk_number,
+                &attempt,
+                &|s| eprintln!("{s}"),
+            )
+            .unwrap();
+            assert!(
+                extraction::verify_managed_extraction(&result.output_directory, &attempt.sha256)
+                    .is_ok()
+            );
+            assert_eq!(read_snapshot(&original).unwrap(), before);
+            eprintln!(
+                "DISK {:03}: {} payloads / {} carved / {} orphan chains / {} rejected",
+                disk.disk_number,
+                result.files,
+                result.carved_files,
+                result.orphan_chains_scanned,
+                result.rejected_candidates
+            );
+            rows.push(serde_json::to_value(&result).unwrap());
+        }
+        fs::write(
+            project.reports_dir().join("NativeCarvingValidation.json"),
+            serde_json::to_vec_pretty(&rows).unwrap(),
+        )
+        .unwrap();
+        eprintln!(
+            "Isolated recovery validation retained: {}",
+            project.root().display()
+        );
+    }
+
     fn fixture(bad: &[u64]) -> (ProjectState, AttemptSummary, Vec<u8>) {
         let root = std::env::temp_dir().join(format!(
             "fluxvault-native-{}-{}",
@@ -446,7 +806,10 @@ mod tests {
         assert!(recovered.report_path.is_file());
         let report: RecoveryReport =
             serde_json::from_slice(&fs::read(&recovered.report_path).unwrap()).unwrap();
-        assert_eq!(report.analysis.recovered_files[0].data_lbas, vec![33]);
+        assert_eq!(
+            report.analysis.as_ref().unwrap().recovered_files[0].data_lbas,
+            vec![33]
+        );
         assert!(recover(&project, &attempt).unwrap().reused);
         assert_eq!(
             fs::read(project.images_dir().join(&attempt.image_file)).unwrap(),
@@ -587,7 +950,7 @@ mod tests {
         assert!(
             recovered
                 .output_directory
-                .ends_with("attempt_001_native_v3")
+                .ends_with("attempt_001_native_v4")
         );
         fs::remove_dir_all(project.root()).unwrap();
     }
@@ -635,7 +998,10 @@ mod tests {
         assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
         let upgraded = recover(&project, &attempt).unwrap();
         assert!(!upgraded.reused);
-        assert_eq!(upgraded.native_engine_version, 3);
+        assert_eq!(
+            upgraded.native_engine_version,
+            fat12::RECOVERY_ENGINE_VERSION
+        );
         assert_ne!(upgraded.output_directory, old);
         assert_eq!(fs::read(&old_report).unwrap(), old_bytes);
         assert_eq!(
@@ -736,13 +1102,13 @@ mod tests {
         let mut archive = zip::ZipArchive::new(fs::File::open(package.zip_path).unwrap()).unwrap();
         assert!(
             archive
-                .by_name("Extracted/001/attempt_001_native_v3/Árvíztűrő.txt")
+                .by_name("Extracted/001/attempt_001_native_v4/Árvíztűrő.txt")
                 .is_ok()
         );
-        assert!(archive.by_name("Extracted/001/attempt_001_native_v3/System Volume Information/IndexerVolumeGuid").is_err());
+        assert!(archive.by_name("Extracted/001/attempt_001_native_v4/System Volume Information/IndexerVolumeGuid").is_err());
         assert!(
             archive
-                .by_name("Recovery/001/attempt_001_fat12_v3.json")
+                .by_name("Recovery/001/attempt_001_fat12_v4.json")
                 .is_ok()
         );
         drop(archive);
@@ -756,15 +1122,18 @@ mod tests {
         let recovered = recover(&project, &attempt).unwrap();
         assert_eq!(recovered.files, 1);
         assert_eq!(recovered.skipped_entries, 1);
-        assert_eq!(recovered.native_engine_version, 3);
+        assert_eq!(
+            recovered.native_engine_version,
+            fat12::RECOVERY_ENGINE_VERSION
+        );
         let report: RecoveryReport =
             serde_json::from_slice(&fs::read(&recovered.report_path).unwrap()).unwrap();
         assert_eq!(
-            report.analysis.layout_evidence.method,
+            report.analysis.as_ref().unwrap().layout_evidence.method,
             "inferred_standard_layout"
         );
         assert!(
-            !report.analysis.recovered_files[0]
+            !report.analysis.as_ref().unwrap().recovered_files[0]
                 .metadata_lbas
                 .contains(&0)
         );
@@ -792,6 +1161,9 @@ mod tests {
         let mut report: serde_json::Value =
             serde_json::from_slice(&fs::read(&initial.report_path).unwrap()).unwrap();
         report["native_engine_version"] = serde_json::json!(2);
+        report["method"] = serde_json::json!("native_fat12_readable_chains");
+        report.as_object_mut().unwrap().remove("carving");
+        report.as_object_mut().unwrap().remove("filesystem_error");
         report["analysis"]
             .as_object_mut()
             .unwrap()
@@ -813,7 +1185,7 @@ mod tests {
         fs::rename(&initial.report_path, &old_report).unwrap();
         fs::write(&old_report, &old_bytes).unwrap();
         let upgraded = recover(&project, &attempt).unwrap();
-        assert!(upgraded.output_directory.ends_with("attempt_001_native_v3"));
+        assert!(upgraded.output_directory.ends_with("attempt_001_native_v4"));
         assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
         assert_eq!(fs::read(old_report).unwrap(), old_bytes);
         assert!(old.join("GOOD.TXT").is_file());

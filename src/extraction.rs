@@ -271,16 +271,16 @@ pub(crate) fn verify_managed_extraction(
                 .map_err(|e| format!("Invalid native recovery provenance: {e}"))?;
         if report.schema_version != 1
             || report.source_sha256 != expected_source_sha256
-            || report.method != "native_fat12_readable_chains"
-            || report.analysis.recovered_files.len() != actual.len()
+            || !matches!(
+                report.method.as_str(),
+                "native_fat12_readable_chains" | "native_fat12_and_validated_carving"
+            )
+            || report.payloads().len() != actual.len()
         {
             return Err("Native recovery provenance does not match managed extraction".to_owned());
         }
-        for (file, native) in actual.iter().zip(&report.analysis.recovered_files) {
-            if file.relative_path != native.path
-                || file.bytes != native.bytes as u64
-                || file.sha256 != native.sha256
-            {
+        for (file, native) in actual.iter().zip(report.payloads()) {
+            if file.relative_path != native.0 || file.bytes != native.1 || file.sha256 != native.2 {
                 return Err(format!(
                     "Native file provenance differs: {}",
                     file.relative_path

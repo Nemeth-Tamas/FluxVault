@@ -8,11 +8,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[path = "fat12_layout.rs"]
 mod layout_recovery;
+#[path = "fat12_orphans.rs"]
+mod orphan_recovery;
+pub(crate) use orphan_recovery::{orphan_regions, partial_file_regions};
 
 const SECTOR: usize = 512;
 const MAX_ENTRIES: usize = 16_384;
 pub const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
-pub const RECOVERY_ENGINE_VERSION: u32 = 3;
+pub const RECOVERY_ENGINE_VERSION: u32 = 4;
 
 /// An inferred standard layout is a bounded hypothesis, not recovered boot bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +124,10 @@ pub struct Analysis {
     #[serde(default)]
     pub name_fallbacks: Vec<Issue>,
     pub crosslinked_clusters: Vec<u16>,
+    #[serde(default)]
+    pub owned_clusters: Vec<u16>,
+    #[serde(default)]
+    pub deleted_clusters_excluded: Vec<u16>,
     pub customer_delivery_certified: bool,
 }
 
@@ -309,6 +316,8 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
         validated_long_names: Vec::new(),
         name_fallbacks: Vec::new(),
         crosslinked_clusters: Vec::new(),
+        owned_clusters: Vec::new(),
+        deleted_clusters_excluded: Vec::new(),
         customer_delivery_certified: false,
     };
     let bad = result.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
@@ -350,6 +359,14 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             } // Only an intact end marker ends this directory.
             if entry[0] == 0xe5 {
                 result.deleted_entries_not_recovered += 1;
+                if entry[11] != 0x0f && entry[11] & 8 == 0 {
+                    let chain = layout.chain(image, &bad, word(entry, 26));
+                    chain_visits += chain.clusters.len();
+                    if chain_visits > 65_536 {
+                        return Err("Deleted allocation traversal ceiling reached".into());
+                    }
+                    result.deleted_clusters_excluded.extend(chain.clusters);
+                }
                 pending_name.clear();
                 continue;
             }
@@ -405,6 +422,18 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
                 metadata.extend(name.entry_offsets.iter().map(|at| (at / SECTOR) as u64));
             }
             if entry[11] & 0xc0 != 0 || word(entry, 20) != 0 {
+                // A malformed live entry still reserves its evidenced allocation.
+                let claimed = layout.chain(image, &bad, word(entry, 26));
+                chain_visits += claimed.clusters.len();
+                if chain_visits > 65_536 {
+                    return Err("Allocation traversal ceiling reached".into());
+                }
+                for cluster in claimed.clusters {
+                    owners
+                        .entry(cluster)
+                        .or_default()
+                        .insert(format!("{path}:{at}"));
+                }
                 result.skipped.push(Issue {
                     path,
                     reason: "Unsupported directory attributes/high cluster word".into(),
@@ -523,6 +552,9 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             });
         }
     }
+    result.owned_clusters = owners.keys().copied().collect();
+    result.deleted_clusters_excluded.sort_unstable();
+    result.deleted_clusters_excluded.dedup();
     let crosslinks = owners
         .into_iter()
         .filter(|(_, claims)| claims.len() > 1)

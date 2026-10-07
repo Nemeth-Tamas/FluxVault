@@ -343,6 +343,14 @@ fn current_files(root: &Path, origin: &'static str) -> Result<Vec<Payload>, Stri
                 if total > MAX_TOTAL {
                     return Err("Current payloads exceed comparison bound".into());
                 }
+                let origin = if relative
+                    .split('/')
+                    .any(|p| p.eq_ignore_ascii_case("SignatureRecovery"))
+                {
+                    "signature_carved"
+                } else {
+                    origin
+                };
                 result.push(payload(&relative, bytes, sha, origin)?);
             } else {
                 return Err("Unsupported comparison file type".into());
@@ -812,6 +820,33 @@ fn export(project: &ProjectState, result: &Comparison) -> Result<(PathBuf, PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_signature_candidates_keep_their_origin_in_comparisons() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-baseline-carves-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("SignatureRecovery")).unwrap();
+        fs::write(root.join("SignatureRecovery/carved.doc"), b"candidate").unwrap();
+        fs::write(root.join("normal.doc"), b"reachable").unwrap();
+        let rows = current_files(&root, "native_readable_chains").unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|f| f.path.starts_with("SignatureRecovery"))
+                .unwrap()
+                .origin,
+            "signature_carved"
+        );
+        assert_eq!(
+            rows.iter().find(|f| f.path == "normal.doc").unwrap().origin,
+            "native_readable_chains"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn comparison_refuses_competing_project_owner_before_inventory() {
         let root = std::env::temp_dir().join(format!(

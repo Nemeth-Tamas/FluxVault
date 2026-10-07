@@ -1,17 +1,32 @@
-# FluxVault progress — 2026-10-07 independent recovery-stage budgets
+# FluxVault progress — 2026-10-07 automatic orphan/signature recovery
 
-The routine operator path is `fv init` -> `fv scan` -> swap/confirm until finished. New scans identify supported IBM formats, losslessly pack verified raw captures, and continuously extract/recover/convert/audit saved images in the background. Unrecognized formats become explicit raw-only attention records rather than stopping numbered feeding. Existing projects retain their saved settings. Live 009/058, the 053–064 background cohort and 022's No Index reseat prompts passed. A recovery-budget stop on 023 is now verified offline on a separate evidence copy; live 023–032 continuation remains the next acceptance check.
+The routine path remains `fv init` -> `fv scan` -> swap/confirm until finished. Automatic format selection, packed captures and continuous saved-file processing work. The live 021–032 cohort completed with eight OK/four partial images, 37 successful conversions, no downstream errors and cursor 033. Native generation 4 now automatically salvages validated orphan/signature/embedded candidates; isolated saved captures yielded 11 extra candidates, including two 024 Word containers that both became DOCX/PDF successfully. Existing scan settings and original evidence are preserved.
 
 ## How close?
 
 | Measure | Current checkpoint | Meaning |
 | --- | --- | --- |
 | Routine replacement of the seven scripts in `G.zip` | approximately 90% | Acquisition, extraction eligibility/manual preservation, manifests, bounded conversion, audit/workbook and verified archives are implemented, with continuous saved-file processing. This is engineering coverage, not proven equality of all historical reports/files. |
-| Single-Greaseweazle 136-disk benchmark readiness | approximately 95% | Real saved-evidence processing and deterministic 136-job/scan soaks pass; numbered/Enter swaps, limits, resume, telemetry, raw-only exceptions and packed storage exist. Live overlap and full-cohort acceptance remain the final readiness gate. |
-| Whole TODO list | 310 / 455 = 68.1% checked | Literal checkbox count, including nested checkpoints, umbrella tasks and historical groundwork; not a weighted product-completeness score. |
-| Fully autonomous recovery/product ambition | approximately 65% | Routine acquisition and durable downstream scheduling work. Severe filesystem damage/carving, additional format decoders and two-station custody/resource control remain substantial work. |
+| Single-Greaseweazle 136-disk benchmark readiness | approximately 98% | Completed live mixed/damaged cohorts plus deterministic 136-job/scan soaks; the actual full 136-disk run and live ten-minute stage-exhaustion acceptance remain unproven. |
+| Whole TODO list | 316 / 456 = 69.3% checked | Literal checkbox count, including nested checkpoints and umbrella tasks; not a weighted engineering score. Reaching the day's 80% target needs 49 more checked items at this denominator; this recovery checkpoint does not claim that target achieved. |
+| Fully autonomous recovery/product ambition | approximately 70% | Routine scheduling and bounded orphan/signature/embedded-object salvage work. Deeper directory/deleted recovery, additional formats, arbitrary partial-document recovery and two-station production control remain substantial. |
 
 These estimates describe implementation coverage, **not** customer-file recovery rates or solvable-disk percentages. No matching-yield percentage is supportable until the 136-image/1,667-file script+DMDE baseline is compared. Script compatibility is distinct from automating the manual recovery the scripts deliberately delegated to DMDE.
+
+## Automatic carving checkpoint (2026-10-07)
+
+- Added native generation 4 with allocated orphan-chain traversal, readable partial-parent object salvage and unknown-layout contiguous readable-region fallback. Known live/deleted allocation is excluded from orphan search; free clusters stay excluded with a readable layout. Fragmentation follows corroborated FAT order; bad sectors split runs, EOF slack is not scanned, crosslinks/cycles/conflicting FATs are not guessed.
+- PNG/JPEG/BMP pixels, all GIF frames, ZIP member CRCs and decompression, RTF structural/binary envelopes and strict OLE metadata/streams are validated within probe, allocation, expansion and output bounds. Word/Excel type recognition uses root streams, not an embedded workbook that happens to share a stream name. Missing text is not fabricated.
+- Reconstructed paths, SHA-256, exact source extents, FAT/metadata evidence, partial-parent links, rejected signatures, deduplication, unknown live/deleted scope and limits are persisted. Empty unsuccessful carving is a reusable zero-file attention result. New immutable generations preserve earlier files/reports; old provenance schemas still verify. Signature delivery/conversion/baseline origins remain separate from ordinary FAT files.
+- Isolated saved 021–032 produced 64 forensic files (53 intact reachable / 11 additional candidates): four orphan JPEGs on 023, two Word containers on 024 and five embedded image objects on 027. Both 024 candidates converted to DOCX and PDF; DOCX text is nonempty (1,018 / 2,296 characters). All **39/39** Office jobs succeeded. Original source bytes were explicitly compared before/after each saved-image test.
+- Baseline remains **38/89 byte-identical, 51 missing, zero changed**; current-only payloads rose from 13 to 24. Minimal compound-container extents/embedded objects do not inherit historical filenames or magically become reference byte matches. The damaged cohort is not a full-recovery demonstration.
+- Strengthened the modeled 136-disk scan soak with actual project close/reopen, and added a separate failed 136-job downstream cohort that reopens, drains once, preserves every source hash, deduplicates enqueue and leaves attention results non-looping. Forced-process storage soak and the actual full physical 136 run remain separate acceptance work.
+- A parallel baseline test exposed duplicate timestamp-only temporary directory names (`AlreadyExists`, Windows error 183). Its fixture now includes an atomic per-process sequence. This diagnosed test-isolation collision is distinct from the older unreproduced Windows fast-fail, which remains open.
+- Validation: 289 regular tests, zero failures; 13 environment-dependent tests outside the routine suite. The new isolated saved-cohort regression was explicitly run twice and passed; actual LibreOffice conversion/baseline comparison completed. Formatting/all-target checking and release build pass. See [CARVING_RECOVERY.md](CARVING_RECOVERY.md) for commands, retained result location and precise limitations.
+
+## Actual 021–032 continuation
+
+The operator-approved batch reached 032 and ended normally with attention code 3. Ten new results were finalized in this invocation (three partial); whole-project totals are 12 images, eight OK/four partial. Pending 023 completed Detective and stopped at its configured pass limit. Historical five recovery errors remain in telemetry, not five new downstream failures. Capture packing finished, 37 conversions succeeded, zero downstream errors, and the persisted cursor is 033. Live ten-minute stage exhaustion/escalation itself did not occur and is still an acceptance item.
 
 ## Independent stage-budget checkpoint (2026-10-07)
 

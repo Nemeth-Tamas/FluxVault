@@ -186,7 +186,7 @@ pub(crate) fn build_conversion_plan_reserved(
                 .map_err(|error| format!("Forensic relatívútvonal-hiba: {error}"))?;
             let forensic_text = forensic_path.to_string_lossy().replace('/', "\\");
             let (mut delivery_relative, mut recovery_method) = clean_delivery_path(forensic_path)?;
-            if native_recovery {
+            if native_recovery && recovery_method != RecoveryMethod::Signature {
                 recovery_method = RecoveryMethod::NativeFat12;
             }
             let original_delivery_relative = delivery_relative.clone();
@@ -386,6 +386,7 @@ fn clean_delivery_path(path: &Path) -> Result<(PathBuf, RecoveryMethod), String>
         let text = part.to_string_lossy();
         if text.eq_ignore_ascii_case("[$Raw Files by Signatures]")
             || text.eq_ignore_ascii_case("$Raw")
+            || text.eq_ignore_ascii_case("SignatureRecovery")
         {
             signature = true;
             continue;

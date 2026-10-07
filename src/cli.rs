@@ -114,7 +114,7 @@ Usage:
   fluxvault recovery fat N [--project PATH]
                                     Reconstruct only provable mirrored FAT sectors
   fluxvault recovery extract N [--project PATH]
-                                    Recover intact FAT12 files from saved damaged images
+                                    Recover intact files and validated signature candidates offline
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
   fluxvault conversion plan [--project PATH]

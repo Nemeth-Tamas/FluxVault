@@ -1,6 +1,6 @@
 # Damaged-filesystem recovery
 
-Native FAT12 recovery now gets past some missing boot sectors. It runs on saved images, never the inserted floppy. This is the first bounded damaged-filesystem slice, not a claim of complete DMDE replacement.
+Native recovery gets past some missing boot sectors and now automatically salvages validated signature candidates from orphan chains and damaged-file regions. It runs on saved images, never the inserted floppy. See [automatic carving](CARVING_RECOVERY.md) for generation 4 and its measured customer-capture results; this is not complete DMDE replacement.
 
 ## Use it
 
@@ -14,7 +14,7 @@ fv recovery extract 9
 
 Use `fluxvault` instead of `fv` if you have not installed the short launcher. The command needs neither Greaseweazle nor 7-Zip/LibreOffice. It returns **3 (attention)** even when complete files are recovered. `--json` includes `layout_method`, `layout_warning`, the source hash and the report location. Human output keeps the warning visible on reuse as well.
 
-New results live in `Extracted/NNN/attempt_NNN_native_v3` (or `legacy_native_v3`) and `Recovery/NNN/attempt_NNN_fat12_v3.json`. Older generations/manual folders are preserved, not rewritten. A changed source, incomplete acquisition map or altered managed inventory still blocks recovery.
+New results live in `Extracted/NNN/attempt_NNN_native_v4` (or `legacy_native_v4`) and `Recovery/NNN/attempt_NNN_fat12_v4.json`. Older generations/manual folders are preserved, not rewritten. A changed source, incomplete acquisition map or altered managed inventory still blocks recovery. If no layout can be established, generation 4 records `analysis: null`, the filesystem error, and its bounded readable-region carving results instead of inventing geometry.
 
 ## What missing-boot inference means
 
@@ -32,7 +32,7 @@ The report's `analysis.unrecovered_files` retains skipped file candidates, their
 - `unmapped_tail_bytes`: file bytes for which incomplete allocation metadata could not locate a source sector. No LBA is invented.
 - Other rejections, such as ownership conflicts or inconsistent sizes, remain explicit even when no unreadable data range is present. An empty hole list does **not** certify the file.
 
-Missing directory regions remain separately recorded; names/entries hidden in them are not invented. Partial-file export and validated carving are later work.
+Missing directory regions remain separately recorded; names/entries hidden in them are not invented. Generation 4 can salvage self-contained validated embedded objects from readable partial-file runs, preserving their parent association and raw extents without exporting the incomplete parent. General raw partial-fragment export remains open.
 
 ## Saved-evidence checks — 2026-10-06
 
@@ -55,4 +55,4 @@ $env:FLUXVAULT_FAT12_TEST_PROJECT = 'C:\Users\User\Desktop\FluxVault-Test\Custom
 cargo test --lib real_saved_pilot_payloads -- --ignored --nocapture
 ```
 
-Next: evidence-ranked metadata reconstruction, deleted/orphaned chains and content-validated carving. Continuous background extraction/conversion and full single-GW benchmark acceptance remain separate work.
+Next: deeper evidence-ranked metadata reconstruction, explicit deleted-file recovery, additional signatures and partial-fragment salvage. Bounded orphan-chain/signature recovery is implemented in generation 4; full historical yield equivalence and 136-disk acceptance remain separate work.

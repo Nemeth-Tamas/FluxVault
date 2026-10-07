@@ -1451,6 +1451,66 @@ fn native_fat12_cli_recovers_missing_boot_without_tools_and_reuses_warned_result
 }
 
 #[test]
+fn native_carving_cli_handles_unknown_layout_with_offsets_and_warned_reuse() {
+    let root = std::env::temp_dir().join(format!(
+        "fluxvault-cli-carving-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let project = fluxvault::project::ProjectState::create_without_session(root.clone()).unwrap();
+    let mut image = vec![0; 2880 * 512];
+    let payload = b"{\\rtf1 bounded recovery candidate}";
+    image[800 * 512 + 3..800 * 512 + 3 + payload.len()].copy_from_slice(payload);
+    let sha = format!("{:x}", Sha256::digest(&image));
+    fs::write(project.images_dir().join("001.img"), &image).unwrap();
+    fs::write(project.logs_dir().join("001.log"), format!("BEGIN | disk=1\nGEOMETRY | bytes_per_sector=512 | total_sectors=2880\nBAD_SECTOR | LBA=0\nEND | status=PARTIAL | bytes=1474560 | sha256={sha}\n")).unwrap();
+    let first = invoke(&root, &["recovery", "extract", "1", "--json"], None);
+    assert_eq!(
+        first.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(result["physical_media_access"], false);
+    assert_eq!(result["recovery"]["carved_files"], 1);
+    assert_eq!(
+        result["recovery"]["layout_method"],
+        "signature_only_unknown_filesystem"
+    );
+    let report: serde_json::Value = serde_json::from_slice(
+        &fs::read(result["recovery"]["report_path"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert!(report["analysis"].is_null());
+    assert!(report["filesystem_error"].is_string());
+    assert_eq!(
+        report["carving"]["files"][0]["source_extents"][0]["source_byte_offset"],
+        800 * 512 + 3
+    );
+    assert_eq!(report["carving"]["files"][0]["original_name_known"], false);
+    assert_eq!(
+        report["carving"]["files"][0]["customer_delivery_certified"],
+        false
+    );
+    let second = invoke(&root, &["recovery", "extract", "1", "--json"], None);
+    assert_eq!(second.status.code(), Some(3));
+    let reused: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(reused["recovery"]["reused"], true);
+    let plan = invoke(&root, &["conversion", "plan", "--json"], None);
+    assert!(plan.status.success());
+    assert_eq!(
+        fs::read(project.images_dir().join("001.img")).unwrap(),
+        image
+    );
+    assert!(!project.logs_dir().join("external-tools.jsonl").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn flux_status_verifies_saved_hashes_without_a_drive_or_host_tool() {
     let root = std::env::temp_dir().join(format!(
         "fluxvault-cli-flux-status-{}-{}",
