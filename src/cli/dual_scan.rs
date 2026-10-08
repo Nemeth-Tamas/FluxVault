@@ -235,17 +235,12 @@ fn gw_read(
         project.logs_dir().join("external-tools.jsonl"),
     )?
     .with_stream_to_stderr(false);
-    let _ = events.try_send(Event::Progress(Station::Greaseweazle, ticket.disk,
-        "Capturing flux: live HD sector counts are provisional; final HD/DD format is checked offline.".into()));
     let tx = events.clone();
     let disk = ticket.disk;
-    let mut last = Instant::now() - Duration::from_secs(5);
+    let mut meter = super::read_progress::PassMeter::default();
     backend.set_progress_callback(Some(Box::new(move |event| {
-        if last.elapsed() >= Duration::from_secs(5) {
-            last = Instant::now();
-            if let Some(text) = event.display_progress() {
-                let _ = tx.try_send(Event::Progress(Station::Greaseweazle, disk, text));
-            }
+        if let Some(text) = meter.event(event) {
+            let _ = tx.try_send(Event::Progress(Station::Greaseweazle, disk, text));
         }
     })));
     let result = flux_recovery::recover_auto_checked(
@@ -255,7 +250,9 @@ fn gw_read(
         Default::default(),
         &mut backend,
         &|s| {
-            let _ = events.try_send(Event::Progress(Station::Greaseweazle, disk, s.into()));
+            if let Some(text) = concise_stage(s) {
+                let _ = events.try_send(Event::Progress(Station::Greaseweazle, disk, text));
+            }
         },
         &|bytes, bad| guard.as_ref().map_or(Ok(()), |g| g.check(bytes, bad)),
     )?;
@@ -274,6 +271,30 @@ fn gw_read(
         attempt,
         flux: Some(result),
     })
+}
+
+fn concise_stage(message: &str) -> Option<String> {
+    if let Some((stage, detail)) = message.split_once(" pass: ") {
+        if detail.starts_with("reading") || detail.starts_with("rereading") {
+            return Some(format!("{stage} read pass"));
+        }
+        return Some(format!(
+            "{stage}: {}",
+            detail.split(" [").next().unwrap_or(detail)
+        ));
+    }
+    if message.starts_with("Identifying") {
+        return Some("Checking disk format (offline)".into());
+    }
+    if let Some(rest) = message.strip_prefix("Detected ") {
+        return Some(format!(
+            "Format: {}",
+            rest.split(':').next().unwrap_or(rest)
+        ));
+    }
+    // Keep explicit stage-limit/stop/conflict diagnostics, without long evidence
+    // paths. Full host output and command arguments remain in the durable audit.
+    (!message.contains("Evidence:")).then(|| message.chars().take(140).collect())
 }
 
 enum Command {
@@ -501,10 +522,23 @@ fn display(
         };
         writeln!(output, "{escape}  ACTION: {action}{reset}").map_err(|e| e.to_string())?;
     }
-    writeln!(output, "NEXT FRESH: {} | USB -> GW pending: {} | uN / gN / STATUS / PAUSE / RESUME / QUIT\nShared numbering: a fresh label goes to ONE station, never both.",
-        session.coordinator.next_fresh_disk().map_or("finished".into(), |n| format!("{n:03}")),
-        state["usb_transfer_pending"])
-        .map_err(|e| e.to_string())?;
+    writeln!(
+        output,
+        "NEXT FRESH: {}{}",
+        session
+            .coordinator
+            .next_fresh_disk()
+            .map_or("finished".into(), |n| format!("{n:03}")),
+        if state["usb_transfer_pending"]
+            .as_array()
+            .is_some_and(|q| !q.is_empty())
+        {
+            format!(" | USB -> GW pending: {}", state["usb_transfer_pending"])
+        } else {
+            String::new()
+        }
+    )
+    .map_err(|e| e.to_string())?;
     writeln!(output, "{}", session.pace.text(&state))
         .and_then(|_| output.flush())
         .map_err(|e| e.to_string())
@@ -672,15 +706,24 @@ fn feed(
                 if let Err(error) = result {
                     terminal::banner(output, color, Cue::Error, "NO NEW READ", &error)?;
                 }
+                // Commands already refreshed actions (or printed a refusal).
+                // Do not immediately duplicate that display on the heartbeat.
+                refresh = Instant::now();
             }
             Event::Input(_) => {}
             Event::Progress(station, disk, text) => {
                 session
                     .progress
                     .insert(station as u8, text.chars().take(160).collect());
-                writeln!(output, "[{} {disk:03}] {text}", station_name(station))
-                    .and_then(|_| output.flush())
-                    .map_err(|e| e.to_string())?;
+                if text.starts_with("gw warning:") || text.starts_with("gw error:") {
+                    terminal::banner(
+                        output,
+                        color,
+                        Cue::Error,
+                        &format!("{} {disk:03}", station_name(station)),
+                        &text,
+                    )?;
+                }
             }
             Event::Done(ticket, result) => {
                 session.progress.remove(&(ticket.station as u8));
@@ -794,6 +837,7 @@ fn feed(
                     }
                 }
                 display(&session, output, color, draining)?;
+                refresh = Instant::now();
             }
         }
         // Progress can arrive more often than recv_timeout: a busy reader must

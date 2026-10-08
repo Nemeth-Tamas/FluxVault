@@ -1,6 +1,65 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
+#[test]
+fn completed_out_of_scope_and_skipped_labels_never_start_or_release_a_disk() {
+    let p = project();
+    let mut selected = p.clone();
+    selected
+        .set_current_disk_number_without_session(53)
+        .unwrap();
+    let mut c = Coordinator::open(selected, Some(75), false).unwrap();
+    let first = begin(&mut c, Station::Greaseweazle, 53).unwrap();
+    evidence(&p, &first, 1, &[]);
+    c.complete(&first, 1).unwrap();
+    for station in [Station::Usb, Station::Greaseweazle] {
+        for number in [1, 52, 53, 55, 76, 999] {
+            let before = fs::read(p.root().join(".fluxvault-production.json")).unwrap();
+            assert!(begin(&mut c, station, number).is_err());
+            assert_eq!(
+                fs::read(p.root().join(".fluxvault-production.json")).unwrap(),
+                before
+            );
+            assert_eq!(c.held(Station::Greaseweazle).unwrap().0.disk, 53);
+        }
+    }
+    c.removed(&first, true).unwrap();
+    for number in [53, 76] {
+        assert!(begin(&mut c, Station::Greaseweazle, number).is_err());
+    }
+    assert_eq!(c.next_fresh_disk(), Some(54));
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn live_display_keeps_actions_and_percentages_without_repeated_help_or_host_dump() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    begin(&mut c, Station::Greaseweazle, 1).unwrap();
+    let mut live = session(c);
+    live.progress
+        .insert(Station::Greaseweazle as u8, "50% Read pass (tracks)".into());
+    let mut output = vec![];
+    display(&live, &mut output, true, false).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("50% Read pass"));
+    assert!(output.contains("\x1b[1;36m  ACTION:"));
+    assert!(!output.contains("Shared numbering") && !output.contains("PAUSE / RESUME / QUIT"));
+    assert!(!output.contains("USB -> GW pending: []"));
+    assert!(!output.contains("not a completion promise") && !output.contains("need 3"));
+    assert!(
+        concise_stage("Detected ibm.720: reason. Evidence: C:\\long\\path").unwrap()
+            == "Format: ibm.720"
+    );
+    assert_eq!(
+        concise_stage("Fast pass: reading the whole floppy [capture budget: 600s]"),
+        Some("Fast read pass".into())
+    );
+    drop(live);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
 fn project() -> ProjectState {
     static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     ProjectState::create_without_session(std::env::temp_dir().join(format!(

@@ -46,6 +46,78 @@ fn range(value: &str, maximum: u32) -> Option<BTreeSet<u32>> {
     (!result.is_empty()).then_some(result)
 }
 
+fn tracks(cylinders: &str, heads: &str) -> Option<BTreeSet<(u32, u32)>> {
+    range(cylinders, 255).zip(range(heads, 1)).map(|(c, h)| {
+        c.into_iter()
+            .flat_map(|c| h.iter().map(move |h| (c, *h)))
+            .collect()
+    })
+}
+
+#[derive(Default)]
+pub(super) struct PassMeter {
+    expected: Option<BTreeSet<(u32, u32)>>,
+    visited: BTreeSet<(u32, u32)>,
+    decoding: bool,
+    bucket: Option<usize>,
+}
+impl PassMeter {
+    pub(super) fn event(&mut self, event: &GreaseweazleProgressEvent) -> Option<String> {
+        match event {
+            GreaseweazleProgressEvent::PassStarted {
+                decoding,
+                cylinders,
+                heads,
+            } => {
+                self.expected = tracks(cylinders, heads);
+                self.visited.clear();
+                self.decoding = *decoding;
+                self.bucket = None;
+            }
+            GreaseweazleProgressEvent::ReadingRange {
+                cylinders, heads, ..
+            } => {
+                let expected = tracks(cylinders, heads);
+                if self.expected != expected {
+                    self.expected = expected;
+                    self.visited.clear();
+                    self.bucket = None;
+                }
+            }
+            GreaseweazleProgressEvent::Track { cylinder, head, .. } => {
+                if self
+                    .expected
+                    .as_ref()
+                    .is_some_and(|set| set.contains(&(*cylinder, *head)))
+                {
+                    self.visited.insert((*cylinder, *head));
+                }
+            }
+            // Host "Converting" is a descriptive line within an already seeded
+            // command; do not erase its bounded range or restart a live meter.
+            GreaseweazleProgressEvent::Warning(_) | GreaseweazleProgressEvent::Error(_) => {
+                return event.display_progress(); // diagnostics are never throttled
+            }
+            _ => return None, // raw track details / grids / paths stay in audit
+        }
+        let phase = if self.decoding {
+            "Decode pass"
+        } else {
+            "Read pass"
+        };
+        let Some(expected) = &self.expected else {
+            return Some(format!("{phase}: working"));
+        };
+        let percent = self.visited.len() * 100 / expected.len();
+        let bucket = percent / 10;
+        if self.bucket == Some(bucket) {
+            return None;
+        }
+        self.bucket = Some(bucket);
+        Some(format!("{percent}% {phase} (tracks)"))
+    }
+}
+
 impl<W: Write> State<W> {
     fn clear(&mut self) -> io::Result<()> {
         if self.width > 0 {
@@ -63,7 +135,11 @@ impl<W: Write> State<W> {
             let filled = done * 12 / expected.len();
             (
                 format!("{}{}", "#".repeat(filled), "-".repeat(12 - filled)),
-                format!("{done}/{} tracks", expected.len()),
+                format!(
+                    "{}% / {done}/{} tracks",
+                    done * 100 / expected.len(),
+                    expected.len()
+                ),
             )
         } else {
             let mut bar = ['-'; 12];
@@ -104,15 +180,23 @@ impl<W: Write> State<W> {
 
     fn event(&mut self, event: &GreaseweazleProgressEvent) {
         match event {
+            GreaseweazleProgressEvent::PassStarted {
+                decoding,
+                cylinders,
+                heads,
+            } => {
+                self.phase = if *decoding { "Decoding" } else { "Reading" };
+                self.expected = tracks(cylinders, heads);
+                self.visited.clear();
+            }
             GreaseweazleProgressEvent::ReadingRange {
                 cylinders, heads, ..
             } => {
-                self.expected = range(cylinders, 255).zip(range(heads, 1)).map(|(c, h)| {
-                    c.into_iter()
-                        .flat_map(|c| h.iter().map(move |h| (c, *h)))
-                        .collect()
-                });
-                self.visited.clear();
+                let expected = tracks(cylinders, heads);
+                if self.expected != expected {
+                    self.visited.clear();
+                }
+                self.expected = expected;
                 if self.phase != "Decoding" {
                     self.phase = "Reading";
                 }
@@ -128,9 +212,11 @@ impl<W: Write> State<W> {
                 }
             }
             GreaseweazleProgressEvent::Converting { .. } => {
+                if self.phase != "Decoding" {
+                    self.expected = None;
+                    self.visited.clear();
+                }
                 self.phase = "Decoding";
-                self.expected = None;
-                self.visited.clear();
             }
             GreaseweazleProgressEvent::Warning(_) | GreaseweazleProgressEvent::Error(_) => {
                 // Do not overwrite diagnostics with the next animation frame.
@@ -229,6 +315,70 @@ impl<W: Write + Send + 'static> Drop for Progress<W> {
 mod tests {
     use super::*;
     use crate::greaseweazle::parse_progress_line;
+
+    #[test]
+    fn percentages_count_unique_declared_tracks_not_good_sectors_and_reset_each_command() {
+        let start = |decoding, cylinders: &str| GreaseweazleProgressEvent::PassStarted {
+            decoding,
+            cylinders: cylinders.into(),
+            heads: "0-1".into(),
+        };
+        let mut meter = PassMeter::default();
+        assert!(
+            meter
+                .event(&parse_progress_line("T79.1: IBM MFM (18/18 sectors)"))
+                .is_some_and(|s| !s.contains('%'))
+        );
+        assert_eq!(
+            meter.event(&start(false, "0,2")),
+            Some("0% Read pass (tracks)".into())
+        );
+        assert_eq!(
+            meter.event(&parse_progress_line("T2.1: IBM MFM (0/18 sectors)")),
+            Some("25% Read pass (tracks)".into())
+        );
+        assert_eq!(
+            meter.event(&parse_progress_line("T2.1: IBM MFM (18/18 sectors)")),
+            None
+        );
+        assert_eq!(meter.event(&parse_progress_line("T79.1: Raw Flux")), None);
+        assert_eq!(
+            meter.event(&parse_progress_line("Reading c=0,2:h=0-1 revs=5")),
+            None
+        );
+        for line in ["T2.0: Raw Flux", "T0.1: Raw Flux", "T0.0: Raw Flux"] {
+            meter.event(&parse_progress_line(line));
+        }
+        assert_eq!(meter.visited.len(), 4);
+        assert_eq!(meter.bucket, Some(10));
+        assert_eq!(
+            meter.event(&start(true, "0-79")),
+            Some("0% Decode pass (tracks)".into())
+        );
+        assert_eq!(
+            meter.event(&parse_progress_line("Converting in.scp -> out.img")),
+            None
+        );
+        assert!(meter.expected.is_some());
+        assert!(
+            meter
+                .event(&parse_progress_line("** WARNING: weak flux"))
+                .unwrap()
+                .contains("warning")
+        );
+        assert!(
+            meter
+                .event(&parse_progress_line("Command Failed: No Index"))
+                .unwrap()
+                .contains("error")
+        );
+        assert!(
+            meter
+                .event(&start(false, "0-999999"))
+                .unwrap()
+                .contains("working")
+        );
+    }
 
     fn state() -> State<Vec<u8>> {
         State {

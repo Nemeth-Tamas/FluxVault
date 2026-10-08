@@ -69,14 +69,10 @@ fn pace_text(state: &Value, saved: usize, fresh_saved: usize, elapsed_ms: u64) -
             "rough fresh-feed ETA {:.1} min for {n} labels",
             n as f64 * elapsed_ms as f64 / fresh_saved as f64 / 60_000.0
         ),
-        Some(n) => format!(
-            "{n} fresh labels remaining; ETA unavailable (need 3 fresh saved labels/unpaused feeding)"
-        ),
+        Some(n) => format!("{n} fresh labels remaining; ETA unavailable"),
         None => "no endpoint; ETA unavailable".into(),
     };
-    format!(
-        "PACE (this invocation, includes swaps/pauses): {pace} / {eta}. Recovery transfers and file tail are extra; not a completion promise."
-    )
+    format!("PACE (this invocation): {pace} / {eta}")
 }
 
 #[derive(Deserialize)]

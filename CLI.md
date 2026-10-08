@@ -209,6 +209,8 @@ Failed or interrupted offline decodes retain a numbered `.partial.json` attempt 
 
 Office/PDF reuse requires both a matching saved source hash and a matching saved output hash, even after a restart. An older valid-looking output with no saved binding is preserved and reported as an issue rather than silently claimed as current conversion evidence. `conversion issues` reloads saved issues on every invocation.
 
+Equivalent source bytes may move between extraction attempts after USB-to-GW recovery or generation selection. Reuse now also binds exact disk/relative identity, output paths and format/filter settings, not only the old extraction path. Already affected projects can restore missing bindings from successful same-project `Reports/ConversionHistory` records, checking actual output hashes; malformed/foreign/linked/oversized history is refused (4,096 entries, 8 MiB per record, 128 MiB search ceiling). Current bound-output hash mismatch remains a refusal, not an invitation to overwrite or adopt a valid-looking file. Run saved-only `fv process` to refresh the corrected report; historical session reports are preserved.
+
 ### Native file recovery from damaged saved images
 
 ```powershell

@@ -78,6 +78,32 @@ pub struct GreaseweazleCommand {
 }
 
 impl GreaseweazleCommand {
+    fn progress_start(&self) -> Option<GreaseweazleProgressEvent> {
+        if !matches!(self.subcommand(), "read" | "convert")
+            || !self
+                .arguments
+                .iter()
+                .any(|a| matches!(a.as_str(), "--format=ibm.1440" | "--format=ibm.720"))
+        {
+            return None;
+        }
+        let (cylinders, heads) = match self
+            .arguments
+            .iter()
+            .find_map(|a| a.strip_prefix("--tracks="))
+        {
+            Some(tracks) => {
+                let (c, h) = tracks.split_once(":h=")?;
+                (c.strip_prefix("c=")?.to_owned(), h.to_owned())
+            }
+            None => ("0-79".into(), "0-1".into()),
+        };
+        Some(GreaseweazleProgressEvent::PassStarted {
+            decoding: self.subcommand() == "convert",
+            cylinders,
+            heads,
+        })
+    }
     pub fn subcommand(&self) -> &str {
         self.arguments
             .first()
@@ -349,6 +375,13 @@ pub fn classify_info_output(stdout: &str) -> GreaseweazleDeviceStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GreaseweazleProgressEvent {
+    /// Declared command coverage, emitted only after a successful host spawn.
+    /// Track visitation measures pass progress, not recovered sectors/yield.
+    PassStarted {
+        decoding: bool,
+        cylinders: String,
+        heads: String,
+    },
     Track {
         cylinder: u32,
         head: u32,
@@ -376,6 +409,7 @@ pub enum GreaseweazleProgressEvent {
 impl GreaseweazleProgressEvent {
     pub fn display_progress(&self) -> Option<String> {
         match self {
+            Self::PassStarted { .. } => None, // UI-only; not invented host output
             Self::Track {
                 cylinder,
                 head,
@@ -700,6 +734,11 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
         }
         let mut child = crate::process_supervision::spawn(&mut cmd)
             .map_err(|error| format!("A Greaseweazle indítása sikertelen: {error}"))?;
+        if let Some(event) = command.progress_start()
+            && let Some(callback) = &mut self.progress_callback
+        {
+            callback(&event);
+        }
 
         let child_stdout = child
             .stdout
@@ -959,6 +998,9 @@ mod tests {
             Path::new("hd.scp"),
         )
         .unwrap();
+        assert!(
+            matches!(hd.progress_start(), Some(GreaseweazleProgressEvent::PassStarted { decoding: false, cylinders, heads }) if cylinders == "0-79" && heads == "0-1")
+        );
         let dd = GreaseweazleCommand::raw_flux_read(
             GreaseweazleProfile::Ibm720,
             'B',

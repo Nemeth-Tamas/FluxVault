@@ -350,18 +350,12 @@ pub(crate) fn run_conversion_mode(
     } else {
         None
     };
-    let previous_rows: HashMap<PathBuf, &JobResult> = request
-        .previous_result
-        .as_deref()
-        .or(saved_result.as_ref())
-        .map(|previous| {
-            previous
-                .rows
-                .iter()
-                .map(|row| (path_identity(&row.job.source_path), row))
-                .collect()
-        })
-        .unwrap_or_default();
+    let previous_rows = compatible_previous(
+        &planning.jobs,
+        request.previous_result.as_deref().or(saved_result.as_ref()),
+        &request.planning.reports_directory,
+        project_root,
+    )?;
     if let Some(selected) = &selected_sources
         && planning.jobs.iter().any(|job| {
             selected.contains(&path_identity(&job.source_path))
@@ -407,7 +401,6 @@ pub(crate) fn run_conversion_mode(
                 .is_none_or(|sources| sources.contains(&path_identity(&job.source_path)));
             let previous = previous_rows
                 .get(&path_identity(&job.source_path))
-                .copied()
                 .filter(|row| {
                     row.job.source_sha256 == job.source_sha256
                         && same_path(&row.job.modern_path, &job.modern_path)
@@ -526,6 +519,124 @@ fn same_path(first: &Path, second: &Path) -> bool {
             (Ok(first), Ok(second)) => first == second,
             _ => false,
         }
+}
+
+fn same_conversion_binding(old: &ConversionJob, current: &ConversionJob) -> bool {
+    // Extraction attempt paths can change after USB -> GW or generation upgrade.
+    // The content, label, relative identity, filters and delivery paths cannot.
+    old.source_sha256 == current.source_sha256
+        && old.floppy == current.floppy
+        && old.original_forensic_path == current.original_forensic_path
+        && old.delivery_original_path == current.delivery_original_path
+        && old.source_type == current.source_type
+        && old.modern_format == current.modern_format
+        && old.modern_filter == current.modern_filter
+        && old.pdf_filter == current.pdf_filter
+        && same_path(&old.modern_path, &current.modern_path)
+        && same_path(&old.pdf_path, &current.pdf_path)
+}
+
+fn compatible_previous(
+    jobs: &[ConversionJob],
+    previous: Option<&ConversionResult>,
+    reports: &Path,
+    root: &Path,
+) -> Result<HashMap<PathBuf, JobResult>, String> {
+    let mut bound = HashMap::<PathBuf, JobResult>::new();
+    let merge = |bound: &mut HashMap<PathBuf, JobResult>, rows: &[JobResult]| {
+        for job in jobs {
+            let key = path_identity(&job.source_path);
+            for donor in rows.iter().filter(|r| same_conversion_binding(&r.job, job)) {
+                let target = bound.entry(key.clone()).or_insert_with(|| donor.clone());
+                // Do not erase a hash that would detect an edited output. Fill
+                // missing bindings only from recorded successful conversions.
+                for (out, old, path) in [
+                    (&mut target.modern, &donor.modern, &job.modern_path),
+                    (&mut target.pdf, &donor.pdf, &job.pdf_path),
+                ] {
+                    if out.output_sha256.is_none()
+                        && old.state.successful()
+                        && old
+                            .output_sha256
+                            .as_ref()
+                            .is_some_and(|h| conversion::sha256_file(path).as_ref() == Ok(h))
+                    {
+                        *out = old.clone();
+                    }
+                }
+            }
+        }
+    };
+    if let Some(previous) = previous {
+        merge(&mut bound, &previous.rows);
+    }
+    let needs_history = |bound: &HashMap<PathBuf, JobResult>| {
+        jobs.iter().any(|job| {
+            let old = bound.get(&path_identity(&job.source_path));
+            (job.modern_path.exists() && old.is_none_or(|r| r.modern.output_sha256.is_none()))
+                || (job.pdf_path.exists() && old.is_none_or(|r| r.pdf.output_sha256.is_none()))
+        })
+    };
+    let history = reports.join("ConversionHistory");
+    if !needs_history(&bound) || !history.exists() {
+        return Ok(bound);
+    }
+    if history.canonicalize().map_err(|e| e.to_string())?.parent()
+        != Some(reports.canonicalize().map_err(|e| e.to_string())?.as_path())
+    {
+        return Err("Conversion history escapes Reports".into());
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&history).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if files.len() >= 4096 {
+            return Err("Conversion history exceeds 4096-record reuse bound".into());
+        }
+        files.push(entry.path());
+    }
+    files.sort();
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let mut read_bytes = 0;
+    for file in files.into_iter().rev() {
+        if !needs_history(&bound) {
+            break;
+        }
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        if !name.starts_with("ConversionState-") && !name.starts_with("PreviousConversionState-") {
+            continue;
+        }
+        if file.extension().is_none_or(|s| s != "json") {
+            continue;
+        }
+        let meta = fs::symlink_metadata(&file).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 {
+                return Err("Conversion history reparse point refused".into());
+            }
+        }
+        if !meta.is_file() || meta.len() > 8 * 1024 * 1024 {
+            return Err("Invalid bounded conversion history record".into());
+        }
+        let mut bytes = Vec::new();
+        File::open(&file)
+            .map_err(|e| e.to_string())?
+            .take(8 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        read_bytes += bytes.len();
+        if bytes.len() > 8 * 1024 * 1024 || read_bytes > 128 * 1024 * 1024 {
+            return Err("Conversion history exceeds bounded reuse search".into());
+        }
+        let snapshot: ConversionSnapshot = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Invalid conversion history record: {e}"))?;
+        if snapshot.schema_version != 1 || snapshot.project_root != root {
+            return Err("Conversion history belongs to a different project/schema".into());
+        }
+        merge(&mut bound, &snapshot.result.rows);
+    }
+    Ok(bound)
 }
 
 fn inspect_without_conversion(
@@ -1277,6 +1388,96 @@ mod tests {
                 .unwrap()
                 .any(|entry| fs::read(entry.unwrap().path()).unwrap() == initial_state)
         );
+        // Same bytes/identity delivered from a different extraction attempt.
+        let mut relocated = previous.clone();
+        relocated.rows[0].job.source_path = root.join("OldEvidence/previous-attempt/sample.rtf");
+        fs::create_dir_all(relocated.rows[0].job.source_path.parent().unwrap()).unwrap();
+        fs::copy(&job.source_path, &relocated.rows[0].job.source_path).unwrap();
+        save_snapshot(&planning_request.reports_directory, &root, &relocated).unwrap();
+        let transferred = run_conversion_mode(&request, &|_| {}, &|_, _| {}, true).unwrap();
+        assert_eq!(transferred.reused_outputs, 2);
+        assert_eq!(transferred.ok, 1);
+        assert!(!request.command_audit_path.exists());
+        // Already affected pilots retain the successful historical bindings.
+        let mut rejected = transferred.clone();
+        rejected.rows[0].modern = failure("old source-path-only rejection".into());
+        rejected.rows[0].pdf = failure("old source-path-only rejection".into());
+        save_snapshot(&planning_request.reports_directory, &root, &rejected).unwrap();
+        let restored = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(restored.reused_outputs, 2);
+        assert!(!request.command_audit_path.exists());
+        // Different source content/filter/label cannot inherit those bindings.
+        for change in 0..3 {
+            let mut incompatible = job.clone();
+            match change {
+                0 => incompatible.source_sha256 = "different content".into(),
+                1 => incompatible.pdf_filter = "different filter".into(),
+                _ => incompatible.floppy = "002".into(),
+            }
+            let bound = compatible_previous(
+                &[incompatible],
+                Some(&relocated),
+                &planning_request.reports_directory,
+                &root,
+            )
+            .unwrap();
+            assert!(bound.is_empty());
+        }
+        // Historical fallback refuses malformed, foreign or oversized records,
+        // just as the current snapshot does. Only disposable fixture files here.
+        let bad_history = root.join("Reports/ConversionHistory/PreviousConversionState-zz.json");
+        let mut unmatched = job.clone();
+        unmatched.source_sha256 = "no compatible donor".into();
+        fs::write(&bad_history, b"invalid history").unwrap();
+        assert!(
+            compatible_previous(
+                &[unmatched.clone()],
+                None,
+                &planning_request.reports_directory,
+                &root
+            )
+            .unwrap_err()
+            .contains("Invalid conversion history")
+        );
+        let mut foreign: serde_json::Value = serde_json::from_slice(&initial_state).unwrap();
+        foreign["project_root"] = serde_json::json!(root.join("another-project"));
+        fs::write(&bad_history, serde_json::to_vec(&foreign).unwrap()).unwrap();
+        assert!(
+            compatible_previous(
+                &[unmatched.clone()],
+                None,
+                &planning_request.reports_directory,
+                &root
+            )
+            .unwrap_err()
+            .contains("different project")
+        );
+        File::create(&bad_history)
+            .unwrap()
+            .set_len(8 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            compatible_previous(
+                &[unmatched],
+                None,
+                &planning_request.reports_directory,
+                &root
+            )
+            .unwrap_err()
+            .contains("bounded conversion history")
+        );
+        fs::remove_file(&bad_history).unwrap();
+        // A valid-looking edited output is still refused; history is not a way
+        // to overwrite/adopt it. Its original recorded hash remains authoritative.
+        fs::write(&job.pdf_path, b"%PDF-1.7\nchanged output\n%%EOF\n").unwrap();
+        let changed = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(changed.partial, 1);
+        assert!(changed.rows[0].pdf.detail.contains("hash changed"));
+        assert_eq!(
+            fs::read(&job.pdf_path).unwrap(),
+            b"%PDF-1.7\nchanged output\n%%EOF\n"
+        );
+        assert!(!request.command_audit_path.exists());
         fs::write(&state, b"broken state").unwrap();
         assert!(
             run_conversion(&request, &|_| {}, &|_, _| {})
