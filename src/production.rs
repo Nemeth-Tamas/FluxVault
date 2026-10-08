@@ -752,7 +752,29 @@ impl TransferGuard {
 }
 
 fn status_value(j: &Journal) -> Value {
+    let unclaimed = j.last.map(|last| {
+        let occupied = j
+            .occupied
+            .union(&j.disks.keys().copied().collect())
+            .filter(|n| **n >= j.first && **n <= last)
+            .count() as u64;
+        u64::from(last) - u64::from(j.first) + 1 - occupied
+    });
+    let initial_pending = j
+        .disks
+        .values()
+        .filter(|d| {
+            d.ticket.as_ref().is_some_and(|t| {
+                t.work == Work::Fresh
+                    && matches!(
+                        d.phase,
+                        Phase::Reserved | Phase::Reading | Phase::Interrupted
+                    )
+            })
+        })
+        .count();
     json!({"schema":1,"paused":j.paused,"next_fresh_disk":next(j),"first":j.first,"last":j.last,
+        "remaining_unclaimed_fresh_labels":unclaimed,"pending_initial_reads":initial_pending,
         "usb_recovery_queue":j.disks.iter().filter(|(_, d)| d.phase==Phase::AwaitGw).map(|(n, _)| *n).collect::<Vec<_>>(),
         // A saved partial still held in USB is transferable by gNNN, but not
         // yet in the removal-confirmed queue. Keep those two custody facts

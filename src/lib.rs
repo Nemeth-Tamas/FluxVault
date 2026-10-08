@@ -10,6 +10,7 @@ mod conversion_lock;
 pub mod conversion_run;
 mod delivery_maintenance;
 pub mod dmde_logs;
+pub mod dual_benchmark;
 pub mod external_tools;
 pub mod extraction;
 pub mod fat12;

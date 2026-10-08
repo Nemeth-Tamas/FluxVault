@@ -55,6 +55,7 @@ A damaged boot sector no longer prevents USB geometry/protection probing. If USB
 ```powershell
 fv scan --double --write-blocker-verified
 fv production status
+fv production benchmark
 fv processing status
 ```
 
@@ -68,7 +69,23 @@ Background extraction/conversion/audit/reporting and managed capture packing run
 
 Need a break? Type `PAUSE` (`p`). It blocks new `uN`/`gN` commands before changing custody, but lets existing reads finish and background work continue. Wait for **SAVED** before removing a disk; `u out`/`g out` still work while paused. Type `RESUME` (`r`), then your next numbered read command when ready. Resume does not read anything automatically. The pause persists across exit/restart: reopen with the usual dual command, then explicitly `RESUME`. Older journals without a pause field start enabled, still requiring numbered confirmations. A final range with all removals/queues complete drains normally, even if paused. This is feeding pause, not in-flight capture cancellation or suspension of the file-processing workers.
 
-Finished sessions save unique `Reports/DualScan-*.json` files: per-station read/decode timings, image hashes, missing counts, errors, final queue, processing and packing results. New report schema 2 adds `feeding_elapsed_ms` (the event loop, including swaps/waits) and `session_elapsed_ms` (preflight through final processing, before report publication). These are invocation-local, not accumulated across restarts. Read timings can overlap; their sum is not wall-clock throughput. Existing `benchmark report` remains the single-GW report, not a dual speed/yield claim.
+Finished sessions save unique `Reports/DualScan-*.json` files: per-station read/decode timings, image hashes, missing counts, errors, final queue, processing and packing results. Schema 3 retains `feeding_elapsed_ms` (the event loop, including swaps/waits) and `session_elapsed_ms` (preflight through final processing, before report publication), and adds the durable benchmark summary/export paths. Older schema 1/2 reports remain unchanged. Read timings can overlap; their sum is not wall-clock throughput.
+
+## Pace and saved timing reports
+
+The recurring `PACE` line shows distinct saved labels/hour for **this invocation**, including swaps and pauses. A rough **fresh-feed ETA** appears after three distinct fresh saves when an endpoint is set and feeding is not paused. It includes pending initial reads. Re-reading a USB partial on GW never doubles that label; transfers of older disks do not supply fresh ETA samples. Remaining recovery transfers, file processing and packaging are not predicted. This is an observed-sample estimate, not a promised finish time; restart begins a new live sample.
+
+```powershell
+# Offline: inspect verified custody and export a new timing snapshot.
+fv production benchmark
+fv production benchmark --json
+```
+
+New dual scans sync events into `Logs/DualBenchmark/.fluxvault-dual-benchmark-*.jsonl`: configuration/build fingerprint, confirmed reader starts, saved sealed receipts, failures, PAUSE/RESUME, explicit OUT and completion. Finished runs automatically export JSON/CSV to `Reports/DualBenchmark`; the offline command creates additional uniquely named snapshots without touching media or invoking host tools. These private logs/reports stay outside customer packages. Existing `fv benchmark report` remains the **single-GW** report.
+
+The summary separates verified labels, timed labels and per-station receipts, and reports reader busy **union** and simultaneous USB/GW interval time. Intervals include decode/publication, not only physical rotation. Completed invocation wall times include swaps/pauses/preflight/file tail and exclude gaps between invocations; the timing log starts after coordinator opening, so it differs slightly from the outer DualScan timer. An interrupted invocation retains its last durable elapsed lower bound but has **unknown total duration**, not an invented finish. A trailing incomplete line is flagged; malformed committed records or receipts disagreeing with verified custody are refused and preserved.
+
+OUT counts are explicit confirmation commands, not measured physical touches; replacing a SAVED disk can confirm removal implicitly. Neither command counts nor mock reader rates prove human handling time, recovery yield or a six-hour acceptance. Older pilots have verified receipts but no new timing events; reports flag missing timings rather than synthesizing historical measurements. Run the next live cohort with the newly built executable to collect them.
 
 `production status` now prints concise station/custody actions rather than the entire receipt JSON. `--json` retains detailed receipts and adds `usb_transfer_pending`, which includes saved partials still held in USB as well as set-aside ones. The original `usb_recovery_queue` remains removal-confirmed only. Offline inspection cannot prove that a recorded READING disk is actively reading; it tells you to check the original console or resume/reconfirm after it ends, never to blindly move it.
 

@@ -77,6 +77,7 @@ fn session(c: Coordinator) -> Session {
         workers: BTreeMap::new(),
         started: BTreeMap::new(),
         progress: BTreeMap::new(),
+        pace: crate::dual_benchmark::Live::new(),
         closing: Arc::new(AtomicBool::new(false)),
     }
 }
@@ -211,7 +212,18 @@ fn pause_preserves_saved_custody_and_resume_itself_launches_no_reader() {
         tx.send(Event::Input(Some(text.into()))).unwrap();
     }
     let mut output = Vec::new();
-    let value = feed(session(c), rx, tx, reader, None, None, &mut output, false).unwrap();
+    let value = feed(
+        session(c),
+        rx,
+        tx,
+        reader,
+        None,
+        None,
+        &mut output,
+        false,
+        None,
+    )
+    .unwrap();
     assert_eq!(value["completed_this_session"], 0);
     assert_eq!(value["state"]["paused"], true);
     assert_eq!(value["state"]["usb_recovery_queue"], json!([1]));
@@ -267,8 +279,14 @@ fn live_event_pump_overlaps_both_readers_and_transfers_old_usb_label_without_sta
     });
     let (tx, rx) = mpsc::sync_channel(64);
     let producer = tx.clone();
+    let telemetry_project = p.clone();
     let worker = thread::spawn(move || {
         let mut output = Vec::new();
+        let mut telemetry = crate::benchmark::Session::start_dual(
+            &telemetry_project,
+            json!({"mode":"dual","project_root":telemetry_project.root(),"paused":false}),
+        )
+        .unwrap();
         let value = feed(
             session(c),
             rx,
@@ -278,8 +296,10 @@ fn live_event_pump_overlaps_both_readers_and_transfers_old_usb_label_without_sta
             None,
             &mut output,
             true,
+            Some(&mut telemetry),
         )
         .unwrap();
+        crate::dual_benchmark::record(&mut telemetry, "dual_session_finished", json!({})).unwrap();
         (value, String::from_utf8(output).unwrap())
     });
     for text in ["u1", "g2", "g99", ""] {
@@ -312,6 +332,15 @@ fn live_event_pump_overlaps_both_readers_and_transfers_old_usb_label_without_sta
     assert!(output.contains("\x1b[1;31m") && output.contains("USB / PARTIAL SAVED 001"));
     assert!(output.contains("\x1b[1;32m") && output.contains("GW / OK SAVED 001"));
     assert!(output.contains("NO NEW READ"));
+    assert!(output.contains("PACE (this invocation"));
+    let benchmark = crate::dual_benchmark::report(&p).unwrap();
+    assert_eq!(benchmark["timed_saved_unique_labels"], 3);
+    assert_eq!(benchmark["unique_timed_receipts"], 4);
+    assert_eq!(benchmark["numbered_read_confirmations"], 4);
+    assert_eq!(benchmark["finished_sessions"], 1);
+    assert_eq!(benchmark["reader_failures"], 0);
+    assert_eq!(benchmark["timings"].as_array().unwrap().len(), 4);
+    assert!(benchmark["warnings"].as_array().unwrap().is_empty());
     assert_eq!(
         fs::read(p.images_dir().join("001_attempt_001.img")).unwrap(),
         usb_source
@@ -351,6 +380,7 @@ fn quit_drains_inflight_work_ignores_later_commands_and_retains_removal_on_reope
         None,
         &mut Vec::new(),
         false,
+        None,
     )
     .unwrap();
     assert_eq!(value["completed_this_session"], 1);
@@ -393,6 +423,7 @@ fn failure_keeps_usb_identity_but_gw_still_finishes_and_saved_usb_retry_adopts_w
         None,
         &mut Vec::new(),
         false,
+        None,
     )
     .unwrap();
     assert_eq!(value["state"]["disks"]["1"]["phase"], "interrupted");

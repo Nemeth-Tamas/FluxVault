@@ -126,6 +126,25 @@ fn legacy_production_journal_without_pause_field_reopens_as_feeding_enabled() {
 }
 
 #[test]
+fn remaining_fresh_count_deduplicates_occupied_receipts_after_restart() {
+    let p = project();
+    evidence(&p, 2, 1, Station::Greaseweazle, &[], 14);
+    let mut c = Coordinator::open(p.clone(), Some(5), false).unwrap();
+    assert_eq!(c.status()["remaining_unclaimed_fresh_labels"], 4);
+    let usb = start(&mut c, Station::Usb, 1);
+    assert_eq!(c.status()["remaining_unclaimed_fresh_labels"], 3);
+    assert_eq!(c.status()["pending_initial_reads"], 1);
+    evidence(&p, 1, 1, Station::Usb, &[], 14);
+    c.complete(&usb, 1).unwrap();
+    drop(c);
+    let c = Coordinator::open(p.clone(), Some(5), false).unwrap();
+    assert_eq!(c.status()["remaining_unclaimed_fresh_labels"], 3);
+    assert_eq!(c.status()["pending_initial_reads"], 0);
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
 fn both_stations_take_fresh_disks_and_usb_partial_returns_by_its_old_label() {
     let p = project();
     let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();

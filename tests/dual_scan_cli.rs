@@ -180,7 +180,19 @@ fn dual_cli_mock_gw_publishes_once_packs_and_holds_usb_across_projects() {
     assert_eq!(value["completed_this_session"], 1);
     assert_eq!(value["state"]["disks"]["1"]["phase"], "complete");
     assert_eq!(value["source_media_access"], "read_only");
-    assert_eq!(value["report_schema"], 2);
+    assert_eq!(value["report_schema"], 3);
+    assert_eq!(value["dual_benchmark"]["finished_sessions"], 1);
+    assert_eq!(value["dual_benchmark"]["timed_saved_unique_labels"], 1);
+    assert_eq!(value["dual_benchmark"]["numbered_read_confirmations"], 1);
+    assert!(PathBuf::from(value["dual_telemetry"].as_str().unwrap()).is_file());
+    assert!(
+        PathBuf::from(
+            value["dual_benchmark_export"]["receipts_csv"]
+                .as_str()
+                .unwrap()
+        )
+        .is_file()
+    );
     assert!(
         value["session_elapsed_ms"].as_u64().unwrap()
             >= value["feeding_elapsed_ms"].as_u64().unwrap()
@@ -208,6 +220,52 @@ fn dual_cli_mock_gw_publishes_once_packs_and_holds_usb_across_projects() {
     assert!(text.contains("saved state; not a live reader probe"));
     assert!(text.contains("INSERT fresh 002 in USB"));
     assert!(!text.contains('\x1b'));
+    let result = f
+        .command()
+        .args(["production", "benchmark", "--json"])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let benchmark: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(benchmark["benchmark"]["unique_timed_receipts"], 1);
+    assert_eq!(benchmark["physical_media_access"], false);
+    // Timing records cannot relabel or certify a different receipt, even when
+    // their JSON/session sequence is otherwise valid. A refusal preserves the
+    // log and creates no new exported snapshot.
+    let path = PathBuf::from(value["dual_telemetry"].as_str().unwrap());
+    let original = fs::read_to_string(&path).unwrap();
+    let exports = f.project.reports_dir().join("DualBenchmark");
+    let count = fs::read_dir(&exports).unwrap().count();
+    for (field, changed) in [
+        ("disk", json!(2)),
+        ("station", json!("USB")),
+        ("generation", json!(999)),
+        ("attempt", json!(2)),
+        ("bad_sectors", json!(1)),
+        ("image_sha256", json!("0".repeat(64))),
+        ("read_decode_ms", json!(u64::MAX)),
+    ] {
+        let mut events: Vec<Value> = original
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        let saved = events
+            .iter_mut()
+            .find(|e| e["kind"] == "dual_receipt_saved")
+            .unwrap();
+        saved["data"][field] = changed;
+        let edited = events.iter().map(|e| format!("{e}\n")).collect::<String>();
+        fs::write(&path, &edited).unwrap();
+        let refused = f
+            .command()
+            .args(["production", "benchmark", "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(refused.status.code(), Some(2), "accepted changed {field}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+        assert_eq!(fs::read_dir(&exports).unwrap().count(), count);
+    }
+    fs::write(path, original).unwrap();
 }
 
 #[test]
@@ -230,6 +288,17 @@ fn actual_process_exit_after_saved_receipt_keeps_removal_and_next_label_without_
     assert_eq!(value["completed_this_session"], 1);
     assert_eq!(value["state"]["disks"]["1"]["phase"], "complete");
     assert_eq!(value["state"]["disks"]["2"]["phase"], "complete");
+    assert_eq!(value["dual_benchmark"]["verified_saved_unique_labels"], 2);
+    assert_eq!(value["dual_benchmark"]["finished_sessions"], 1);
+    assert_eq!(value["dual_benchmark"]["incomplete_sessions"], 1);
+    // Killing after the custody commit may precede the timing write. Replay
+    // keeps that gap explicit instead of assuming a timing exists for 001.
+    assert!(
+        value["dual_benchmark"]["timed_saved_unique_labels"]
+            .as_u64()
+            .unwrap()
+            >= 1
+    );
     assert_eq!(
         imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
             .unwrap()

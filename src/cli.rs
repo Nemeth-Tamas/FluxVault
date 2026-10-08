@@ -76,6 +76,7 @@ Usage:
   fluxvault scan --double --plan [--last-disk N]
                                     Offline dual-station preview; no drives opened
   fluxvault production status       Inspect saved coordinator state offline
+  fluxvault production benchmark    Inspect durable dual-session timings offline
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
                                     Guided read-only USB loop; confirm each numbered label
   fluxvault tools check [--project PATH]
@@ -684,6 +685,35 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         None
     };
     let output = match positional.first().map(String::as_str) {
+        Some("production")
+            if positional == ["production", "benchmark"] && destination.is_none() =>
+        {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let result = crate::dual_benchmark::report(&project)?;
+            let (summary, csv) = crate::dual_benchmark::export(&project, &result)?;
+            if json_output {
+                Ok(json!({"benchmark":result,"summary":summary,"receipts_csv":csv,"physical_media_access":false}).to_string())
+            } else {
+                Ok(format!(
+                    "Dual benchmark (saved evidence only): {} verified saved labels, {} labels with recorded timings.\n{} finished / {} incomplete invocations; {} numbered read confirmations; {} reader failures.\nRecorded simultaneous reader time: {:.1}s. Finished invocation wall time: {:.1}s (includes swaps/pauses/tail, excludes gaps between invocations).\nWarnings: {}\nSummary: {}\nPer-receipt CSV: {}\nUse --json for session/receipt details. No physical media accessed.",
+                    result["verified_saved_unique_labels"],
+                    result["timed_saved_unique_labels"],
+                    result["finished_sessions"],
+                    result["incomplete_sessions"],
+                    result["numbered_read_confirmations"],
+                    result["reader_failures"],
+                    result["recorded_both_readers_overlap_ms"]
+                        .as_u64()
+                        .unwrap_or(0) as f64
+                        / 1000.0,
+                    result["finished_session_elapsed_ms"].as_u64().unwrap_or(0) as f64 / 1000.0,
+                    result["warnings"],
+                    summary.display(),
+                    csv.display()
+                ))
+            }
+        }
         Some("production") if positional == ["production", "status"] && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;

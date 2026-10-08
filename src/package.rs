@@ -611,6 +611,16 @@ mod tests {
             b"internal metrics",
         )
         .unwrap();
+        fs::create_dir_all(project.join("Logs/DualBenchmark")).unwrap();
+        fs::write(
+            project.join("Logs/DualBenchmark/.fluxvault-dual-benchmark-test.jsonl"),
+            b"private station timing",
+        )
+        .unwrap();
+        fs::create_dir_all(project.join("Reports/DualBenchmark")).unwrap();
+        for name in ["DualBenchmark-test.json", "DualBenchmark-test.csv"] {
+            fs::write(project.join("Reports/DualBenchmark").join(name), b"private").unwrap();
+        }
         fs::write(
             project.join("Extracted").join("001").join("customer.doc"),
             b"document",
@@ -731,6 +741,16 @@ mod tests {
                 .is_err()
         );
         assert!(zip.by_name("Reports/Benchmark/Benchmark-test.csv").is_err());
+        assert!(
+            zip.by_name("Logs/DualBenchmark/.fluxvault-dual-benchmark-test.jsonl")
+                .is_err()
+        );
+        for name in ["DualBenchmark-test.json", "DualBenchmark-test.csv"] {
+            assert!(
+                zip.by_name(&format!("Reports/DualBenchmark/{name}"))
+                    .is_err()
+            );
+        }
         assert!(
             zip.by_name("Flux/Recovery/001_attempt_001_provenance.json")
                 .is_ok()

@@ -504,7 +504,10 @@ fn display(
     writeln!(output, "NEXT FRESH: {} | USB -> GW pending: {} | uN / gN / STATUS / PAUSE / RESUME / QUIT\nShared numbering: a fresh label goes to ONE station, never both.",
         session.coordinator.next_fresh_disk().map_or("finished".into(), |n| format!("{n:03}")),
         state["usb_transfer_pending"])
-        .and_then(|_| output.flush()).map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    writeln!(output, "{}", session.pace.text(&state))
+        .and_then(|_| output.flush())
+        .map_err(|e| e.to_string())
 }
 
 struct Session {
@@ -512,6 +515,7 @@ struct Session {
     workers: BTreeMap<u8, thread::JoinHandle<()>>,
     started: BTreeMap<u8, Instant>,
     progress: BTreeMap<u8, String>,
+    pace: crate::dual_benchmark::Live,
     closing: Arc<AtomicBool>,
 }
 impl Drop for Session {
@@ -544,6 +548,7 @@ fn feed(
     packing: Option<&crate::flux_archive::Queue>,
     output: &mut impl Write,
     color: bool,
+    mut telemetry: Option<&mut crate::benchmark::Session>,
 ) -> Result<Value, String> {
     let feeding_started = Instant::now();
     let mut draining = false;
@@ -588,7 +593,17 @@ fn feed(
                     Ok(Command::Status) => display(&session, output, color, draining),
                     Ok(command @ (Command::Pause | Command::Resume)) => {
                         let paused = matches!(command, Command::Pause);
-                        session.coordinator.set_paused(paused)
+                        let result = session.coordinator.set_paused(paused);
+                        if result.is_ok()
+                            && let Some(log) = telemetry.as_deref_mut()
+                        {
+                            crate::dual_benchmark::record(
+                                log,
+                                if paused { "dual_pause" } else { "dual_resume" },
+                                json!({}),
+                            )?;
+                        }
+                        result
                             .and_then(|_| terminal::banner(output, color, Cue::Action,
                                 if paused { "FEEDING PAUSED" } else { "FEEDING RESUMED / NO AUTOMATIC READ" },
                                 if paused { "No new reads. Active reads finish; wait for SAVED before removal. Background files continue. RESUME or QUIT." }
@@ -600,14 +615,33 @@ fn feed(
                             .coordinator
                             .held(station)
                             .ok_or("That station has no held disk".to_string());
-                        held.and_then(|(t, _)| session.coordinator.removed(&t, true))
-                            .and_then(|_| display(&session, output, color, draining))
+                        let result = held.and_then(|(t, _)| {
+                            session.coordinator.removed(&t, true)?;
+                            Ok(t)
+                        });
+                        if let Ok(ticket) = &result
+                            && let Some(log) = telemetry.as_deref_mut()
+                        {
+                            crate::dual_benchmark::record(
+                                log,
+                                "dual_removal_confirmed",
+                                json!({"disk":ticket.disk,"station":station_name(station)}),
+                            )?;
+                        }
+                        result.and_then(|_| display(&session, output, color, draining))
                     }
                     Ok(Command::Read(station, disk)) => {
                         match begin(&mut session.coordinator, station, disk) {
                             Err(e) => Err(e),
                             Ok(ticket) => {
                                 let guard = session.coordinator.transfer_guard(&ticket)?;
+                                if let Some(log) = telemetry.as_deref_mut() {
+                                    crate::dual_benchmark::record(
+                                        log,
+                                        "dual_read_started",
+                                        json!({"disk":ticket.disk,"station":station_name(ticket.station),"generation":ticket.generation,"work":ticket.work,"retry":ticket.retry}),
+                                    )?;
+                                }
                                 let read = reader.clone();
                                 let tx = tx.clone();
                                 let closing = session.closing.clone();
@@ -672,6 +706,18 @@ fn feed(
                             .iter()
                             .find(|a| a.attempt_number == done.attempt)
                             .ok_or("Saved receipt vanished")?;
+                        session
+                            .pace
+                            .saved(ticket.disk, ticket.work == crate::production::Work::Fresh);
+                        if let Some(log) = telemetry.as_deref_mut() {
+                            crate::dual_benchmark::record(
+                                log,
+                                "dual_receipt_saved",
+                                json!({"disk":ticket.disk,"station":station_name(ticket.station),"generation":ticket.generation,
+                                "attempt":done.attempt,"image_sha256":a.sha256,"bad_sectors":a.bad_sectors.len(),"read_decode_ms":read_ms,
+                                "gw_physical_reads_reported":done.flux.as_ref().map(|f| f.physical_reads_this_run)}),
+                            )?;
+                        }
                         if let Some(queue) = processing
                             && let Err(e) =
                                 queue.enqueue_attempt(ticket.disk, done.attempt, &a.sha256)
@@ -717,6 +763,14 @@ fn feed(
                         session
                             .coordinator
                             .failed(&ticket, &error.chars().take(2000).collect::<String>())?;
+                        if let Some(log) = telemetry.as_deref_mut() {
+                            crate::dual_benchmark::record(
+                                log,
+                                "dual_read_failed",
+                                json!({"disk":ticket.disk,"station":station_name(ticket.station),"generation":ticket.generation,
+                                "read_decode_ms":read_ms,"error":error.chars().take(2000).collect::<String>()}),
+                            )?;
+                        }
                         terminal::banner(
                             output,
                             color,
@@ -768,6 +822,13 @@ fn feed(
     }
     let mut project = session.coordinator.project.clone();
     project.set_current_disk_number_without_session(session.coordinator.resume_cursor())?;
+    if let Some(log) = telemetry.as_deref_mut() {
+        crate::dual_benchmark::record(
+            log,
+            "dual_feeding_finished",
+            json!({"saved_results":completed,"next_disk":session.coordinator.resume_cursor()}),
+        )?;
+    }
     Ok(
         json!({"completed_this_session":completed,"feeding_elapsed_ms":crate::benchmark::milliseconds(feeding_started.elapsed()),"measurements":measurements,"state":session.coordinator.status(),"errors":errors,"source_media_access":"read_only"}),
     )
@@ -778,6 +839,13 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
     crate::processing::validate_workspace(&project)?;
     let selected = settings(&project, &options)?;
     let coordinator = Coordinator::open(project.clone(), selected.last, false)?;
+    let mut telemetry = crate::benchmark::Session::start_dual(
+        &project,
+        json!({
+            "mode":"dual","project_root":project.root().canonicalize().map_err(|e|e.to_string())?,
+            "selectors":selected,"conversion_workers":options.workers,"acquisition_only":options.acquisition_only,"paused":coordinator.paused()
+        }),
+    )?;
     let usb_reservation = UsbReservation::acquire(&selected.usb)?;
     let gw_reservation = GreaseweazleReservation::acquire()?;
     let tools = external_tools::load_settings()?;
@@ -882,6 +950,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
         workers: BTreeMap::new(),
         started: BTreeMap::new(),
         progress: BTreeMap::new(),
+        pace: crate::dual_benchmark::Live::new(),
         closing: Arc::new(AtomicBool::new(false)),
     };
     // Keep the owner across final processing too, even after the producer ends.
@@ -895,6 +964,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
         Some(&packing),
         &mut stderr,
         options.color,
+        Some(&mut telemetry),
     );
     let outcome = processing.map(|q| q.finish());
     let storage_errors = packing.finish();
@@ -911,8 +981,20 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
             Err(e) => value["processing"] = json!({"error":e,"exit_code":3}),
         }
     }
-    value["report_schema"] = json!(2);
+    value["report_schema"] = json!(3);
     value["session_elapsed_ms"] = json!(crate::benchmark::milliseconds(run_started.elapsed()));
+    crate::dual_benchmark::record(
+        &mut telemetry,
+        "dual_session_finished",
+        json!({"completed_this_session":value["completed_this_session"],
+        "processing_exit_code":value["processing"]["exit_code"],
+        "background_error_count":value["background_processing"]["errors"].as_array().map_or(0,|a|a.len()),
+        "storage_error_count":value["capture_storage_errors"].as_array().map_or(0,|a|a.len())}),
+    )?;
+    value["dual_telemetry"] = json!(telemetry.path());
+    value["dual_benchmark"] = crate::dual_benchmark::report(&project)?;
+    let (summary, csv) = crate::dual_benchmark::export(&project, &value["dual_benchmark"])?;
+    value["dual_benchmark_export"] = json!({"summary":summary,"receipts_csv":csv});
     let reports = project
         .reports_dir()
         .canonicalize()

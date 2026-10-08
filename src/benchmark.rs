@@ -27,9 +27,10 @@ pub(crate) struct Session {
     id: String,
     sequence: u64,
     started: Instant,
+    max_record_bytes: Option<usize>,
 }
 
-fn directory(project: &ProjectState, base: &str) -> Result<PathBuf, String> {
+fn directory_named(project: &ProjectState, base: &str, name: &str) -> Result<PathBuf, String> {
     let root = project.root().canonicalize().map_err(|e| e.to_string())?;
     let root_text = root.to_string_lossy().to_ascii_uppercase();
     if ["A:\\", "B:\\", "\\\\?\\A:\\", "\\\\?\\B:\\"]
@@ -43,7 +44,7 @@ fn directory(project: &ProjectState, base: &str) -> Result<PathBuf, String> {
     if parent.parent() != Some(root.as_path()) {
         return Err("Benchmark output directory escapes the project".to_owned());
     }
-    let child = parent.join("Benchmark");
+    let child = parent.join(name);
     if child.exists()
         && !fs::symlink_metadata(&child)
             .map_err(|e| e.to_string())?
@@ -60,6 +61,14 @@ fn directory(project: &ProjectState, base: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+fn directory(project: &ProjectState, base: &str) -> Result<PathBuf, String> {
+    directory_named(project, base, "Benchmark")
+}
+
+pub(crate) fn dual_output_directory(project: &ProjectState) -> Result<PathBuf, String> {
+    directory_named(project, "Reports", "DualBenchmark")
+}
+
 fn nonce() -> Result<String, String> {
     Ok(format!(
         "{}-{}",
@@ -73,9 +82,35 @@ fn nonce() -> Result<String, String> {
 
 impl Session {
     pub(crate) fn start(project: &ProjectState, configuration: Value) -> Result<Self, String> {
-        let dir = directory(project, "Logs")?;
+        Self::start_in(project, configuration, "Benchmark", ".fluxvault-benchmark-")
+    }
+
+    pub(crate) fn start_dual(project: &ProjectState, configuration: Value) -> Result<Self, String> {
+        Self::start_in(
+            project,
+            configuration,
+            "DualBenchmark",
+            ".fluxvault-dual-benchmark-",
+        )
+    }
+
+    fn start_in(
+        project: &ProjectState,
+        configuration: Value,
+        folder: &str,
+        prefix: &str,
+    ) -> Result<Self, String> {
+        if folder == "DualBenchmark"
+            && serde_json::to_vec(&configuration)
+                .map_err(|e| e.to_string())?
+                .len()
+                > 48_000
+        {
+            return Err("Oversized dual benchmark configuration".into());
+        }
+        let dir = directory_named(project, "Logs", folder)?;
         let id = nonce()?;
-        let path = dir.join(format!(".fluxvault-benchmark-{id}.jsonl"));
+        let path = dir.join(format!("{prefix}{id}.jsonl"));
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -91,6 +126,7 @@ impl Session {
             id,
             sequence: 0,
             started: Instant::now(),
+            max_record_bytes: (folder == "DualBenchmark").then_some(65_536),
         };
         session.record(
             "session_started",
@@ -105,6 +141,10 @@ impl Session {
         &self.path
     }
 
+    pub(crate) fn elapsed_ms(&self) -> u64 {
+        milliseconds(self.started.elapsed())
+    }
+
     pub(crate) fn record(&mut self, kind: &str, data: Value) -> Result<(), String> {
         let event = Event {
             schema_version: 1,
@@ -116,6 +156,12 @@ impl Session {
         };
         let mut bytes = serde_json::to_vec(&event).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
+        if self
+            .max_record_bytes
+            .is_some_and(|limit| bytes.len() > limit)
+        {
+            return Err("Oversized dual benchmark event; no bytes appended".into());
+        }
         self.file
             .write_all(&bytes)
             .and_then(|_| self.file.sync_data())
