@@ -974,12 +974,12 @@ fn write_summary(path: &Path, rows: &[JobResult], converted_root: &Path) -> Resu
         .map_err(|error| format!("ConversionSummary fejléc hiba: {error}"))?;
     for row in rows {
         let modern_path = if row.modern.state.successful() {
-            relative_output(&row.job.modern_path, converted_root)
+            relative_output(&row.job.modern_path, converted_root)?
         } else {
             String::new()
         };
         let pdf_path = if row.pdf.state.successful() {
-            relative_output(&row.job.pdf_path, converted_root)
+            relative_output(&row.job.pdf_path, converted_root)?
         } else {
             String::new()
         };
@@ -1039,11 +1039,29 @@ fn write_failures(path: &Path, rows: &[JobResult]) -> Result<(), String> {
         .map_err(|error| format!("ConversionFailures nem írható {}: {error}", path.display()))
 }
 
-fn relative_output(path: &Path, root: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('/', "\\")
+fn relative_output(path: &Path, root: &Path) -> Result<String, String> {
+    // Planning and reopened project paths can use different Windows spellings
+    // (DOS versus verbatim). Resolve both; never fall back to an absolute CSV
+    // path, and never strip a textual prefix without checking confinement.
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve conversion output root: {e}"))?;
+    let output = path
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve conversion output {}: {e}", path.display()))?;
+    let relative = output.strip_prefix(&root).map_err(|_| {
+        format!(
+            "Conversion output escapes Converted folder: {}",
+            path.display()
+        )
+    })?;
+    if relative.as_os_str().is_empty() || !output.is_file() {
+        return Err(format!(
+            "Conversion output is not a file: {}",
+            path.display()
+        ));
+    }
+    Ok(relative.to_string_lossy().replace('/', "\\"))
 }
 
 fn unix_ms() -> u64 {
@@ -1058,6 +1076,49 @@ fn unix_ms() -> u64 {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn summary_output_paths_resolve_equivalent_roots_and_refuse_escape() {
+        let temp = std::env::temp_dir().join(format!(
+            "fv-summary-path-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let converted = temp.join("Converted");
+        let output = converted.join("007/Dr. Anka [from DOC].docx");
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+        fs::write(&output, b"path fixture").unwrap();
+        let canonical = output.canonicalize().unwrap();
+        for (file, root) in [
+            (output.clone(), converted.canonicalize().unwrap()),
+            (canonical, converted.clone()),
+        ] {
+            assert_eq!(
+                relative_output(&file, &root).unwrap(),
+                "007\\Dr. Anka [from DOC].docx"
+            );
+        }
+        let sibling = temp.join("Converted-other");
+        fs::create_dir_all(&sibling).unwrap();
+        let outside = sibling.join("outside.docx");
+        fs::write(&outside, b"outside fixture").unwrap();
+        assert!(
+            relative_output(&outside, &converted)
+                .unwrap_err()
+                .contains("escapes")
+        );
+        assert!(relative_output(&converted, &converted).is_err());
+        assert!(relative_output(&converted.join("missing.docx"), &converted).is_err());
+        assert!(
+            relative_output(
+                &converted.join("../Converted-other/outside.docx"),
+                &converted
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"outside fixture");
+        fs::remove_dir_all(temp).unwrap();
+    }
 
     #[test]
     fn conversion_state_survives_restart_but_is_scoped_to_its_project() {
@@ -1202,6 +1263,12 @@ mod tests {
         assert_eq!(reused.ok, 1);
         assert_eq!(reused.reused_outputs, 2);
         assert!(!request.command_audit_path.exists());
+        // The job outputs are canonical/verbatim while the planning result's
+        // Converted root may retain its original DOS spelling.
+        let summary = fs::read_to_string(&reused.summary_path).unwrap();
+        assert!(summary.contains("\"001\\sample [from RTF].docx\""));
+        assert!(summary.contains("\"001\\sample [from RTF].pdf\""));
+        assert!(!summary.contains(&root.to_string_lossy().to_string()));
         assert!(
             fs::read_dir(root.join("Reports/ConversionHistory"))
                 .unwrap()

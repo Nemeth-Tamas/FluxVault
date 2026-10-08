@@ -68,6 +68,12 @@ Offline preview: `fv scan --double --plan [--last-disk N]`. It opens no drives/t
 
 ## Validation boundary
 
+### First physical acceptance: 007–010 (2026-10-08)
+
+USB 007 and GW 008 ran concurrently, followed by USB 009 and GW 010. USB 009 saved a partial image with three missing sectors; `g9` transferred that identity and produced a clean 720 KB image. All four disks finished with zero missing sectors in their preferred images; extraction verified 37 forensic files and 29 Office conversion jobs succeeded. Five background runs completed with no worker/storage errors. The operator's console measured 6m55s for the entire session, including swaps and the 009 transfer, not an isolated reader benchmark.
+
+The first final audit reported three false conversion warnings because canonical Windows output paths were written as absolute paths in the CSV. The corrected release resolves both sides before generating confined relative paths. Offline `fv process` on this same pilot now returns success: four verified / zero attention, all 58 Office/PDF outputs reused, and all saved image/capture/extraction/delivery bytes unchanged. The original dual-run report remains unchanged as historical evidence; the refreshed `Reports/EvidenceAudit.json` and workbook reflect the fix. No disk needs rescanning for this warning.
+
 Routine tests cover the event pump with overlapping mocked readers, USB continuing while GW is busy, earlier-label transfer, invalid input, removal, QUIT, station failure, receipt adoption, shared ownership and device exclusion. Subprocess tests run **mock GW only**, including real parent termination after a saved receipt and restart without rereading it. Guarded publication refuses mismatched candidates before creating an image; later acceptance reuses the capture and completed reuse checks the guard again. The earlier reopenable 136-label/14-transfer model still passes.
 
-These are not simultaneous physical reads, throughput/yield measurements or six-hour acceptance. First run 007–010, then a damaged USB-to-GW transfer. Raw-only/unsupported formats preserve evidence and stop that station's identity without claiming an image. Broader cancellation, resource adaptation and automatic queue prioritization remain separate work.
+The live small-cohort result above validates concurrent hardware and one USB-to-GW transfer. It does not establish full-collection throughput/yield or six-hour acceptance. Raw-only/unsupported formats preserve evidence and stop that station's identity without claiming an image. Broader cancellation, resource adaptation and automatic queue prioritization remain separate work.
