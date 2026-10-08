@@ -36,6 +36,8 @@ Never move a disk marked **READING**. Every read command confirms station, exact
 
 This pilot uses **one aggregator console**, with station-labelled progress and a heartbeat during quiet reads. No additional windows or competing independent scans are launched. Clean swap banners are green; partials/errors red. ASCII-first messages also work without color.
 
+Both station views show an explicit `ACTION` line. A recurring ten-second refresh preserves swap/transfer instructions while the other reader is busy; `STATUS` refreshes immediately and includes elapsed read time plus the latest capture/decode message. The shared next fresh label is offered to either free station, never both at once. Live HD sector counts are provisional until automatic HD/DD identification finishes; a 720 KB disk can legitimately show `0/18` before its offline DD decode succeeds.
+
 ## USB partial -> GW
 
 Both stations take **fresh disks**. USB uses a fast first pass with **zero retry passes**, saves the partial image/map, and says **SET ASIDE FOR GW**. It keeps taking fresh labels. GW uses existing automatic HD/DD detection and Fast/Normal/Recovery/Detective stages, immediately recovering its own errors.
@@ -62,7 +64,9 @@ Background extraction/conversion/audit/reporting and managed capture packing run
 
 `QUIT` is graceful draining, **not immediate cancellation**: active GW recovery can use its stage allowances. Interrupted custody requires reconfirmation; SAVED disks retain removal obligations. A completed USB image left before receipt commit can be adopted without opening a drive, and GW reuses verified completed recovery.
 
-Finished sessions save unique `Reports/DualScan-*.json` files: per-station read/decode timings, image hashes, missing counts, errors, final queue, processing and packing results. Timings can overlap; their sum is not wall-clock throughput. Existing `benchmark report` remains the single-GW report, not a dual speed/yield claim.
+Finished sessions save unique `Reports/DualScan-*.json` files: per-station read/decode timings, image hashes, missing counts, errors, final queue, processing and packing results. New report schema 2 adds `feeding_elapsed_ms` (the event loop, including swaps/waits) and `session_elapsed_ms` (preflight through final processing, before report publication). These are invocation-local, not accumulated across restarts. Read timings can overlap; their sum is not wall-clock throughput. Existing `benchmark report` remains the single-GW report, not a dual speed/yield claim.
+
+`production status` now prints concise station/custody actions rather than the entire receipt JSON. `--json` retains detailed receipts and adds `usb_transfer_pending`, which includes saved partials still held in USB as well as set-aside ones. The original `usb_recovery_queue` remains removal-confirmed only. Offline inspection cannot prove that a recorded READING disk is actively reading; it tells you to check the original console or resume/reconfirm after it ends, never to blindly move it.
 
 Offline preview: `fv scan --double --plan [--last-disk N]`. It opens no drives/tools and changes no settings. `production status --json` checks saved receipts without another reader. Existing archive partials are not automatically imported into the transfer queue.
 

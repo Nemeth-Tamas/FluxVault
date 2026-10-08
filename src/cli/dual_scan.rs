@@ -235,6 +235,8 @@ fn gw_read(
         project.logs_dir().join("external-tools.jsonl"),
     )?
     .with_stream_to_stderr(false);
+    let _ = events.try_send(Event::Progress(Station::Greaseweazle, ticket.disk,
+        "Capturing flux: live HD sector counts are provisional; final HD/DD format is checked offline.".into()));
     let tx = events.clone();
     let disk = ticket.disk;
     let mut last = Instant::now() - Duration::from_secs(5);
@@ -354,29 +356,128 @@ fn begin(c: &mut Coordinator, station: Station, disk: u32) -> Result<Ticket, Str
     Ok(ticket)
 }
 
-fn display(c: &Coordinator, output: &mut impl Write) -> Result<(), String> {
-    let state = c.status();
-    for station in [Station::Usb, Station::Greaseweazle] {
-        let text = c
-            .held(station)
-            .map_or("ready".into(), |(t, p)| format!("{p} {:03}", t.disk));
-        writeln!(output, "{}: {text}", station_name(station)).map_err(|e| e.to_string())?;
+fn next_action(state: &Value, station: Station, held: Option<(u32, &str)>) -> String {
+    let name = station_name(station);
+    let prefix = if station == Station::Usb { "u" } else { "g" };
+    if let Some((disk, phase)) = held {
+        match phase {
+            "reading" => return format!("WAIT / DO NOT REMOVE {disk:03}"),
+            "reserved" | "interrupted" => {
+                return format!(
+                    "CHECK/RESEAT SAME {disk:03}, open tab, then {prefix}{disk}; QUIT stops new reads"
+                );
+            }
+            "saved" => {
+                let partial = station == Station::Usb
+                    && state["usb_transfer_pending"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(|n| n.as_u64() == Some(disk as u64)));
+                return if partial {
+                    format!(
+                        "REMOVE {disk:03} / SET ASIDE FOR GW (g{disk} when GW free); {prefix} out confirms removal, or feed NEXT FRESH"
+                    )
+                } else {
+                    format!("REMOVE {disk:03}; {prefix} out confirms removal, or feed NEXT FRESH")
+                };
+            }
+            _ => {}
+        }
     }
-    writeln!(
-        output,
-        "NEXT FRESH: {} | USB -> GW queue: {} | uN / gN / STATUS / QUIT",
-        c.next_fresh_disk()
-            .map_or("finished".into(), |n| format!("{n:03}")),
-        state["usb_recovery_queue"]
-    )
-    .and_then(|_| output.flush())
-    .map_err(|e| e.to_string())
+    let fresh = state["next_fresh_disk"].as_u64();
+    let transfer = (station == Station::Greaseweazle)
+        .then(|| state["usb_transfer_pending"].as_array()?.first()?.as_u64())
+        .flatten();
+    match (fresh, transfer) {
+        (Some(n), Some(old)) => format!(
+            "INSERT fresh {n:03} in {name} ({prefix}{n}), or MOVE USB partial {old:03} to GW (g{old}); open tab"
+        ),
+        (Some(n), None) => format!("INSERT fresh {n:03} in {name}, open tab, then {prefix}{n}"),
+        (None, Some(old)) => format!("MOVE USB partial {old:03} to GW, open tab, then g{old}"),
+        (None, None) => "NO FRESH DISKS / station ready".into(),
+    }
+}
+
+fn held_in_state(state: &Value, station: Station) -> Option<(u32, &str)> {
+    let station_key = match station {
+        Station::Usb => "usb",
+        Station::Greaseweazle => "greaseweazle",
+    };
+    state["disks"]
+        .as_object()?
+        .iter()
+        .find_map(|(number, disk)| {
+            if disk["ticket"]["station"] == station_key {
+                Some((number.parse().ok()?, disk["phase"].as_str()?))
+            } else {
+                None
+            }
+        })
+}
+
+// Offline status never claims a recorded READING phase is an active reader.
+pub(super) fn saved_status(state: &Value) -> String {
+    if state["initialized"] != true {
+        return "No dual scan started in this project. No physical media accessed.".into();
+    }
+    let mut lines = vec!["Dual coordinator (saved state; not a live reader probe)".into()];
+    for station in [Station::Usb, Station::Greaseweazle] {
+        let held = held_in_state(state, station);
+        let text = held.map_or("ready".into(), |(n, p)| format!("{p} {n:03}"));
+        lines.push(format!("{}: {text}", station_name(station)));
+        if held.is_some_and(|(_, p)| p == "reading") {
+            lines.push("  Recorded read: check the original console; if it ended, resume and reconfirm the same label. Do not move a potentially active disk.".into());
+        } else {
+            lines.push(format!("  ACTION: {}", next_action(state, station, held)));
+        }
+    }
+    lines.push(format!("USB -> GW pending (including held saved partial): {}\nRemoval-confirmed queue: {}\nNo physical media accessed.", state["usb_transfer_pending"], state["usb_recovery_queue"]));
+    lines.join("\n")
+}
+
+fn display(
+    session: &Session,
+    output: &mut impl Write,
+    color: bool,
+    draining: bool,
+) -> Result<(), String> {
+    let state = session.coordinator.status();
+    for station in [Station::Usb, Station::Greaseweazle] {
+        let held = held_in_state(&state, station);
+        let mut text = held.map_or("ready".into(), |(n, p)| format!("{p} {n:03}"));
+        if let Some(start) = session.started.get(&(station as u8)) {
+            text.push_str(&format!(" / {:.0}s elapsed", start.elapsed().as_secs_f64()));
+        }
+        if let Some(progress) = session.progress.get(&(station as u8)) {
+            text.push_str(&format!(" / {progress}"));
+        }
+        writeln!(output, "{}: {text}", station_name(station)).map_err(|e| e.to_string())?;
+        let action = if draining {
+            if held.is_some_and(|(_, p)| p == "reading") {
+                "DRAINING / WAIT / DO NOT REMOVE reading disk".into()
+            } else {
+                "DRAINING / no new reads; remove saved disks, resume later if work remains".into()
+            }
+        } else {
+            next_action(&state, station, held)
+        };
+        let (escape, reset) = if color {
+            ("\x1b[1;36m", "\x1b[0m")
+        } else {
+            ("", "")
+        };
+        writeln!(output, "{escape}  ACTION: {action}{reset}").map_err(|e| e.to_string())?;
+    }
+    writeln!(output, "NEXT FRESH: {} | USB -> GW pending: {} | uN / gN / STATUS / QUIT\nShared numbering: a fresh label goes to ONE station, never both.",
+        session.coordinator.next_fresh_disk().map_or("finished".into(), |n| format!("{n:03}")),
+        state["usb_transfer_pending"])
+        .and_then(|_| output.flush()).map_err(|e| e.to_string())
 }
 
 struct Session {
     coordinator: Coordinator,
     workers: BTreeMap<u8, thread::JoinHandle<()>>,
     started: BTreeMap<u8, Instant>,
+    progress: BTreeMap<u8, String>,
     closing: Arc<AtomicBool>,
 }
 impl Drop for Session {
@@ -410,11 +511,13 @@ fn feed(
     output: &mut impl Write,
     color: bool,
 ) -> Result<Value, String> {
+    let feeding_started = Instant::now();
     let mut draining = false;
     let mut errors = Vec::new();
     let mut completed = 0;
     let mut measurements = Vec::new();
-    display(&session.coordinator, output)?;
+    display(&session, output, color, draining)?;
+    let mut refresh = Instant::now();
     loop {
         if draining && session.workers.is_empty() {
             break;
@@ -423,7 +526,10 @@ fn feed(
             Ok(event) => event,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !session.workers.is_empty() {
-                    writeln!(output, "[LIVE] Readers still active; do not remove a READING disk. STATUS shows both stations.").and_then(|_| output.flush()).map_err(|e| e.to_string())?;
+                    if refresh.elapsed() >= Duration::from_secs(10) {
+                        display(&session, output, color, draining)?;
+                        refresh = Instant::now();
+                    }
                 }
                 continue;
             }
@@ -445,14 +551,14 @@ fn feed(
                         writeln!(output, "QUIT: finishing active bounded reads and saved-file work; do not remove a READING disk.").map_err(|e| e.to_string())?;
                         Ok(())
                     }
-                    Ok(Command::Status) => display(&session.coordinator, output),
+                    Ok(Command::Status) => display(&session, output, color, draining),
                     Ok(Command::Out(station)) => {
                         let held = session
                             .coordinator
                             .held(station)
                             .ok_or("That station has no held disk".to_string());
                         held.and_then(|(t, _)| session.coordinator.removed(&t, true))
-                            .and_then(|_| display(&session.coordinator, output))
+                            .and_then(|_| display(&session, output, color, draining))
                     }
                     Ok(Command::Read(station, disk)) => {
                         match begin(&mut session.coordinator, station, disk) {
@@ -478,8 +584,9 @@ fn feed(
                                 });
                                 session.workers.insert(station as u8, worker);
                                 session.started.insert(station as u8, Instant::now());
+                                session.progress.remove(&(station as u8));
                                 writeln!(output, "[{} {disk:03}] READ ONLY started. Do not move this disk while READING.", station_name(station)).map_err(|e| e.to_string())?;
-                                display(&session.coordinator, output)
+                                display(&session, output, color, draining)
                             }
                         }
                     }
@@ -491,11 +598,15 @@ fn feed(
             }
             Event::Input(_) => {}
             Event::Progress(station, disk, text) => {
+                session
+                    .progress
+                    .insert(station as u8, text.chars().take(160).collect());
                 writeln!(output, "[{} {disk:03}] {text}", station_name(station))
                     .and_then(|_| output.flush())
                     .map_err(|e| e.to_string())?;
             }
             Event::Done(ticket, result) => {
+                session.progress.remove(&(ticket.station as u8));
                 let read_ms = session
                     .started
                     .remove(&(ticket.station as u8))
@@ -585,8 +696,14 @@ fn feed(
                         errors.push(error);
                     }
                 }
-                display(&session.coordinator, output)?;
+                display(&session, output, color, draining)?;
             }
+        }
+        // Progress can arrive more often than recv_timeout: a busy reader must
+        // not starve the recurring swap/action cue for the other station.
+        if !session.workers.is_empty() && refresh.elapsed() >= Duration::from_secs(10) {
+            display(&session, output, color, draining)?;
+            refresh = Instant::now();
         }
         if !draining
             && session.coordinator.next_fresh_disk().is_none()
@@ -609,11 +726,12 @@ fn feed(
     let mut project = session.coordinator.project.clone();
     project.set_current_disk_number_without_session(session.coordinator.resume_cursor())?;
     Ok(
-        json!({"completed_this_session":completed,"measurements":measurements,"state":session.coordinator.status(),"errors":errors,"source_media_access":"read_only"}),
+        json!({"completed_this_session":completed,"feeding_elapsed_ms":crate::benchmark::milliseconds(feeding_started.elapsed()),"measurements":measurements,"state":session.coordinator.status(),"errors":errors,"source_media_access":"read_only"}),
     )
 }
 
 pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse, String> {
+    let run_started = Instant::now();
     crate::processing::validate_workspace(&project)?;
     let selected = settings(&project, &options)?;
     let coordinator = Coordinator::open(project.clone(), selected.last, false)?;
@@ -720,6 +838,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
         coordinator,
         workers: BTreeMap::new(),
         started: BTreeMap::new(),
+        progress: BTreeMap::new(),
         closing: Arc::new(AtomicBool::new(false)),
     };
     // Keep the owner across final processing too, even after the producer ends.
@@ -749,6 +868,8 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
             Err(e) => value["processing"] = json!({"error":e,"exit_code":3}),
         }
     }
+    value["report_schema"] = json!(2);
+    value["session_elapsed_ms"] = json!(crate::benchmark::milliseconds(run_started.elapsed()));
     let reports = project
         .reports_dir()
         .canonicalize()

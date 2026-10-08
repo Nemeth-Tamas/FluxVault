@@ -180,6 +180,12 @@ fn dual_cli_mock_gw_publishes_once_packs_and_holds_usb_across_projects() {
     assert_eq!(value["completed_this_session"], 1);
     assert_eq!(value["state"]["disks"]["1"]["phase"], "complete");
     assert_eq!(value["source_media_access"], "read_only");
+    assert_eq!(value["report_schema"], 2);
+    assert!(
+        value["session_elapsed_ms"].as_u64().unwrap()
+            >= value["feeding_elapsed_ms"].as_u64().unwrap()
+    );
+    assert!(value["session_elapsed_ms"].as_u64().unwrap() > 0);
     assert!(stderr.contains("NO NEW READ") && stderr.contains("GW / OK SAVED 001"));
     assert_eq!(
         imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
@@ -195,6 +201,13 @@ fn dual_cli_mock_gw_publishes_once_packs_and_holds_usb_across_projects() {
     assert!(status.status.success());
     let state: Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(state["coordinator_owner_active"], false);
+    assert_eq!(state["usb_transfer_pending"], json!([]));
+    let status = f.command().args(["production", "status"]).output().unwrap();
+    assert!(status.status.success());
+    let text = String::from_utf8(status.stdout).unwrap();
+    assert!(text.contains("saved state; not a live reader probe"));
+    assert!(text.contains("INSERT fresh 002 in USB"));
+    assert!(!text.contains('\x1b'));
 }
 
 #[test]

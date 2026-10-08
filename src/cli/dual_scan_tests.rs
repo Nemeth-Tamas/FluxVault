@@ -2,13 +2,15 @@ use super::*;
 use sha2::{Digest, Sha256};
 
 fn project() -> ProjectState {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     ProjectState::create_without_session(std::env::temp_dir().join(format!(
-            "fv-dual-live-model-{}-{}",
+            "fv-dual-live-model-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
         )))
     .unwrap()
 }
@@ -74,6 +76,7 @@ fn session(c: Coordinator) -> Session {
         coordinator: c,
         workers: BTreeMap::new(),
         started: BTreeMap::new(),
+        progress: BTreeMap::new(),
         closing: Arc::new(AtomicBool::new(false)),
     }
 }
@@ -93,6 +96,87 @@ fn station_commands_require_positive_exact_labels_and_never_accept_blank_enter()
     ));
     assert!(matches!(command("u out"), Ok(Command::Out(Station::Usb))));
     assert!(matches!(command("quit"), Ok(Command::Quit)));
+}
+
+#[test]
+fn status_keeps_held_usb_partials_visible_and_never_releases_or_starts_a_read() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();
+    let usb = begin(&mut c, Station::Usb, 1).unwrap();
+    evidence(&p, &usb, 1, &[1]);
+    c.complete(&usb, 1).unwrap();
+    let gw = begin(&mut c, Station::Greaseweazle, 2).unwrap();
+    let journal = fs::read(p.root().join(".fluxvault-production.json")).unwrap();
+    let state = c.status();
+    assert_eq!(state["usb_transfer_pending"], json!([1]));
+    assert_eq!(state["usb_recovery_queue"], json!([]));
+    let mut live = session(c);
+    live.started.insert(
+        Station::Greaseweazle as u8,
+        Instant::now() - Duration::from_secs(87),
+    );
+    live.progress.insert(
+        Station::Greaseweazle as u8,
+        "Offline format identification".into(),
+    );
+    let mut output = Vec::new();
+    display(&live, &mut output, false, false).unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("USB -> GW pending: [1]"));
+    assert!(text.contains("REMOVE 001 / SET ASIDE FOR GW"));
+    assert!(text.contains("WAIT / DO NOT REMOVE 002"));
+    assert!(text.contains("87s elapsed / Offline format identification"));
+    assert!(!text.contains('\x1b'));
+    let offline = crate::production::status(&p).unwrap();
+    let text = saved_status(&offline);
+    assert!(text.contains("saved state; not a live reader probe"));
+    assert!(text.contains("check the original console"));
+    assert!(text.contains("Removal-confirmed queue: []"));
+    assert_eq!(
+        fs::read(p.root().join(".fluxvault-production.json")).unwrap(),
+        journal
+    );
+    assert_eq!(
+        imaging::load_attempts_for_disk(&p.images_dir(), 2)
+            .unwrap()
+            .len(),
+        0
+    );
+    live.coordinator.failed(&gw, "fixture interrupted").unwrap();
+    let mut draining = Vec::new();
+    display(&live, &mut draining, true, true).unwrap();
+    let text = String::from_utf8(draining).unwrap();
+    assert!(text.contains("DRAINING / no new reads"));
+    assert!(!text.contains("INSERT fresh"));
+    live.coordinator.removed(&usb, true).unwrap();
+    assert_eq!(
+        live.coordinator.status()["usb_transfer_pending"],
+        json!([1])
+    );
+    assert_eq!(live.coordinator.status()["usb_recovery_queue"], json!([1]));
+    drop(live);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn station_actions_distinguish_waiting_retry_transfer_and_shared_fresh_numbers() {
+    let state = json!({"next_fresh_disk":53, "usb_transfer_pending":[22]});
+    assert_eq!(
+        next_action(&state, Station::Usb, Some((7, "reading"))),
+        "WAIT / DO NOT REMOVE 007"
+    );
+    assert!(next_action(&state, Station::Usb, Some((7, "interrupted"))).contains("SAME 007"));
+    let gw = next_action(&state, Station::Greaseweazle, None);
+    assert!(gw.contains("fresh 053") && gw.contains("partial 022") && gw.contains("g22"));
+    let usb = next_action(&state, Station::Usb, None);
+    assert!(usb.contains("u53") && !usb.contains("g22"));
+    let no_fresh = json!({"next_fresh_disk":null,"usb_transfer_pending":[22]});
+    assert!(next_action(&no_fresh, Station::Greaseweazle, None).contains("g22"));
+    assert_eq!(
+        next_action(&no_fresh, Station::Usb, None),
+        "NO FRESH DISKS / station ready"
+    );
+    assert!(saved_status(&json!({"initialized":false})).contains("No dual scan started"));
 }
 
 #[test]

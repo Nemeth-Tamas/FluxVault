@@ -727,6 +727,13 @@ impl TransferGuard {
 fn status_value(j: &Journal) -> Value {
     json!({"schema":1,"next_fresh_disk":next(j),"first":j.first,"last":j.last,
         "usb_recovery_queue":j.disks.iter().filter(|(_, d)| d.phase==Phase::AwaitGw).map(|(n, _)| *n).collect::<Vec<_>>(),
+        // A saved partial still held in USB is transferable by gNNN, but not
+        // yet in the removal-confirmed queue. Keep those two custody facts
+        // distinct while making all actionable transfers visible.
+        "usb_transfer_pending":j.disks.iter().filter(|(_, d)| d.phase==Phase::AwaitGw
+            || (d.phase==Phase::Saved && d.ticket.as_ref().is_some_and(|t| t.station==Station::Usb)
+                && d.usb.as_ref().is_some_and(|r| !r.bad.is_empty())))
+            .map(|(n, _)| *n).collect::<Vec<_>>(),
         "disks":j.disks,"live_dual_adapter_ready":true,"physical_media_access":false})
 }
 

@@ -691,10 +691,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             if json_output {
                 Ok(state.to_string())
             } else {
-                Ok(format!(
-                    "Dual coordinator state (offline inspection):\n{}",
-                    serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?
-                ))
+                Ok(dual_scan::saved_status(&state))
             }
         }
         Some("processing")
