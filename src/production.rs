@@ -9,6 +9,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::Path,
+    sync::Arc,
 };
 
 const JOURNAL: &str = ".fluxvault-production.json";
@@ -345,9 +346,9 @@ fn verify_receipts(project: &ProjectState, j: &Journal) -> Result<(), String> {
 /// Backend-independent coordinator. It does not open drives, spawn readers, or
 /// run downstream processing. Future adapters must preserve this single owner.
 pub struct Coordinator {
-    project: ProjectState,
+    pub(crate) project: ProjectState,
     journal: Journal,
-    _owner: File,
+    _owner: Arc<File>,
     control_sha256: Option<String>,
 }
 
@@ -401,7 +402,7 @@ impl Coordinator {
         let mut coordinator = Self {
             project,
             journal: journal.clone(),
-            _owner: owner,
+            _owner: Arc::new(owner),
             control_sha256: control.as_ref().map(|bytes| digest(bytes)),
         };
         coordinator.commit(journal)?;
@@ -450,6 +451,64 @@ impl Coordinator {
 
     pub fn next_fresh_disk(&self) -> Option<u32> {
         next(&self.journal)
+    }
+
+    pub(crate) fn owner(&self) -> Arc<File> {
+        self._owner.clone()
+    }
+
+    pub(crate) fn held(&self, station: Station) -> Option<(Ticket, String)> {
+        self.journal.disks.values().find_map(|d| {
+            d.ticket
+                .as_ref()
+                .filter(|t| t.station == station)
+                .map(|t| (t.clone(), format!("{:?}", d.phase).to_ascii_lowercase()))
+        })
+    }
+
+    pub(crate) fn transfer_guard(&self, ticket: &Ticket) -> Result<Option<TransferGuard>, String> {
+        let mut j = self.journal.clone();
+        Self::current(&mut j, ticket, Phase::Reading)?;
+        if ticket.work != Work::UsbRecovery {
+            return Ok(None);
+        }
+        let usb = j.disks[&ticket.disk]
+            .usb
+            .clone()
+            .ok_or("Missing transfer receipt")?;
+        Ok(Some(TransferGuard {
+            project: self.project.clone(),
+            disk: ticket.disk,
+            usb,
+        }))
+    }
+
+    pub(crate) fn saved_attempts(&self) -> Vec<(u32, u32)> {
+        self.journal
+            .disks
+            .iter()
+            .flat_map(|(disk, d)| {
+                [&d.usb, &d.gw]
+                    .into_iter()
+                    .flatten()
+                    .map(move |r| (*disk, r.attempt))
+            })
+            .collect()
+    }
+
+    pub(crate) fn resume_cursor(&self) -> u32 {
+        self.journal
+            .disks
+            .iter()
+            .find(|(_, d)| {
+                matches!(
+                    d.phase,
+                    Phase::Reserved | Phase::Reading | Phase::Interrupted
+                )
+            })
+            .map(|(n, _)| *n)
+            .or_else(|| self.next_fresh_disk())
+            .unwrap_or_else(|| self.journal.last.map_or(self.journal.first, |n| n + 1))
     }
 
     /// A GUI/terminal must ask the operator for this ticket's exact label and
@@ -640,10 +699,35 @@ impl Coordinator {
     }
 }
 
+/// Immutable source binding passed to a physical worker. It never holds the
+/// coordinator mutation lock across capture/decode or image publication.
+pub(crate) struct TransferGuard {
+    project: ProjectState,
+    disk: u32,
+    usb: Receipt,
+}
+
+impl TransferGuard {
+    pub(crate) fn check(&self, bytes: &[u8], bad: &[u64]) -> Result<(), String> {
+        if bytes.len() != self.usb.sectors * 512
+            || bad.iter().any(|n| *n >= self.usb.sectors as u64)
+        {
+            return Err("USB/GW candidate geometry/map differs; no image published".into());
+        }
+        let (sealed, usb) = receipt(&self.project, self.disk, self.usb.attempt, Station::Usb)?;
+        if sealed != self.usb {
+            return Err("USB transfer evidence changed; no image published".into());
+        }
+        let mut candidate = self.usb.clone();
+        candidate.bad = bad.to_vec();
+        consistent(&self.usb, &usb, &candidate, bytes)
+    }
+}
+
 fn status_value(j: &Journal) -> Value {
     json!({"schema":1,"next_fresh_disk":next(j),"first":j.first,"last":j.last,
         "usb_recovery_queue":j.disks.iter().filter(|(_, d)| d.phase==Phase::AwaitGw).map(|(n, _)| *n).collect::<Vec<_>>(),
-        "disks":j.disks,"live_dual_adapter_ready":false,"physical_media_access":false})
+        "disks":j.disks,"live_dual_adapter_ready":true,"physical_media_access":false})
 }
 
 /// Read-only inspection: no lock/control creation, backend probing or media read.
@@ -652,7 +736,7 @@ pub fn status(project: &ProjectState) -> Result<Value, String> {
     let path = project.root().join(JOURNAL);
     if !path.try_exists().map_err(|e| e.to_string())? {
         return Ok(
-            json!({"initialized":false,"live_dual_adapter_ready":false,"physical_media_access":false}),
+            json!({"initialized":false,"live_dual_adapter_ready":true,"physical_media_access":false}),
         );
     }
     let j: Journal =

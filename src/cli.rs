@@ -1,6 +1,7 @@
 //! Command-line entry points over the guarded workflow services.
 
 mod acquire;
+mod dual_scan;
 mod finalize;
 mod flux;
 mod flux_scan;
@@ -70,8 +71,10 @@ Usage:
                                     Guided Greaseweazle scan; reuses saved project settings
   fluxvault scan --usb [--drive A:] --write-blocker-verified
                                     USB-only shortcut; numbered labels or legacy READ
+  fluxvault scan --double --write-blocker-verified [--last-disk N]
+                                    Dual pilot: u1 / g2; both readers, numbered GW transfers
   fluxvault scan --double --plan [--last-disk N]
-                                    Offline dual-station preview ONLY; live adapter not ready
+                                    Offline dual-station preview; no drives opened
   fluxvault production status       Inspect saved coordinator state offline
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
                                     Guided read-only USB loop; confirm each numbered label
@@ -146,7 +149,8 @@ Usage:
   fluxvault --help                  Show this help
 Options:
   --usb                             scan: existing USB-only loop, default Windows A:
-  --double --plan                   scan: offline dual preview ONLY; live adapter not ready
+  --double                         scan: opt-in simultaneous USB/GW pilot; exact labels
+  --plan                           scan --double: offline preview only
   --json                            Output machine-readable JSON
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
@@ -457,7 +461,44 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             return Err("Dual mode requires exact label verification; --no-verify cannot select earlier queued USB disks".into());
         }
         if !dual_plan {
-            return Err("The dual-station coordinator is implemented but its live reader/terminal adapter is not ready. Use scan --double --plan for an offline preview; ordinary scan remains GW-only".into());
+            if destination.is_some()
+                || acquisition_disk.is_some()
+                || acquisition_retries.is_some()
+                || scan_count.is_some()
+                || import_source.is_some()
+                || import_log.is_some()
+                || baseline_zip.is_some()
+                || include_deleted
+                || gw_profile.is_some()
+                || automatic_format.is_some()
+                || packed_captures.is_some()
+                || background_processing.is_some()
+                || retire_raw
+                || gw_revolutions.is_some()
+                || gw_capture_attempt.is_some()
+                || recovery_policy.is_some()
+                || profile_map_path.is_some()
+            {
+                return Err("Dual pilot accepts --project, --drive, --gw-drive, --last-disk, --write-blocker-verified, --conversion-workers, --acquisition-only, --color and --json; recovery/format/storage defaults are automatic".into());
+            }
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            return dual_scan::run(
+                ProjectState::open_without_session(root)?,
+                dual_scan::Options {
+                    usb: drive_override,
+                    gw: gw_drive,
+                    last: last_disk,
+                    workers: conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                    verified: write_blocker_verified,
+                    acquisition_only,
+                    json: json_output,
+                    color: color_mode.unwrap_or_default().enabled(
+                        std::io::stderr().is_terminal(),
+                        env::var_os("NO_COLOR").is_some(),
+                        env::var("TERM").is_ok_and(|s| s == "dumb"),
+                    ),
+                },
+            );
         }
         if destination.is_some()
             || acquisition_disk.is_some()
@@ -494,7 +535,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 value.to_string()
             } else {
                 format!(
-                    "DUAL-STATION PREVIEW ONLY - no drives opened, no settings saved.\nUSB {}: fresh first-pass images; partials set aside for GW.\nGW {}: fresh automatic scan/recovery, or type an earlier queued USB label.\nNext available fresh label: {}.\nExact labels required; --no-verify is unavailable in dual mode.\nCoordinator state/ownership and synthetic concurrent-worker tests exist; live reader and station-terminal wiring is the next slice.",
+                    "DUAL-STATION PREVIEW ONLY - no drives opened, no settings saved.\nUSB {}: fresh first-pass images; partials set aside for GW.\nGW {}: fresh automatic scan/recovery, or type an earlier queued USB label.\nNext available fresh label: {}.\nExact labels required; --no-verify is unavailable in dual mode.\nLive pilot: scan --double --write-blocker-verified; commands uN / gN / STATUS / QUIT.",
                     value["usb_drive"].as_str().unwrap(),
                     value["gw_drive"].as_str().unwrap(),
                     value["next_fresh_disk"]
@@ -651,7 +692,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 Ok(state.to_string())
             } else {
                 Ok(format!(
-                    "Dual coordinator state (offline; live adapter not ready):\n{}",
+                    "Dual coordinator state (offline inspection):\n{}",
                     serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?
                 ))
             }

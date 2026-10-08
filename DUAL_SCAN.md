@@ -1,54 +1,73 @@
-# Two drives, one numbered batch — coordinator groundwork
+# Two drives, one numbered batch — live pilot
 
-## Available commands
+Plain `fv scan` stays **GW-only**. `--double` is opt-in; USB-only remains `fv scan --usb --write-blocker-verified`.
 
-Plain `fv scan` stays **Greaseweazle-only**. Dual mode is opt-in, not the default.
+## First small test: customer 007–010
 
-```powershell
-fv scan --usb --count 20 --write-blocker-verified
-```
-
-`--usb` selects the existing USB-only loop, default Windows A: (`--drive LETTER:` overrides). Type the displayed number (`001` or `1`), or `QUIT`; legacy `READ` still works. All existing USB protection/probe/read-only gates remain. This does not add the GW background pipeline or automatic format discovery to USB. `--count` is a session count; USB does not yet support `--last-disk`.
-
-To preview the future dual setup, with no floppy inserted:
+Use a **new project**, not an existing pilot. The earlier GW cohort saved these four clean; 009 is 720 KB, the others 1.44 MB. Run the newly built executable directly to avoid an older installed `fv` copy:
 
 ```powershell
-fv scan --double --plan --last-disk 136
-fv production status --json
+$fv = 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\target\release\fluxvault.exe'
+& $fv init 'C:\Users\User\Desktop\FluxVault-Test\Dual-007-010-Pilot-20261008'
+cd 'C:\Users\User\Desktop\FluxVault-Test\Dual-007-010-Pilot-20261008'
+& $fv disk select 7
+& $fv scan --double --last-disk 10 --write-blocker-verified
 ```
 
-The preview opens no drives, probes no tools, creates no coordinator and saves no scan settings. `--drive A:` / `--gw-drive B` can annotate it. **Live `scan --double` is not ready and deliberately refuses.** Dual mode rejects `--no-verify`: switching to an earlier recovery disk needs exact label confirmation.
+If that folder exists, resume it rather than initializing/selecting again, or choose a fresh folder name.
 
-## Agreed speed-first behavior
+1. Insert **007 into USB A:**, protection hole open, then type `u7`.
+2. Insert **008 into the working GW/Mitsumi drive B**, hole open, then type `g8` while USB is reading.
+3. After either station says **SAVED / REMOVE**, feed its next disk using the displayed **NEXT FRESH** label: e.g. `u9` or `g9`, depending on the free station. Then use the next label for 010. Numbering is shared, not fixed odd/even allocation.
+4. Remove each station's last saved disk and type `u out` / `g out`. The finished range drains background work automatically. `QUIT` stops earlier and finishes active reads first.
 
-Both stations take **fresh disks**; GW does not sit idle waiting for USB failures. One coordinator offers the next unreserved label to either ready station, without fixed odd/even assignments. GW uses its fast-first automatic recovery stages when errors appear. USB preserves partial images/maps, says **SET ASIDE NNN FOR GW**, then continues fresh feeding without extended flux recovery.
+Never move a disk marked **READING**. Every read command confirms station, exact label and open protection tab. Feeding the next label also confirms removal of that station's previous SAVED disk. Empty Enter never reads; dual rejects `--no-verify`.
 
-At GW, entering an earlier queued USB label selects recovery for that disk while USB keeps working. Example: USB takes 001, GW takes 002; USB saves 001 partial, the operator removes it and feeds USB 003. Once GW releases 002, entering `001` selects its recovery. Wrong, clean-historical or in-use labels must not silently read/renumber a disk.
+## Short commands
 
-The core can switch an **unread fresh GW offer** to that queued label atomically. The unused fresh label becomes available again; its old ticket is invalidated. This shortcut cannot discard a started/interrupted read or an evidence-bearing reservation.
+| Input | Meaning |
+| --- | --- |
+| `u7` / `u 007` | USB read of 007 |
+| `g8` / `g 008` | GW read of 008 |
+| `g22` | Recover an available earlier USB partial 022 |
+| `u out` / `g out` | Confirm removal of that station's SAVED disk |
+| `s`, `?`, `STATUS` | Both stations, next fresh label and transfer queue |
+| `q`, `QUIT` | Stop new reads; finish active reads and downstream work |
 
-Preferred terminal design for the next slice: **two station views sharing one coordinator**, so prompts/progress do not mix. They must not be two ordinary independent scans competing over the project cursor. A main status view can aggregate both. No additional console is launched by this checkpoint.
+This pilot uses **one aggregator console**, with station-labelled progress and a heartbeat during quiet reads. No additional windows or competing independent scans are launched. Clean swap banners are green; partials/errors red. ASCII-first messages also work without color.
 
-## Implemented core
+## USB partial -> GW
 
-The backend-independent Rust coordinator reserves labels durably and tracks independent generation-tagged station custody. Claiming a label does not authorize a read: confirmation requires its exact number and physical protection assertion. USB partials become GW-selectable only after confirmed removal. Failed/in-flight operations keep their label; reopen marks unfinished reservations/reads interrupted and requires reconfirmation. Saved results retain removal obligations; completed/queued results survive reopen.
+Both stations take **fresh disks**. USB uses a fast first pass with **zero retry passes**, saves the partial image/map, and says **SET ASIDE FOR GW**. It keeps taking fresh labels. GW uses existing automatic HD/DD detection and Fast/Normal/Recovery/Detective stages, immediately recovering its own errors.
 
-Completed receipts bind the original acquisition backend, image/metadata/log hashes, sector count and complete bad-sector map. Transfers require matching geometry, at least one mutually readable sector and agreement of **all** mutually readable sector bytes. This is conservative consistency checking, not proof of physical identity. Disagreement/unknown shared bytes preserve evidence and refuse queue completion.
+When GW is free, physically insert the earlier USB partial and type `g22`, for example. If 022 is still recorded SAVED in USB, this also confirms its transfer out of USB; no extra OUT is required. Otherwise it selects its set-aside queue entry. USB can keep feeding while GW recovers 022. Do not swap GW's current READING disk.
 
-One workstation owner serializes atomic bounded journal transitions in `.fluxvault-production.json`; actual station work runs outside the short mutation lock. Malformed/inconsistent/externally edited controls are refused. Images acquired by another command while stopped are excluded from fresh-label allocation. Limits: 4,096 records/occupied labels and 8 MiB control data.
+Before publishing a transfer image into `Images`, USB source image/metadata/log seals are checked again, geometry must match, and **all mutually readable sectors must agree**, with at least one shared readable sector. Failure preserves raw evidence but publishes no candidate image and does not complete the queue item. Consistency supports identity; it cannot prove a physical label. Missing text is not invented.
 
-The core does not launch readers/processing, reset the ordinary project cursor, automatically import old archive partials, or replace the existing GW scan journal. `production status` checks saved receipts offline. It distinguishes an absent owner, but an ownership probe cannot prove a physical reader is active.
+A damaged boot sector no longer prevents USB geometry/protection probing. If USB cannot produce a completed image at all, its identity remains interrupted rather than pretending partial success. A failed station asks for a same-label reseat/retry; the other remains usable.
 
-## Next wiring boundary
+## Resume and results
 
-1. Connect existing USB/GW backends with physical-device reservations and staged identity checks **before exposing new captures to background extraction**. A USB failure that cannot produce an image remains interrupted, not a pretend partial success.
-2. Share one project writer with processing/packing. Do not take a second owner or hold the coordinator mutation lock during a physical read/Office conversion.
-3. Connect station-specific label/quit/reseat prompts and removal/transfer assertions; ordinary swap confirmation should cover removal without an extra routine command.
-4. Reconcile backend completion after interruption without unnecessary physical rereads; validate process-kill/cancellation and source-preserving restart.
-5. Test protected small live cohorts before enabling live `scan --double` or claiming a speed gain.
+```powershell
+fv scan --double --write-blocker-verified
+fv production status
+fv processing status
+```
 
-## Validation
+USB/GW selectors and endpoint persist; changing them on resume is refused. Defaults are Windows **A:** and GW **B**; first-session `--drive LETTER:` / `--gw-drive A|B` override them. Dual custody and ordinary project cursor are distinct: resume dual mode for held/interrupted disks, not ordinary scan.
 
-Synthetic saved-image tests cover both fresh stations, earlier-label USB recovery, removal gates, exact confirmations, stale tickets, restart states, wrong backend/changed evidence, cross-station conflicts, ownership, control edits and endpoint consistency. A barrier-controlled mock-worker test proves USB can finish another disk while GW is still busy. A 136-label model reopens midway, recovers 14 queued USB partials and reopens with all identities intact.
+Background extraction/conversion/audit/reporting and managed capture packing run while feeding. `--conversion-workers 4` is the conservative default (1–16 accepted, background capped to leave CPU capacity). `--acquisition-only` skips the file-processing tools/pipeline, not read guards, evidence checks or packing. Recovery/format/storage expert overrides are not accepted in this first dual pilot; its defaults are automatic. Packaging remains the existing `finalize`/package workflow after checking reports.
 
-These are state-machine tests on tiny disposable acquisitions—not real simultaneous reads, a physical throughput benchmark or six-hour acceptance. No customer media is accessed for this checkpoint.
+`--write-blocker-verified` retains the existing USB hardware assertion. Positive Windows protection and plausible geometry are still required, checked again at the raw **read-only** open. No registry changes/source-write path are added. Device reservations exclude competing FluxVault USB/GW readers across projects. Coordinator and background processing share one project owner; physical reads/Office conversion do not hold the short publication gate.
+
+`QUIT` is graceful draining, **not immediate cancellation**: active GW recovery can use its stage allowances. Interrupted custody requires reconfirmation; SAVED disks retain removal obligations. A completed USB image left before receipt commit can be adopted without opening a drive, and GW reuses verified completed recovery.
+
+Finished sessions save unique `Reports/DualScan-*.json` files: per-station read/decode timings, image hashes, missing counts, errors, final queue, processing and packing results. Timings can overlap; their sum is not wall-clock throughput. Existing `benchmark report` remains the single-GW report, not a dual speed/yield claim.
+
+Offline preview: `fv scan --double --plan [--last-disk N]`. It opens no drives/tools and changes no settings. `production status --json` checks saved receipts without another reader. Existing archive partials are not automatically imported into the transfer queue.
+
+## Validation boundary
+
+Routine tests cover the event pump with overlapping mocked readers, USB continuing while GW is busy, earlier-label transfer, invalid input, removal, QUIT, station failure, receipt adoption, shared ownership and device exclusion. Subprocess tests run **mock GW only**, including real parent termination after a saved receipt and restart without rereading it. Guarded publication refuses mismatched candidates before creating an image; later acceptance reuses the capture and completed reuse checks the guard again. The earlier reopenable 136-label/14-transfer model still passes.
+
+These are not simultaneous physical reads, throughput/yield measurements or six-hour acceptance. First run 007–010, then a damaged USB-to-GW transfer. Raw-only/unsupported formats preserve evidence and stop that station's identity without claiming an image. Broader cancellation, resource adaptation and automatic queue prioritization remain separate work.

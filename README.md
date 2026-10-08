@@ -75,6 +75,6 @@ FluxVault never writes to source floppies. Missing bytes are not fabricated. Fra
 | Preferred generations and recoverable copy cleanup | [Recovery selection](RECOVERY_SELECTION.md) |
 | Automatic extraction from improved composite/FAT images | [Offline recovery handoff](OFFLINE_RECOVERY_HANDOFF.md) |
 | Comparing to the old archive | [Baseline comparison](BASELINE_COMPARISON.md) |
-| Opt-in two-drive coordinator groundwork and USB shortcut | [Dual scan](DUAL_SCAN.md) |
+| Opt-in two-drive live pilot and USB shortcut | [Dual scan](DUAL_SCAN.md) |
 
-This is a working **single-Greaseweazle prototype**, with live sample batches and automated tests. Full 136-disk acceptance, deeper damaged-filesystem recovery and simultaneous USB/Greaseweazle production remain development targets. See [current progress](PROGRESS.md) for measured results; implementation percentages are not recovery rates.
+This is a working **single-Greaseweazle prototype**, with live sample batches and automated tests, plus an **opt-in two-drive pilot ready for a small live acceptance test**. Full 136-disk acceptance, deeper damaged-filesystem recovery and validated simultaneous USB/Greaseweazle production remain targets. See [current progress](PROGRESS.md); implementation percentages are not recovery rates.

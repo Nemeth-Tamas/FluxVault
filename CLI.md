@@ -114,7 +114,7 @@ Use `--project C:\path\to\project` to select a project explicitly. Add `--json` 
 
 `fv scan --usb [--drive A:] --write-blocker-verified` selects the existing USB-only scan (default A:). It now accepts the displayed number without a READ prefix; legacy READ still works. Protection checks and session-count semantics remain. This does not enable GW background processing or dual mode.
 
-`fv scan --double --plan [--last-disk N]` previews two-drive configuration offline; `fv production status` checks saved coordinator state. The core is implemented/tested, **not yet connected to live readers or station terminals**. Plain `--double` refuses, and dual mode rejects `--no-verify`. Ordinary scan remains GW-only. [Implemented boundary](DUAL_SCAN.md).
+`fv scan --double --write-blocker-verified [--last-disk N]` starts the **opt-in two-drive pilot** in one console: `u1` reads USB 001, `g2` reads GW 002, and `g1` selects an available earlier USB partial for GW. Both take fresh disks; USB is fast-pass-only and GW auto-recovers. Background processing/packing continue. Commands assert exact labels/open tabs; dual rejects `--no-verify`. `u out` / `g out` confirms the last saved disk's removal; `QUIT` drains active reads. Selectors/endpoint persist. `scan --double --plan` is offline-only; `production status` inspects custody. Ordinary scan remains GW-only. [First test and limits](DUAL_SCAN.md).
 
 Windows `A:` is the USB floppy drive letter, **not** Greaseweazle selector A/B. This guarded path is optional and distinct from the default `fv scan` workflow.
 

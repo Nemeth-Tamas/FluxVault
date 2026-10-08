@@ -170,6 +170,26 @@ pub fn start_imaging(
     disk_number: u32,
     sector_retries: usize,
 ) -> Receiver<ImagingEvent> {
+    start_imaging_publication(
+        drive,
+        geometry,
+        output_directory,
+        log_directory,
+        disk_number,
+        sector_retries,
+        None,
+    )
+}
+
+pub(crate) fn start_imaging_publication(
+    drive: FloppyDrive,
+    geometry: DiskGeometry,
+    output_directory: PathBuf,
+    log_directory: PathBuf,
+    disk_number: u32,
+    sector_retries: usize,
+    publication_root: Option<PathBuf>,
+) -> Receiver<ImagingEvent> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
@@ -181,6 +201,7 @@ pub fn start_imaging(
             disk_number,
             sector_retries,
             &sender,
+            publication_root.as_deref(),
         ) {
             let _ = sender.send(ImagingEvent::Failed(error));
         }
@@ -197,6 +218,7 @@ fn run_imaging(
     disk_number: u32,
     sector_retries: usize,
     sender: &Sender<ImagingEvent>,
+    publication_root: Option<&Path>,
 ) -> Result<(), String> {
     MediaSafetyPolicy::assert_invariants();
 
@@ -699,17 +721,13 @@ fn run_imaging(
 
     drop(log_output);
 
+    let _snapshot = publication_root
+        .map(crate::project_work::snapshot)
+        .transpose()?;
     fs::rename(&partial_path, &final_path).map_err(|error| {
         format!(
             "A kesz lemezkep atnevezese sikertelen. A partial fajl megmarad: {}: {error}",
             partial_path.display()
-        )
-    })?;
-
-    fs::rename(&metadata_partial_path, &metadata_final_path).map_err(|error| {
-        format!(
-            "A metadata fajl atnevezese sikertelen. A partial metadata megmarad: {}: {error}",
-            metadata_partial_path.display()
         )
     })?;
 
@@ -719,6 +737,9 @@ fn run_imaging(
             log_partial_path.display()
         )
     })?;
+    // Completed metadata is last: snapshots never see an image without its log.
+    fs::rename(&metadata_partial_path, &metadata_final_path).map_err(|e| e.to_string())?;
+    drop(_snapshot);
 
     sender
         .send(ImagingEvent::Log(format!(

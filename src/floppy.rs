@@ -321,3 +321,21 @@ pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
         write_protection,
     })
 }
+
+/// Geometry/protection only: a damaged boot sector must not prevent a full
+/// bounded USB image with an explicit missing-sector map.
+pub(crate) fn geometry_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
+    let file = File::open(&drive.device_path).map_err(|e| e.to_string())?;
+    let (geometry, geometry_error) = match query_geometry(&file) {
+        Ok(g) => (Some(g), None),
+        Err(e) => (None, Some(e)),
+    };
+    Ok(ProbeResult {
+        bytes_read: 0,
+        first_bytes: [0; 16],
+        boot_signature: None,
+        geometry,
+        geometry_error,
+        write_protection: query_write_protection(&file),
+    })
+}

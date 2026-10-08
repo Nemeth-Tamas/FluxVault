@@ -248,7 +248,14 @@ impl Queue {
         Self::start_owned(request, owner)
     }
 
-    fn start_owned(mut request: PipelineRequest, owner: File) -> Result<Self, String> {
+    fn start_owned(request: PipelineRequest, owner: File) -> Result<Self, String> {
+        Self::start_shared(request, Arc::new(owner))
+    }
+
+    pub(crate) fn start_shared(
+        mut request: PipelineRequest,
+        owner: Arc<File>,
+    ) -> Result<Self, String> {
         if !(1..=16).contains(&request.conversion_workers) {
             return Err("Conversion workers must be from 1 to 16".into());
         }
@@ -256,16 +263,29 @@ impl Queue {
         let cpus = thread::available_parallelism().map_or(4, usize::from);
         let requested_workers = request.conversion_workers;
         request.conversion_workers = requested_workers.min(cpus.saturating_sub(2).max(1));
-        Self::start_reserved(request, requested_workers, owner, |request, stage| {
+        Self::start_shared_reserved(request, requested_workers, owner, |request, stage| {
             pipeline::run_pipeline_incremental(request, &|message| stage(message))
                 .map(|r| summary(&r))
         })
     }
 
+    #[cfg(test)]
     fn start_reserved<F>(
         request: PipelineRequest,
         requested_workers: usize,
         owner: File,
+        run: F,
+    ) -> Result<Self, String>
+    where
+        F: Fn(&PipelineRequest, &dyn Fn(&str)) -> Result<Value, String> + Send + 'static,
+    {
+        Self::start_shared_reserved(request, requested_workers, Arc::new(owner), run)
+    }
+
+    fn start_shared_reserved<F>(
+        request: PipelineRequest,
+        requested_workers: usize,
+        owner: Arc<File>,
         run: F,
     ) -> Result<Self, String>
     where
@@ -295,7 +315,6 @@ impl Queue {
         let ending = drain.clone();
         let cancelled = cancel.clone();
         let tasks = directory.clone();
-        let owner = Arc::new(owner);
         let worker_owner = Arc::clone(&owner);
         let worker = thread::spawn(move || {
             let _owner = worker_owner;
@@ -483,11 +502,20 @@ impl Queue {
             .and_then(|n| n.strip_suffix(".img"))
             .and_then(|n| n.parse::<u32>().ok())
             .ok_or("Result image is not a numbered acquisition")?;
+        self.enqueue_attempt(result.disk, attempt, &result.image_sha256)
+    }
+
+    pub(crate) fn enqueue_attempt(
+        &self,
+        disk: u32,
+        attempt: u32,
+        sha256: &str,
+    ) -> Result<(), String> {
         let job = Job {
             schema_version: 1,
-            disk: result.disk,
+            disk,
             attempt,
-            image_sha256: result.image_sha256.clone(),
+            image_sha256: sha256.to_owned(),
             status: "queued".into(),
             detail: String::new(),
         };

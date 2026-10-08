@@ -334,7 +334,15 @@ pub fn recover(
     progress: &impl Fn(&str),
 ) -> Result<RecoveryResult, String> {
     recover_impl(
-        project, disk, profile, false, drive, policy, backend, progress,
+        project,
+        disk,
+        profile,
+        false,
+        drive,
+        policy,
+        backend,
+        progress,
+        &|_, _| Ok(()),
     )
 }
 
@@ -356,6 +364,30 @@ pub fn recover_auto(
         policy,
         backend,
         progress,
+        &|_, _| Ok(()),
+    )
+}
+
+/// Dual-station acceptance runs before publication, including reused results.
+pub fn recover_auto_checked(
+    project: &ProjectState,
+    disk: u32,
+    drive: char,
+    policy: RecoveryPolicy,
+    backend: &mut impl GreaseweazleBackend,
+    progress: &impl Fn(&str),
+    accept: &dyn Fn(&[u8], &[u64]) -> Result<(), String>,
+) -> Result<RecoveryResult, String> {
+    recover_impl(
+        project,
+        disk,
+        GreaseweazleProfile::Ibm1440,
+        true,
+        drive,
+        policy,
+        backend,
+        progress,
+        accept,
     )
 }
 
@@ -368,6 +400,7 @@ fn recover_impl(
     policy: RecoveryPolicy,
     backend: &mut impl GreaseweazleBackend,
     progress: &impl Fn(&str),
+    accept: &dyn Fn(&[u8], &[u64]) -> Result<(), String>,
 ) -> Result<RecoveryResult, String> {
     policy.validate()?;
     if disk == 0 || !matches!(drive, 'A' | 'B') {
@@ -508,6 +541,16 @@ fn recover_impl(
     }
     if let Some(mut result) = j.result.clone() {
         verify_completed_result(project, &result)?;
+        if result.format_exception.is_none() {
+            let bytes = fs::read(&result.image).map_err(|e| e.to_string())?;
+            let bad = result
+                .missing_lbas
+                .iter()
+                .chain(&result.conflicting_lbas)
+                .copied()
+                .collect::<Vec<_>>();
+            accept(&bytes, &bad)?;
+        }
         result.resumed = true;
         result.physical_reads_this_run = 0;
         return Ok(result);
@@ -833,6 +876,13 @@ fn recover_impl(
         }
     }
     let e = aggregate(project, disk, profile, &j.stages)?;
+    let bad = e
+        .missing
+        .iter()
+        .chain(&e.conflicts)
+        .copied()
+        .collect::<Vec<_>>();
+    accept(&e.bytes, &bad)?;
     let mut result = publish(project, &dir, &j, &e, reason)?;
     result.physical_reads_this_run = reads;
     result.resumed = resumed;

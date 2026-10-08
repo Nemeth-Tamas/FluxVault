@@ -119,7 +119,7 @@ Normal scans/processing need their saved-file tools; standalone native extractio
 
 ### Settings and diagnostics
 
-USB-only shortcut: `fv scan --usb --count 20 --write-blocker-verified` (default A:, same existing protection checks; type the displayed number). Dual groundwork is **preview-only**: `fv scan --double --plan --last-disk 136`, or `fv production status`. Live `--double` is not enabled yet; ordinary scan remains GW-only. [Details](DUAL_SCAN.md).
+USB-only: `fv scan --usb --count 20 --write-blocker-verified` (default A:, same protection checks; type the number). Two-drive **pilot**: `fv scan --double --write-blocker-verified --last-disk 10`, then `u7` / `g8` for USB/GW labels, `gOLD` for a queued USB partial, `u out` / `g out` after the last saved disks, `QUIT` to drain. Use a small new project first; dual rejects `--no-verify`. Ordinary scan stays GW-only. [Copyable 007–010 test](DUAL_SCAN.md).
 
 - `fv tools check` checks host tools; `fv greaseweazle info` checks board readiness.
 - `fv scan --conversion-workers 4` saves a 1–16 worker request; background work caps it to leave two logical CPUs available.

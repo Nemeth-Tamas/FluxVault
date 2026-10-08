@@ -1,4 +1,4 @@
-//! Gated physical acquisition using the GUI's read-only USB backend.
+//! Gated physical acquisition using the shared read-only USB backend.
 
 use serde_json::json;
 
@@ -24,6 +24,7 @@ pub(super) fn run(
         return Err("Acquisition is blocked until the drive/write blocker has been independently verified with a known-good disposable disk. Then pass --write-blocker-verified. Do not validate using customer media.".to_owned());
     }
     let drive_name = drive_name.ok_or("acquire requires --drive LETTER:")?;
+    let _device = super::media_reservation::UsbReservation::acquire(drive_name)?;
     let disk_number = disk_number.ok_or("acquire requires --disk N")?;
     let drives = floppy::enumerate_removable_drives()?;
     let drive = select_removable_drive(&drives, drive_name)?;
@@ -98,7 +99,7 @@ pub(super) fn run(
     Err("Imaging worker stopped without a completion result; inspect partial files in Images and Logs".to_owned())
 }
 
-fn acquisition_eligible(probe: &ProbeResult) -> Result<DiskGeometry, String> {
+pub(super) fn acquisition_eligible(probe: &ProbeResult) -> Result<DiskGeometry, String> {
     if probe.write_protection != WriteProtectionStatus::Protected {
         return Err(format!(
             "Acquisition blocked: physical write protection was not positively reported ({:?})",

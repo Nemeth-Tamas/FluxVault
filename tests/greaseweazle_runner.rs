@@ -826,6 +826,68 @@ fn automatic_dd_selection_is_offline_resumable_and_does_not_repeat_capture() {
 }
 
 #[test]
+fn dual_acceptance_guard_runs_before_image_publication_and_again_on_completed_reuse() {
+    let (project, root) = disposable_project("dual-publication-guard");
+    let audit = project.logs_dir().join("external-tools.jsonl");
+    let mut backend = ProcessGreaseweazleBackend::new(mock_gw_path(), audit.clone()).unwrap();
+    let error = flux_recovery::recover_auto_checked(
+        &project,
+        1,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+        &|bytes, bad| {
+            assert_eq!(bytes.len(), 1_474_560);
+            assert!(bad.is_empty());
+            Err("synthetic USB identity mismatch".into())
+        },
+    )
+    .unwrap_err();
+    assert!(error.contains("USB identity mismatch"));
+    assert!(fs::read_dir(project.images_dir()).unwrap().next().is_none());
+    let evidence = flux_capture::inspect_disk(&project, 1).unwrap();
+    assert_eq!(evidence.captures.len(), 1);
+    let before = evidence.captures[0].sha256.clone();
+    let result = flux_recovery::recover_auto_checked(
+        &project,
+        1,
+        'B',
+        RecoveryPolicy::default(),
+        &mut backend,
+        &|_| {},
+        &|_, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(result.physical_reads_this_run, 0);
+    assert_eq!(
+        flux_capture::inspect_disk(&project, 1).unwrap().captures[0].sha256,
+        before
+    );
+    let image = fs::read(&result.image).unwrap();
+    let added_before = fs::read_to_string(&audit).unwrap().lines().count();
+    assert!(
+        flux_recovery::recover_auto_checked(
+            &project,
+            1,
+            'B',
+            RecoveryPolicy::default(),
+            &mut backend,
+            &|_| {},
+            &|_, _| Err("changed USB seal".into())
+        )
+        .unwrap_err()
+        .contains("changed USB seal")
+    );
+    assert_eq!(fs::read(&result.image).unwrap(), image);
+    assert_eq!(
+        fs::read_to_string(&audit).unwrap().lines().count(),
+        added_before
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn offline_backend_has_no_version_board_probe_and_rejects_board_commands() {
     let (project, root) = disposable_project("offline-only");
     let audit = project.logs_dir().join("external-tools.jsonl");
