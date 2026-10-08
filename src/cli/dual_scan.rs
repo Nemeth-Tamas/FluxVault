@@ -280,6 +280,8 @@ enum Command {
     Read(Station, u32),
     Out(Station),
     Status,
+    Pause,
+    Resume,
     Quit,
 }
 fn command(text: &str) -> Result<Command, String> {
@@ -290,13 +292,19 @@ fn command(text: &str) -> Result<Command, String> {
     if matches!(text.as_str(), "STATUS" | "S" | "?") {
         return Ok(Command::Status);
     }
+    if matches!(text.as_str(), "PAUSE" | "P") {
+        return Ok(Command::Pause);
+    }
+    if matches!(text.as_str(), "RESUME" | "R") {
+        return Ok(Command::Resume);
+    }
     let mut chars = text.chars();
     let station = match chars.next() {
         Some('U') => Station::Usb,
         Some('G') => Station::Greaseweazle,
         _ => {
             return Err(
-                "Use u001 or g002 (check each label/open tab), u out / g out, STATUS or QUIT"
+                "Use u001 or g002 (check each label/open tab), u out / g out, STATUS, PAUSE, RESUME or QUIT"
                     .into(),
             );
         }
@@ -313,6 +321,12 @@ fn command(text: &str) -> Result<Command, String> {
 }
 
 fn begin(c: &mut Coordinator, station: Station, disk: u32) -> Result<Ticket, String> {
+    // Check before implicitly confirming an old SAVED disk's removal.
+    if c.paused() {
+        return Err(
+            "Feeding is PAUSED; type RESUME first. No custody changed and no read started".into(),
+        );
+    }
     let state = c.status();
     let queued = state["usb_recovery_queue"]
         .as_array()
@@ -359,6 +373,10 @@ fn begin(c: &mut Coordinator, station: Station, disk: u32) -> Result<Ticket, Str
 fn next_action(state: &Value, station: Station, held: Option<(u32, &str)>) -> String {
     let name = station_name(station);
     let prefix = if station == Station::Usb { "u" } else { "g" };
+    let paused = state["paused"] == true;
+    if paused && held.is_none_or(|(_, phase)| !matches!(phase, "saved" | "reading")) {
+        return "PAUSED / no new reads; RESUME enables numbered confirmation, QUIT drains".into();
+    }
     if let Some((disk, phase)) = held {
         match phase {
             "reading" => return format!("WAIT / DO NOT REMOVE {disk:03}"),
@@ -368,16 +386,21 @@ fn next_action(state: &Value, station: Station, held: Option<(u32, &str)>) -> St
                 );
             }
             "saved" => {
+                let followup = if paused {
+                    "RESUME required before another read"
+                } else {
+                    "or feed NEXT FRESH"
+                };
                 let partial = station == Station::Usb
                     && state["usb_transfer_pending"]
                         .as_array()
                         .is_some_and(|a| a.iter().any(|n| n.as_u64() == Some(disk as u64)));
                 return if partial {
                     format!(
-                        "REMOVE {disk:03} / SET ASIDE FOR GW (g{disk} when GW free); {prefix} out confirms removal, or feed NEXT FRESH"
+                        "REMOVE {disk:03} / SET ASIDE FOR GW (g{disk} when GW free); {prefix} out confirms removal; {followup}"
                     )
                 } else {
-                    format!("REMOVE {disk:03}; {prefix} out confirms removal, or feed NEXT FRESH")
+                    format!("REMOVE {disk:03}; {prefix} out confirms removal; {followup}")
                 };
             }
             _ => {}
@@ -420,6 +443,14 @@ pub(super) fn saved_status(state: &Value) -> String {
         return "No dual scan started in this project. No physical media accessed.".into();
     }
     let mut lines = vec!["Dual coordinator (saved state; not a live reader probe)".into()];
+    lines.push(format!(
+        "Feeding: {}",
+        if state["paused"] == true {
+            "PAUSED (resume scan, then type RESUME)"
+        } else {
+            "enabled; each read still needs a numbered confirmation"
+        }
+    ));
     for station in [Station::Usb, Station::Greaseweazle] {
         let held = held_in_state(state, station);
         let text = held.map_or("ready".into(), |(n, p)| format!("{p} {n:03}"));
@@ -441,6 +472,9 @@ fn display(
     draining: bool,
 ) -> Result<(), String> {
     let state = session.coordinator.status();
+    if state["paused"] == true {
+        writeln!(output, "FEEDING PAUSED / no new reads / RESUME or QUIT; active reads and saved-file work may finish").map_err(|e| e.to_string())?;
+    }
     for station in [Station::Usb, Station::Greaseweazle] {
         let held = held_in_state(&state, station);
         let mut text = held.map_or("ready".into(), |(n, p)| format!("{p} {n:03}"));
@@ -467,7 +501,7 @@ fn display(
         };
         writeln!(output, "{escape}  ACTION: {action}{reset}").map_err(|e| e.to_string())?;
     }
-    writeln!(output, "NEXT FRESH: {} | USB -> GW pending: {} | uN / gN / STATUS / QUIT\nShared numbering: a fresh label goes to ONE station, never both.",
+    writeln!(output, "NEXT FRESH: {} | USB -> GW pending: {} | uN / gN / STATUS / PAUSE / RESUME / QUIT\nShared numbering: a fresh label goes to ONE station, never both.",
         session.coordinator.next_fresh_disk().map_or("finished".into(), |n| format!("{n:03}")),
         state["usb_transfer_pending"])
         .and_then(|_| output.flush()).map_err(|e| e.to_string())
@@ -552,6 +586,15 @@ fn feed(
                         Ok(())
                     }
                     Ok(Command::Status) => display(&session, output, color, draining),
+                    Ok(command @ (Command::Pause | Command::Resume)) => {
+                        let paused = matches!(command, Command::Pause);
+                        session.coordinator.set_paused(paused)
+                            .and_then(|_| terminal::banner(output, color, Cue::Action,
+                                if paused { "FEEDING PAUSED" } else { "FEEDING RESUMED / NO AUTOMATIC READ" },
+                                if paused { "No new reads. Active reads finish; wait for SAVED before removal. Background files continue. RESUME or QUIT." }
+                                    else { "Check the disk label and open tab, then type uN / gN. RESUME itself starts no read." }))
+                            .and_then(|_| display(&session, output, color, draining))
+                    }
                     Ok(Command::Out(station)) => {
                         let held = session
                             .coordinator
@@ -830,7 +873,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
         Cue::Action,
         "DUAL READ-ONLY PILOT / EXACT LABELS REQUIRED",
         &format!(
-            "USB {} / GW {}. Type u1 for USB 001, g2 for GW 002. Each command asserts the label and OPEN protection tab; replacing a SAVED disk asserts its removal. gNNN transfers a saved USB partial. STATUS / u out / g out / QUIT. QUIT drains reads; never move a READING disk.",
+            "USB {} / GW {}. Type u1 for USB 001, g2 for GW 002. Each command asserts the label and OPEN protection tab; replacing a SAVED disk asserts its removal. gNNN transfers a saved USB partial. STATUS / u out / g out / PAUSE / RESUME / QUIT. QUIT drains reads; never move a READING disk.",
             selected.usb, selected.gw
         ),
     )?;

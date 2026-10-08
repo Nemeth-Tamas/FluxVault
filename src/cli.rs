@@ -72,7 +72,7 @@ Usage:
   fluxvault scan --usb [--drive A:] --write-blocker-verified
                                     USB-only shortcut; numbered labels or legacy READ
   fluxvault scan --double --write-blocker-verified [--last-disk N]
-                                    Dual pilot: u1 / g2; both readers, numbered GW transfers
+                                    Dual pilot: u1 / g2; p pause / r resume / s status / q drain
   fluxvault scan --double --plan [--last-disk N]
                                     Offline dual-station preview; no drives opened
   fluxvault production status       Inspect saved coordinator state offline

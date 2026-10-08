@@ -79,6 +79,8 @@ struct Disk {
 #[serde(deny_unknown_fields)]
 struct Journal {
     schema: u32,
+    #[serde(default)]
+    paused: bool,
     first: u32,
     last: Option<u32>,
     generation: u64,
@@ -378,6 +380,7 @@ impl Coordinator {
             let stats = imaging::load_project_statistics(&project.images_dir())?;
             Journal {
                 schema: 1,
+                paused: false,
                 first: project.current_disk_number(),
                 last,
                 generation: 0,
@@ -453,6 +456,27 @@ impl Coordinator {
         next(&self.journal)
     }
 
+    pub fn paused(&self) -> bool {
+        self.journal.paused
+    }
+
+    /// Pause authorizes no new physical reads. Existing workers may finish and
+    /// publish their receipts; removal confirmations and downstream work remain
+    /// usable. Persist the intent so a restart cannot silently undo it.
+    pub fn set_paused(&mut self, paused: bool) -> Result<(), String> {
+        let mut candidate = self.journal.clone();
+        candidate.paused = paused;
+        self.commit(candidate)
+    }
+
+    fn require_feeding(&self) -> Result<(), String> {
+        if self.paused() {
+            Err("Feeding is PAUSED; type RESUME before confirming any new physical read".into())
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn owner(&self) -> Arc<File> {
         self._owner.clone()
     }
@@ -514,6 +538,7 @@ impl Coordinator {
     /// A GUI/terminal must ask the operator for this ticket's exact label and
     /// protection assertion before confirm; claim alone never authorizes a read.
     pub fn claim(&mut self, station: Station, disk: u32) -> Result<Ticket, String> {
+        self.require_feeding()?;
         if disk == 0 {
             return Err("Disk label must be positive".into());
         }
@@ -568,6 +593,7 @@ impl Coordinator {
     /// operator actually inserted. A started/interrupted read cannot be abandoned
     /// through this convenience; no evidence-bearing record is removed.
     pub fn select_queued_instead(&mut self, offer: &Ticket, disk: u32) -> Result<Ticket, String> {
+        self.require_feeding()?;
         let mut j = self.journal.clone();
         Self::current(&mut j, offer, Phase::Reserved)?;
         if offer.station != Station::Greaseweazle
@@ -617,6 +643,7 @@ impl Coordinator {
     }
 
     pub fn confirm(&mut self, ticket: &Ticket, label: &str, protected: bool) -> Result<(), String> {
+        self.require_feeding()?;
         if !protected || label.trim().parse::<u32>().ok() != Some(ticket.disk) {
             return Err("Exact disk label and physical write-protection confirmation required; no read authorized".into());
         }
@@ -725,7 +752,7 @@ impl TransferGuard {
 }
 
 fn status_value(j: &Journal) -> Value {
-    json!({"schema":1,"next_fresh_disk":next(j),"first":j.first,"last":j.last,
+    json!({"schema":1,"paused":j.paused,"next_fresh_disk":next(j),"first":j.first,"last":j.last,
         "usb_recovery_queue":j.disks.iter().filter(|(_, d)| d.phase==Phase::AwaitGw).map(|(n, _)| *n).collect::<Vec<_>>(),
         // A saved partial still held in USB is transferable by gNNN, but not
         // yet in the removal-confirmed queue. Keep those two custody facts
@@ -775,6 +802,7 @@ pub(crate) fn preview(project: &ProjectState, last: Option<u32>) -> Result<Value
     } else {
         Journal {
             schema: 1,
+            paused: false,
             first: project.current_disk_number(),
             last,
             generation: 0,

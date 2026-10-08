@@ -178,6 +178,8 @@ The destination must exist **outside the project**. `finalize` processes saved f
 
 USB-only: `fv scan --usb --write-blocker-verified` uses A: and asks for each number. The **opt-in two-drive pilot** is `fv scan --double --write-blocker-verified`: one console, `u1` / `g2`, and `gOLD` for an earlier USB partial. Both readers feed background processing. Exact label/open-tab and existing USB protection checks remain; dual rejects `--no-verify`. Start with the [small 007–010 test](DUAL_SCAN.md), not 136 disks. Ordinary `fv scan` remains GW-only.
 
+In dual mode, `p` pauses new reads while current reads/files finish; `r` enables numbered confirmations again but starts no read. Pause survives restarting the command. `s` shows both station actions and pending transfers. Only remove a disk after **SAVED**, even while paused; `u out` / `g out` records removal.
+
 Ignore this section for a normal new scan. Replace example paths/numbers with your own as needed.
 
 ### Scan a numbered range

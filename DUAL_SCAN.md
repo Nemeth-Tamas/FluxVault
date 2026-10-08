@@ -32,6 +32,8 @@ Never move a disk marked **READING**. Every read command confirms station, exact
 | `g22` | Recover an available earlier USB partial 022 |
 | `u out` / `g out` | Confirm removal of that station's SAVED disk |
 | `s`, `?`, `STATUS` | Both stations, next fresh label and transfer queue |
+| `p`, `PAUSE` | Persistently stop new reads; active reads/background work finish |
+| `r`, `RESUME` | Enable numbered confirmations again; starts no read itself |
 | `q`, `QUIT` | Stop new reads; finish active reads and downstream work |
 
 This pilot uses **one aggregator console**, with station-labelled progress and a heartbeat during quiet reads. No additional windows or competing independent scans are launched. Clean swap banners are green; partials/errors red. ASCII-first messages also work without color.
@@ -64,6 +66,8 @@ Background extraction/conversion/audit/reporting and managed capture packing run
 
 `QUIT` is graceful draining, **not immediate cancellation**: active GW recovery can use its stage allowances. Interrupted custody requires reconfirmation; SAVED disks retain removal obligations. A completed USB image left before receipt commit can be adopted without opening a drive, and GW reuses verified completed recovery.
 
+Need a break? Type `PAUSE` (`p`). It blocks new `uN`/`gN` commands before changing custody, but lets existing reads finish and background work continue. Wait for **SAVED** before removing a disk; `u out`/`g out` still work while paused. Type `RESUME` (`r`), then your next numbered read command when ready. Resume does not read anything automatically. The pause persists across exit/restart: reopen with the usual dual command, then explicitly `RESUME`. Older journals without a pause field start enabled, still requiring numbered confirmations. A final range with all removals/queues complete drains normally, even if paused. This is feeding pause, not in-flight capture cancellation or suspension of the file-processing workers.
+
 Finished sessions save unique `Reports/DualScan-*.json` files: per-station read/decode timings, image hashes, missing counts, errors, final queue, processing and packing results. New report schema 2 adds `feeding_elapsed_ms` (the event loop, including swaps/waits) and `session_elapsed_ms` (preflight through final processing, before report publication). These are invocation-local, not accumulated across restarts. Read timings can overlap; their sum is not wall-clock throughput. Existing `benchmark report` remains the single-GW report, not a dual speed/yield claim.
 
 `production status` now prints concise station/custody actions rather than the entire receipt JSON. `--json` retains detailed receipts and adds `usb_transfer_pending`, which includes saved partials still held in USB as well as set-aside ones. The original `usb_recovery_queue` remains removal-confirmed only. Offline inspection cannot prove that a recorded READING disk is actively reading; it tells you to check the original console or resume/reconfirm after it ends, never to blindly move it.
@@ -77,6 +81,8 @@ Offline preview: `fv scan --double --plan [--last-disk N]`. It opens no drives/t
 USB 007 and GW 008 ran concurrently, followed by USB 009 and GW 010. USB 009 saved a partial image with three missing sectors; `g9` transferred that identity and produced a clean 720 KB image. All four disks finished with zero missing sectors in their preferred images; extraction verified 37 forensic files and 29 Office conversion jobs succeeded. Five background runs completed with no worker/storage errors. The operator's console measured 6m55s for the entire session, including swaps and the 009 transfer, not an isolated reader benchmark.
 
 The first final audit reported three false conversion warnings because canonical Windows output paths were written as absolute paths in the CSV. The corrected release resolves both sides before generating confined relative paths. Offline `fv process` on this same pilot now returns success: four verified / zero attention, all 58 Office/PDF outputs reused, and all saved image/capture/extraction/delivery bytes unchanged. The original dual-run report remains unchanged as historical evidence; the refreshed `Reports/EvidenceAudit.json` and workbook reflect the fix. No disk needs rescanning for this warning.
+
+The saved cohort also passed release `finalize`: process/audit succeeded and the archival ZIP verified all 196 inventoried members. The approximately 46.9 MiB ZIP and SHA-256 sidecar are retained outside the repo under `FluxVault-Test\Dual-007-010-Delivery-20261008-v1`. This is archival integrity verification, not a claim that every document's formatting/content or the entire historical customer recovery is certified.
 
 Routine tests cover the event pump with overlapping mocked readers, USB continuing while GW is busy, earlier-label transfer, invalid input, removal, QUIT, station failure, receipt adoption, shared ownership and device exclusion. Subprocess tests run **mock GW only**, including real parent termination after a saved receipt and restart without rereading it. Guarded publication refuses mismatched candidates before creating an image; later acceptance reuses the capture and completed reuse checks the guard again. The earlier reopenable 136-label/14-transfer model still passes.
 

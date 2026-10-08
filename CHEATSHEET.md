@@ -121,6 +121,8 @@ Normal scans/processing need their saved-file tools; standalone native extractio
 
 USB-only: `fv scan --usb --count 20 --write-blocker-verified` (default A:, same protection checks; type the number). Two-drive **pilot**: `fv scan --double --write-blocker-verified --last-disk 10`, then `u7` / `g8` for USB/GW labels, `gOLD` for a queued USB partial, `u out` / `g out` after the last saved disks, `QUIT` to drain. Use a small new project first; dual rejects `--no-verify`. Ordinary scan stays GW-only. [Copyable 007–010 test](DUAL_SCAN.md).
 
+Dual-only break commands: `p` pauses new reads (current reads and files finish); `r` resumes confirmations, starting no read itself. The pause survives restart. Always wait for **SAVED** before removal, even while paused. `s` shows each station's next physical action and pending USB transfers.
+
 - `fv tools check` checks host tools; `fv greaseweazle info` checks board readiness.
 - `fv scan --conversion-workers 4` saves a 1–16 worker request; background work caps it to leave two logical CPUs available.
 - Fast/Normal/Recovery/Detective each get up to ten minutes of capture time. Clean/no-improvement stops finish earlier; stubborn disks can take roughly 40 minutes plus offline work.

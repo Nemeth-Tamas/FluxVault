@@ -96,6 +96,8 @@ fn station_commands_require_positive_exact_labels_and_never_accept_blank_enter()
     ));
     assert!(matches!(command("u out"), Ok(Command::Out(Station::Usb))));
     assert!(matches!(command("quit"), Ok(Command::Quit)));
+    assert!(matches!(command("p"), Ok(Command::Pause)));
+    assert!(matches!(command("resume"), Ok(Command::Resume)));
 }
 
 #[test]
@@ -177,6 +179,50 @@ fn station_actions_distinguish_waiting_retry_transfer_and_shared_fresh_numbers()
         "NO FRESH DISKS / station ready"
     );
     assert!(saved_status(&json!({"initialized":false})).contains("No dual scan started"));
+    let paused = json!({"paused":true,"next_fresh_disk":53,"usb_transfer_pending":[22]});
+    assert!(next_action(&paused, Station::Greaseweazle, None).starts_with("PAUSED"));
+    assert_eq!(
+        next_action(&paused, Station::Usb, Some((7, "reading"))),
+        "WAIT / DO NOT REMOVE 007"
+    );
+    assert!(next_action(&paused, Station::Usb, Some((22, "saved"))).contains("RESUME required"));
+}
+
+#[test]
+fn pause_preserves_saved_custody_and_resume_itself_launches_no_reader() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();
+    let usb = begin(&mut c, Station::Usb, 1).unwrap();
+    evidence(&p, &usb, 1, &[1]);
+    c.complete(&usb, 1).unwrap();
+    c.set_paused(true).unwrap();
+    let before = fs::read(p.root().join(".fluxvault-production.json")).unwrap();
+    for (station, disk) in [(Station::Usb, 2), (Station::Greaseweazle, 1)] {
+        assert!(begin(&mut c, station, disk).unwrap_err().contains("PAUSED"));
+    }
+    assert_eq!(
+        fs::read(p.root().join(".fluxvault-production.json")).unwrap(),
+        before
+    );
+    let reader: Reader =
+        Arc::new(|_, _, _| panic!("pause/resume/status/out must never launch a reader"));
+    let (tx, rx) = mpsc::sync_channel(16);
+    for text in ["u2", "g1", "RESUME", "STATUS", "PAUSE", "u out", "QUIT"] {
+        tx.send(Event::Input(Some(text.into()))).unwrap();
+    }
+    let mut output = Vec::new();
+    let value = feed(session(c), rx, tx, reader, None, None, &mut output, false).unwrap();
+    assert_eq!(value["completed_this_session"], 0);
+    assert_eq!(value["state"]["paused"], true);
+    assert_eq!(value["state"]["usb_recovery_queue"], json!([1]));
+    assert!(value["state"]["disks"].get("2").is_none());
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("FEEDING RESUMED / NO AUTOMATIC READ"));
+    assert!(text.contains("No custody changed and no read started"));
+    let c = Coordinator::open(p.clone(), Some(3), false).unwrap();
+    assert!(c.paused());
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
 }
 
 #[test]

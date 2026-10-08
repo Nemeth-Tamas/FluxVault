@@ -249,6 +249,74 @@ fn actual_process_exit_after_saved_receipt_keeps_removal_and_next_label_without_
 }
 
 #[test]
+fn pause_during_mock_read_survives_process_exit_and_resume_alone_does_not_reread() {
+    let f = Fixture::new();
+    let mut run = f.start(true);
+    run.send("g1");
+    run.send("PAUSE");
+    f.wait(1, "saved");
+    let control = f.project.root().join(".fluxvault-production.json");
+    let start = Instant::now();
+    loop {
+        let v: Value = serde_json::from_slice(&fs::read(&control).unwrap()).unwrap();
+        if v["paused"] == true {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10));
+        thread::sleep(Duration::from_millis(10));
+    }
+    let image = fs::read(f.project.images_dir().join("001_attempt_001.img")).unwrap();
+    run.child.kill().unwrap();
+    run.child.wait().unwrap();
+    drop(run);
+
+    let mut blocked = f.start(false);
+    blocked.send("g2");
+    blocked.send("QUIT");
+    let (code, value, stderr) = blocked.finish();
+    assert_eq!(code, 3, "{value}\n{stderr}");
+    assert_eq!(value["state"]["paused"], true);
+    assert_eq!(value["completed_this_session"], 0);
+    assert_eq!(value["state"]["disks"]["1"]["phase"], "saved");
+    assert!(stderr.contains("No custody changed and no read started"));
+    assert!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 2)
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut enabled = f.start(false);
+    enabled.send("RESUME");
+    enabled.send("STATUS");
+    enabled.send("QUIT");
+    let (code, value, stderr) = enabled.finish();
+    assert_eq!(code, 3, "{value}\n{stderr}");
+    assert_eq!(value["state"]["paused"], false);
+    assert_eq!(value["completed_this_session"], 0);
+    assert!(stderr.contains("FEEDING RESUMED / NO AUTOMATIC READ"));
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001_attempt_001.img")).unwrap(),
+        image
+    );
+
+    let mut continued = f.start(false);
+    continued.send("g2");
+    f.wait(2, "saved");
+    continued.send("g out");
+    continued.send("QUIT");
+    let (code, value, stderr) = continued.finish();
+    assert_eq!(code, 0, "{value}\n{stderr}");
+    assert_eq!(value["completed_this_session"], 1);
+    assert_eq!(value["state"]["disks"]["1"]["phase"], "complete");
+    assert_eq!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn cli_no_verify_and_missing_usb_assertion_fail_before_owner_or_production_state() {
     let f = Fixture::new();
     for flags in [

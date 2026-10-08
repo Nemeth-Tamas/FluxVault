@@ -65,6 +65,67 @@ fn start(c: &mut Coordinator, station: Station, number: u32) -> Ticket {
 }
 
 #[test]
+fn durable_pause_blocks_new_authorization_but_allows_active_receipts_and_removal() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();
+    let usb = c.claim(Station::Usb, 1).unwrap();
+    c.set_paused(true).unwrap();
+    let paused_bytes = fs::read(p.root().join(JOURNAL)).unwrap();
+    assert!(c.confirm(&usb, "1", true).unwrap_err().contains("PAUSED"));
+    assert_eq!(fs::read(p.root().join(JOURNAL)).unwrap(), paused_bytes);
+    c.set_paused(false).unwrap();
+    c.confirm(&usb, "1", true).unwrap();
+    let offer = c.claim(Station::Greaseweazle, 2).unwrap();
+    c.set_paused(true).unwrap();
+    evidence(&p, 1, 1, Station::Usb, &[1], 17);
+    c.complete(&usb, 1).unwrap();
+    c.removed(&usb, true).unwrap();
+    let saved_bytes = fs::read(p.root().join(JOURNAL)).unwrap();
+    assert!(c.claim(Station::Usb, 3).unwrap_err().contains("PAUSED"));
+    assert!(
+        c.select_queued_instead(&offer, 1)
+            .unwrap_err()
+            .contains("PAUSED")
+    );
+    assert!(c.confirm(&offer, "2", true).unwrap_err().contains("PAUSED"));
+    assert_eq!(fs::read(p.root().join(JOURNAL)).unwrap(), saved_bytes);
+    drop(c);
+    let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();
+    assert!(c.paused());
+    assert_eq!(c.status()["usb_recovery_queue"], json!([1]));
+    assert_eq!(c.status()["disks"]["2"]["phase"], "interrupted");
+    assert!(c.claim(Station::Usb, 3).is_err());
+    c.set_paused(false).unwrap();
+    assert_eq!(c.status()["disks"]["2"]["phase"], "interrupted");
+    assert_eq!(
+        imaging::load_attempts_for_disk(&p.images_dir(), 2)
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(c.claim(Station::Usb, 3).unwrap().disk, 3);
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn legacy_production_journal_without_pause_field_reopens_as_feeding_enabled() {
+    let p = project();
+    let c = Coordinator::open(p.clone(), Some(1), false).unwrap();
+    drop(c);
+    let path = p.root().join(JOURNAL);
+    let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    legacy.as_object_mut().unwrap().remove("paused");
+    fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let c = Coordinator::open(p.clone(), Some(1), false).unwrap();
+    assert!(!c.paused());
+    assert_eq!(c.next_fresh_disk(), Some(1));
+    assert!(c.status()["disks"].as_object().unwrap().is_empty());
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
 fn both_stations_take_fresh_disks_and_usb_partial_returns_by_its_old_label() {
     let p = project();
     let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();

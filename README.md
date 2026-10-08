@@ -77,4 +77,4 @@ FluxVault never writes to source floppies. Missing bytes are not fabricated. Fra
 | Comparing to the old archive | [Baseline comparison](BASELINE_COMPARISON.md) |
 | Opt-in two-drive live pilot and USB shortcut | [Dual scan](DUAL_SCAN.md) |
 
-This is a working **single-Greaseweazle prototype**, with live sample batches and automated tests, plus an **opt-in two-drive pilot ready for a small live acceptance test**. Full 136-disk acceptance, deeper damaged-filesystem recovery and validated simultaneous USB/Greaseweazle production remain targets. See [current progress](PROGRESS.md); implementation percentages are not recovery rates.
+This is a working **single-Greaseweazle prototype**, with live sample batches and automated tests, plus an **opt-in two-drive pilot validated on customer 007–010**, including a USB-to-GW recovery transfer. Dual mode includes persistent feeding pause/resume and explicit station actions. Full 136-disk acceptance, deeper damaged-filesystem recovery and broader simultaneous USB/Greaseweazle production remain targets. See [current progress](PROGRESS.md); implementation percentages are not recovery rates.
