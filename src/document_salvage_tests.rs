@@ -1,5 +1,7 @@
 use super::*;
 use std::io::Cursor;
+#[path = "document_cfb_tests.rs"]
+mod cfb_tests;
 
 fn fixture(compressed: bool, mini: bool) -> (Vec<u8>, fat12::FileRecord, Vec<usize>) {
     let mut word = vec![0; 8192];
@@ -359,10 +361,25 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
     assert_eq!(text.recovered_character_positions, 644);
     assert_eq!(text.missing_character_positions, 256);
     assert_eq!(text.repaired_originals, 0);
+    assert_eq!(text.engine_version, 2);
+    assert_eq!(text.readable_editions, 1);
+    let edition = &text.readable_edition_paths[0];
+    let edition_bytes = fs::read(edition).unwrap();
+    assert!(String::from_utf8_lossy(&edition_bytes).contains("MISSING / INVALID TEXT"));
     assert!(!text.reused);
+    // Old generations are operator/evidence-owned and must never be migrated in place.
+    let legacy = text
+        .output_directory
+        .with_file_name("attempt_001_word_text_v1");
+    fs::create_dir(&legacy).unwrap();
+    fs::write(legacy.join("word-text.json"), b"old forensic report").unwrap();
     let repeated = run().unwrap();
     assert!(repeated.reused);
     assert!(repeated.document_salvage.unwrap().reused);
+    assert_eq!(
+        fs::read(legacy.join("word-text.json")).unwrap(),
+        b"old forensic report"
+    );
     let cli = crate::cli::run(
         &[
             "recovery".into(),
@@ -377,6 +394,13 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
     let value: serde_json::Value = serde_json::from_str(&cli.output).unwrap();
     assert_eq!(value["physical_media_access"], false);
     assert_eq!(value["document_salvage"]["text_segments"], 2);
+    assert_eq!(value["document_salvage"]["readable_editions"], 1);
+    let human = crate::cli::run(
+        &["recovery".into(), "documents".into(), "1".into()],
+        p.root(),
+    )
+    .unwrap();
+    assert!(human.output.contains("Open readable edition:"));
     let manifest = crate::manifest::build_manifest(
         &crate::manifest::ManifestRequest {
             extracted_root: p.extracted_dir(),
@@ -419,12 +443,30 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
     assert!(
         archive
             .by_name(&format!(
-                "Recovery/001/attempt_{:03}_word_text_v1/{name}",
+                "Recovery/001/attempt_{:03}_word_text_v2/{name}",
                 attempt.attempt_number
             ))
             .is_ok()
     );
+    assert!(
+        archive
+            .by_name(&format!(
+                "Recovery/001/attempt_{:03}_word_text_v2/{}",
+                attempt.attempt_number,
+                edition.file_name().unwrap().to_string_lossy()
+            ))
+            .is_ok()
+    );
     drop(archive);
+    fs::write(edition, b"edited HTML").unwrap();
+    assert!(run().unwrap_err().contains("edition changed"));
+    assert_eq!(fs::read(edition).unwrap(), b"edited HTML");
+    fs::write(edition, &edition_bytes).unwrap();
+    let extra = text.output_directory.join("operator-note.txt");
+    fs::write(&extra, b"do not overwrite").unwrap();
+    assert!(run().unwrap_err().contains("report/inventory changed"));
+    assert_eq!(fs::read(&extra).unwrap(), b"do not overwrite");
+    fs::remove_file(extra).unwrap();
     fs::write(&target, b"operator edit").unwrap();
     assert!(run().unwrap_err().contains("text changed"));
     assert_eq!(fs::read(&target).unwrap(), b"operator edit");

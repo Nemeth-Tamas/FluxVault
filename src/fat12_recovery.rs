@@ -440,11 +440,12 @@ fn recover_with_mode(
             crate::document_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
         if let Some(text) = &result.document_salvage {
             progress(&format!(
-                "Document text salvage: {} readable segments / {} character positions; {} missing positions; {} refusals. Separate forensic text only, not repaired DOC files.",
+                "Document text salvage: {} readable segments / {} character positions; {} missing positions; {} refusals; {} readable HTML editions. Separate forensic text only, not repaired DOC files.",
                 text.text_segments,
                 text.recovered_character_positions,
                 text.missing_character_positions,
-                text.refused_documents
+                text.refused_documents,
+                text.readable_editions
             ));
         }
         if let Some(fragments) = &result.fragments {

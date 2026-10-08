@@ -16,6 +16,15 @@ use crate::{
 
 use super::CliResponse;
 
+fn readable_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(unc) = value.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{unc}")
+    } else {
+        value.strip_prefix("\\\\?\\").unwrap_or(&value).to_owned()
+    }
+}
+
 pub(super) fn run_advanced(
     positional: &[String],
     project: &ProjectState,
@@ -135,7 +144,7 @@ pub(super) fn run_advanced(
                     } else {
                         result.document_salvage.as_ref().map_or_else(
                             || format!("Disk {disk_number:03}: no eligible incomplete .doc/.dot candidates. Native report: {}. No original repaired or physical media accessed.",result.report_path.display()),
-                            |s| format!("Disk {disk_number:03}: {} documents with readable text; {} UTF-8 segments / {} character positions; {} missing positions; {} refused documents.\nFolder: {}\nReport: {}\nFORENSIC TEXT ONLY: no repaired DOC, original replacement, formatting or whole-file completeness claimed.",s.documents_with_text,s.text_segments,s.recovered_character_positions,s.missing_character_positions,s.refused_documents,s.output_directory.display(),s.report_path.display())
+                            |s| format!("Disk {disk_number:03}: {} documents with readable text; {} UTF-8 segments / {} character positions; {} missing positions; {} refused documents.\nWord text engine v{}: {} selectively mapped containers; {} readable HTML editions.\n{}Folder: {}\nReport: {}\nFORENSIC TEXT ONLY: HTML editions show explicit gaps, not repaired DOCs, original replacements, formatting or whole-file completeness.",s.documents_with_text,s.text_segments,s.recovered_character_positions,s.missing_character_positions,s.refused_documents,s.engine_version,s.selectively_mapped_documents,s.readable_editions,s.readable_edition_paths.iter().map(|p| format!("Open readable edition: {}\n",readable_path(p))).collect::<String>(),readable_path(&s.output_directory),readable_path(&s.report_path))
                         )
                     },
                     exit_code: 3,

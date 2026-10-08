@@ -14,6 +14,22 @@ use std::{
 const MAX_CHARACTERS: usize = 200_000;
 const MAX_SEGMENTS: usize = 4096;
 const MAX_WORK: usize = 64 * 1024 * 1024;
+pub const ENGINE_VERSION: u32 = 2;
+#[path = "document_cfb.rs"]
+mod cfb_recovery;
+pub use cfb_recovery::Evidence as CfbEvidence;
+#[path = "document_recovery_html.rs"]
+mod readable_html;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadableEdition {
+    pub path: String,
+    pub bytes: usize,
+    pub sha256: String,
+    pub repaired_original: bool,
+    #[serde(skip)]
+    html: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextSegment {
@@ -47,10 +63,19 @@ pub struct Document {
     pub missing_text: Vec<TextGap>,
     pub repaired_original: bool,
     pub customer_delivery_certified: bool,
+    #[serde(default)]
+    pub cfb_recovery: Option<CfbEvidence>,
+    #[serde(default)]
+    pub strict_parser_refusal: Option<String>,
+    #[serde(default)]
+    pub readable_edition: Option<ReadableEdition>,
+    #[serde(default)]
+    pub edition_refusal: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Report {
     schema_version: u32,
+    engine_version: u32,
     disk: u32,
     attempt: u32,
     source_image: String,
@@ -62,6 +87,10 @@ struct Report {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct SalvageResult {
+    pub engine_version: u32,
+    pub selectively_mapped_documents: usize,
+    pub readable_editions: usize,
+    pub readable_edition_paths: Vec<PathBuf>,
     pub output_directory: PathBuf,
     pub report_path: PathBuf,
     pub documents_examined: usize,
@@ -253,11 +282,11 @@ fn gap(gaps: &mut Vec<TextGap>, cp: usize, count: usize, reason: &str) {
     }
 }
 
-fn extract(
+fn parent_mapping(
     image: &[u8],
     parent: &fat12::FileRecord,
     bad: &BTreeSet<u64>,
-) -> Result<Document, String> {
+) -> Result<SparseStream, String> {
     if parent.bytes > fat12::MAX_IMAGE_BYTES || parent.bytes < 512 {
         return Err("Unsupported document size".into());
     }
@@ -285,14 +314,42 @@ fn extract(
     {
         return Err("No readable supported compound-document header; legacy/non-OLE Word remains unresolved".into());
     }
+    Ok(SparseStream { bytes, sources })
+}
+fn extract(
+    image: &[u8],
+    parent: &fat12::FileRecord,
+    bad: &BTreeSet<u64>,
+) -> Result<Document, String> {
+    let mapping = parent_mapping(image, parent, bad)?;
+    match extract_strict(&mapping.bytes, &mapping.sources, parent) {
+        Ok(d) => Ok(d),
+        Err(strict) => {
+            let (word, table, mut metadata, evidence) =
+                cfb_recovery::streams(&mapping.bytes, &mapping.sources)
+                    .map_err(|e| format!("{strict}; selective CFB refusal: {e}"))?;
+            metadata.extend(parent.metadata_lbas.iter().copied());
+            let mut doc = decode_streams(parent, &word, &table, metadata)
+                .map_err(|e| format!("{strict}; selective Word refusal: {e}"))?;
+            doc.cfb_recovery = Some(evidence);
+            doc.strict_parser_refusal = Some(strict);
+            Ok(doc)
+        }
+    }
+}
+fn extract_strict(
+    bytes: &[u8],
+    sources: &[Option<usize>],
+    parent: &fat12::FileRecord,
+) -> Result<Document, String> {
     let trace = Arc::new(Mutex::new(Trace {
         allow_holes: false,
         reads: vec![],
         work: 0,
     }));
     let reader = Reader {
-        bytes: bytes.clone(),
-        sources: sources.clone(),
+        bytes: bytes.to_vec(),
+        sources: sources.to_vec(),
         position: 0,
         trace: trace.clone(),
     };
@@ -316,6 +373,21 @@ fn extract(
     }
     trace.lock().unwrap().allow_holes = true;
     let word = stream(&mut compound, "/WordDocument", &trace, &bytes, &sources)?;
+    let fib = known(&word, 0, 426)?;
+    let name = if u16at(fib, 10) & 0x200 != 0 {
+        "/1Table"
+    } else {
+        "/0Table"
+    };
+    let table = stream(&mut compound, name, &trace, bytes, sources)?;
+    decode_streams(parent, &word, &table, metadata)
+}
+fn decode_streams(
+    parent: &fat12::FileRecord,
+    word: &SparseStream,
+    table: &SparseStream,
+    mut metadata: BTreeSet<u64>,
+) -> Result<Document, String> {
     let fib = known(&word, 0, 426)?;
     let version = u16at(fib, 2);
     let flags = u16at(fib, 10);
@@ -367,7 +439,6 @@ fn extract(
     } else {
         "/0Table"
     };
-    let table = stream(&mut compound, name, &trace, &bytes, &sources)?;
     let clx_at = u32at(fib, 418);
     let clx_len = u32at(fib, 422);
     if clx_len > 64 * 1024 || clx_len < 5 {
@@ -415,6 +486,10 @@ fn extract(
         missing_text: vec![],
         repaired_original: false,
         customer_delivery_certified: false,
+        cfb_recovery: None,
+        strict_parser_refusal: None,
+        readable_edition: None,
+        edition_refusal: None,
     };
     for i in 0..pieces {
         if cps[i] >= main {
@@ -565,6 +640,7 @@ pub(crate) fn preserve(
     let mut documents = vec![];
     let mut limits = false;
     let mut positions = 0;
+    let mut edition_bytes = 0;
     for parent in &a.unrecovered_files {
         if !fat12::partial_file_safe(parent, a) {
             continue;
@@ -577,7 +653,7 @@ pub(crate) fn preserve(
             limits = true;
             break;
         }
-        let d = match extract(image, &parent.record, &bad) {
+        let mut d = match extract(image, &parent.record, &bad) {
             Ok(doc) => doc,
             Err(e) => Document {
                 parent: parent.record.clone(),
@@ -590,6 +666,10 @@ pub(crate) fn preserve(
                 missing_text: vec![],
                 repaired_original: false,
                 customer_delivery_certified: false,
+                cfb_recovery: None,
+                strict_parser_refusal: None,
+                readable_edition: None,
+                edition_refusal: None,
             },
         };
         if positions + d.main_characters.unwrap_or(0) > 500_000 {
@@ -597,18 +677,49 @@ pub(crate) fn preserve(
             break;
         }
         positions += d.main_characters.unwrap_or(0);
+        if !d.segments.is_empty() {
+            match readable_html::render(&d, &native.source_image, &native.source_sha256) {
+                Ok(html) if edition_bytes + html.len() <= fat12::MAX_IMAGE_BYTES * 2 => {
+                    edition_bytes += html.len();
+                    let sha = hash(html.as_bytes());
+                    d.readable_edition = Some(ReadableEdition {
+                        path: format!(
+                            "word_{:08x}_readable_{}.html",
+                            d.parent.directory_entry_offset,
+                            &sha[..12]
+                        ),
+                        bytes: html.len(),
+                        sha256: sha,
+                        repaired_original: false,
+                        html,
+                    });
+                }
+                Ok(_) => {
+                    limits = true;
+                    d.edition_refusal =
+                        Some("Combined readable edition size ceiling; raw text retained".into());
+                }
+                Err(e) => {
+                    limits = true;
+                    d.edition_refusal = Some(e);
+                }
+            }
+        }
         documents.push(d);
     }
     if documents.is_empty() {
         return Ok(None);
     }
-    let report=Report{schema_version:1,disk:native.disk,attempt:native.attempt,source_image:native.source_image.clone(),source_sha256:native.source_sha256.clone(),bad_lbas:a.bad_lbas.clone(),documents,limits_reached:limits,
-        warning:"FORENSIC TEXT SALVAGE, NOT A REPAIRED DOC OR COMPLETE DOCUMENT. Only readable main-document characters with validated CFB/FIB/CLX mappings are decoded to separate UTF-8 segments. Character-position gaps remain explicit; segments are not silently concatenated, unknown bytes never become text, and invalid UTF-16 is not replaced. Formatting, tables, revisions, headers/footnotes, objects, field interpretation and original semantics are not recovered/certified. Encrypted/unsupported documents or missing metadata are refused. No dictionary/brute-force guessing; original images/native results remain unchanged. Text is excluded from normal whole-file counts, conversion and delivery.".into()};
+    let report=Report{schema_version:1,engine_version:ENGINE_VERSION,disk:native.disk,attempt:native.attempt,source_image:native.source_image.clone(),source_sha256:native.source_sha256.clone(),bad_lbas:a.bad_lbas.clone(),documents,limits_reached:limits,
+        warning:"FORENSIC TEXT SALVAGE, NOT A REPAIRED DOC OR COMPLETE DOCUMENT. Only readable main-document characters with validated CFB/FIB/CLX mappings are decoded to separate UTF-8 segments. Character-position gaps remain explicit in text reports and generated offline HTML editions; segments are not silently concatenated, unknown bytes never become text, and invalid UTF-16 is not replaced. Formatting, tables, revisions, headers/footnotes, objects, field interpretation and original semantics are not recovered/certified. Encrypted/unsupported documents or missing required metadata are refused. Selective mapping may bypass unrelated missing directory entries, but never certifies the entire compound container. No dictionary/brute-force guessing; original images/native results remain unchanged. Text/editions are excluded from normal whole-file counts, conversion and delivery.".into()};
     let serialized = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
     if serialized.len() > 16 * 1024 * 1024 {
         return Err("Document provenance ceiling; no publication".into());
     }
-    let output = recovery_disk.join(format!("attempt_{:03}_word_text_v1", native.attempt));
+    let output = recovery_disk.join(format!(
+        "attempt_{:03}_word_text_v{ENGINE_VERSION}",
+        native.attempt
+    ));
     let report_path = output.join("word-text.json");
     let segments = report
         .documents
@@ -616,6 +727,11 @@ pub(crate) fn preserve(
         .flat_map(|d| &d.segments)
         .collect::<Vec<_>>();
     let reused = output.exists();
+    let editions = report
+        .documents
+        .iter()
+        .filter_map(|d| d.readable_edition.as_ref())
+        .collect::<Vec<_>>();
     if reused {
         if !fs::symlink_metadata(&output)
             .map_err(|e| e.to_string())?
@@ -626,13 +742,19 @@ pub(crate) fn preserve(
             return Err("Document salvage directory escapes Recovery; preserved".into());
         }
         if regular_read(&report_path)? != serialized
-            || fs::read_dir(&output).map_err(|e| e.to_string())?.count() != segments.len() + 1
+            || fs::read_dir(&output).map_err(|e| e.to_string())?.count()
+                != segments.len() + editions.len() + 1
         {
             return Err("Document salvage report/inventory changed; preserved".into());
         }
         for s in &segments {
             if regular_read(&output.join(&s.path))? != s.text.as_bytes() {
                 return Err("Document salvage text changed; preserved".into());
+            }
+        }
+        for e in &editions {
+            if regular_read(&output.join(&e.path))? != e.html.as_bytes() {
+                return Err("Document readable edition changed; preserved".into());
             }
         }
     } else {
@@ -645,6 +767,9 @@ pub(crate) fn preserve(
         for s in &segments {
             write_new(&staging.join(&s.path), s.text.as_bytes())?;
         }
+        for e in &editions {
+            write_new(&staging.join(&e.path), e.html.as_bytes())?;
+        }
         write_new(&staging.join("word-text.json"), &serialized)?;
         if hash(&regular_read(source)?) != native.source_sha256 {
             return Err("Source changed; document salvage staging retained".into());
@@ -656,6 +781,14 @@ pub(crate) fn preserve(
             .map_err(|e| format!("Document salvage staging retained: {e}"))?;
     }
     Ok(Some(SalvageResult {
+        engine_version: ENGINE_VERSION,
+        selectively_mapped_documents: report
+            .documents
+            .iter()
+            .filter(|d| d.cfb_recovery.is_some())
+            .count(),
+        readable_editions: editions.len(),
+        readable_edition_paths: editions.iter().map(|e| output.join(&e.path)).collect(),
         output_directory: output,
         report_path,
         documents_examined: report.documents.len(),

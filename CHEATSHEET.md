@@ -116,7 +116,7 @@ Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count 
 
 Normal scans/processing need their saved-file tools; standalone native extraction needs neither 7-Zip nor LibreOffice. Deleted candidates and raw fragments are not complete/live customer documents.
 
-Native generation 5 automatically adds evidenced lost-directory recovery, bounded missing-FAT-link tail alternatives and separate readable Word-text segments. No new scan flag is needed. Text lives under `Recovery`, not as a repaired DOC; `recovery documents` returns attention code 3. [Simple commands and limits](DEEP_RECOVERY.md).
+Native generation 5 / Word-text engine 2 automatically adds evidenced lost-directory recovery, bounded missing-FAT-link tail alternatives and Word text salvage, including supported containers with unrelated directory damage. No new scan flag is needed. `fv recovery documents 24` prints a readable offline `.html` edition path: open it to see the text with explicit gaps, without assembling segments yourself. Text/editions live under `Recovery`, not as repaired DOCs; the command returns attention code 3. [Simple commands and limits](DEEP_RECOVERY.md).
 
 `fv process` automatically uses supported verified composite/FAT improvements for extraction and delivery. These appear as **DERIVED**, not clean physical reads; even zero-gap results retain attention. No manual copying from `Recovery` is needed. [Details](OFFLINE_RECOVERY_HANDOFF.md).
 

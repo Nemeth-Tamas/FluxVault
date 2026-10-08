@@ -72,7 +72,7 @@ FluxVault never writes to source floppies. Missing bytes are not fabricated. Fra
 | Native recovery and missing boot metadata | [Damaged-filesystem recovery](DAMAGED_FILESYSTEM_RECOVERY.md) |
 | Automatic orphan/signature/embedded salvage | [Carving recovery](CARVING_RECOVERY.md) |
 | Fragments and opt-in deleted recovery | [Deleted and fragment recovery](DELETED_AND_FRAGMENT_RECOVERY.md) |
-| Lost directories, fragmented-tail hypotheses and Word text | [Deeper recovery](DEEP_RECOVERY.md) |
+| Lost directories, fragmented-tail hypotheses, damaged Word streams and readable recovery editions | [Deeper recovery](DEEP_RECOVERY.md) |
 | Preferred generations and recoverable copy cleanup | [Recovery selection](RECOVERY_SELECTION.md) |
 | Automatic extraction from improved composite/FAT images | [Offline recovery handoff](OFFLINE_RECOVERY_HANDOFF.md) |
 | Comparing to the old archive | [Baseline comparison](BASELINE_COMPARISON.md) |
