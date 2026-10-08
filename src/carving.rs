@@ -61,6 +61,10 @@ pub struct CarvedFile {
     pub parent_file: Option<String>,
     pub original_name_known: bool,
     pub customer_delivery_certified: bool,
+    #[serde(default)]
+    pub missing_fat_link_cluster: Option<u16>,
+    #[serde(default)]
+    pub candidate_tail_start_cluster: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +87,12 @@ pub struct Analysis {
     pub orphan_chains_scanned: usize,
     #[serde(default)]
     pub allocation_issues: Vec<String>,
+    #[serde(default)]
+    pub fragmented_suffix_trials: usize,
+    #[serde(default)]
+    pub fragmented_parents_with_candidates: usize,
+    #[serde(default)]
+    pub ambiguous_fragmented_parents: usize,
 }
 
 pub(crate) fn raw_readable_regions(image: &[u8], bad: &[u64]) -> Vec<Region> {
@@ -120,6 +130,16 @@ pub(crate) fn analyze(
     regions: &[Region],
     known_hashes: &[String],
 ) -> Result<Analysis, String> {
+    analyze_with_work(image, bad, regions, known_hashes, &mut 0)
+}
+
+pub(crate) fn analyze_with_work(
+    image: &[u8],
+    bad: &[u64],
+    regions: &[Region],
+    known_hashes: &[String],
+    validation_work: &mut u64,
+) -> Result<Analysis, String> {
     if image.len() > crate::fat12::MAX_IMAGE_BYTES || !image.len().is_multiple_of(512) {
         return Err("Carving requires a bounded complete sector image".into());
     }
@@ -134,7 +154,6 @@ pub(crate) fn analyze(
     let mut hashes = known_hashes.iter().cloned().collect::<BTreeSet<_>>();
     let mut total_region_bytes = 0;
     let mut emitted_bytes = 0;
-    let mut validation_work = 0;
     for region in regions {
         let mut unique = BTreeSet::new();
         if region.lbas.iter().any(|lba| {
@@ -177,7 +196,7 @@ pub(crate) fn analyze(
             };
             result.probes += 1;
             let source_offset = region.lbas[at / 512] as usize * 512 + at % 512;
-            match validate(&bytes[at..], format, &mut validation_work) {
+            match validate(&bytes[at..], format, validation_work) {
                 Ok((length, extension, validation)) => {
                     if emitted_bytes + length > crate::fat12::MAX_IMAGE_BYTES {
                         result.limits_reached = true;
@@ -204,6 +223,8 @@ pub(crate) fn analyze(
                             metadata_lbas: region.metadata_lbas.clone(),
                             parent_file: region.parent_file.clone(),
                             customer_delivery_certified: false,
+                            missing_fat_link_cluster: None,
+                            candidate_tail_start_cluster: None,
                         });
                     } else {
                         result.rejected.push(RejectedCandidate { source_byte_offset: source_offset, format: format.into(), reason: "Duplicate of an already recovered payload; source offset retained, no redundant file exported".into() });
@@ -218,7 +239,7 @@ pub(crate) fn analyze(
                         reason,
                     });
                     at += 1;
-                    if validation_work > MAX_VALIDATION_WORK {
+                    if *validation_work > MAX_VALIDATION_WORK {
                         result.limits_reached = true;
                         break;
                     }

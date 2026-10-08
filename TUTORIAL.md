@@ -144,6 +144,8 @@ fv storage resume
 
 `fv process` also runs the saved-image recovery/extraction/conversion/audit/report chain. It never reads a physical disk.
 
+Newer native recovery automatically looks for surviving lost directories, supported missing-link file-tail alternatives and readable text inside incomplete Word documents. You need not choose a strategy. To inspect one saved disk's Word-text outcome, run `fv recovery documents 24`. Separate `.txt` segments and a gap/source report live under `Recovery`; they are not repaired DOC files or extra complete originals. **Exit 3 is normal attention.** [Beginner commands and advanced evidence](DEEP_RECOVERY.md).
+
 When saved attempts can supply missing sectors or readable FAT redundancy can repair a FAT gap, processing automatically hands the verified improved image to file extraction and delivery. It appears as **DERIVED**, not a clean physical read; attention is still expected even with no remaining gaps. Earlier evidence and operator-created recovery folders are preserved. [Details and limits](OFFLINE_RECOVERY_HANDOFF.md).
 
 ### Find your files
@@ -154,7 +156,7 @@ When saved attempts can supply missing sectors or readable FAT redundancy can re
 | `Flux` | Raw/packed captures and decode/format evidence. |
 | `Extracted` | Forensic recovered originals and preserved generations. |
 | `Converted` | Delivery-friendly originals and successful Office/PDF copies. |
-| `Recovery` | Derived evidence, partial fragments and optional deleted candidates. |
+| `Recovery` | Derived evidence, partial fragments, forensic Word text and optional deleted candidates. |
 | `Reports` | Inventories, audit, workbook, benchmarks, selection/cleanup reports. |
 | `Logs` | Acquisition and processing details. |
 

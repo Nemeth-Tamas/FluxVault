@@ -57,15 +57,21 @@ fn evidence(p: &ProjectState, t: &Ticket, attempt: u32, bad: &[u64]) -> Vec<u8> 
 fn wait_phase(p: &ProjectState, disk: u32, phase: &str) {
     let started = Instant::now();
     loop {
-        let value: Value =
-            serde_json::from_slice(&fs::read(p.root().join(".fluxvault-production.json")).unwrap())
-                .unwrap();
-        if value["disks"][disk.to_string()]["phase"] == phase {
+        // This helper bypasses the production snapshot gate. Windows' durable
+        // replacement briefly rotates the old file; retry that observation,
+        // without weakening the coordinator's actual parsing/ownership checks.
+        let value = fs::read(p.root().join(".fluxvault-production.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        if value
+            .as_ref()
+            .is_some_and(|v| v["disks"][disk.to_string()]["phase"] == phase)
+        {
             break;
         }
         assert!(
             started.elapsed() < Duration::from_secs(10),
-            "timed out waiting for {disk} {phase}: {value}"
+            "timed out waiting for {disk} {phase}: {value:?}"
         );
         thread::sleep(Duration::from_millis(5));
     }

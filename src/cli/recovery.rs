@@ -74,7 +74,7 @@ pub(super) fn run_advanced(
         .filter(|number| *number > 0)
         .ok_or("recovery command requires a positive disk number")?;
     match positional[1].as_str() {
-        "extract" => {
+        "extract" | "documents" => {
             let statistics = imaging::load_project_statistics(&project.images_dir())?;
             let disk = statistics
                 .disks
@@ -128,6 +128,19 @@ pub(super) fn run_advanced(
                     exit_code: 3,
                 });
             }
+            if positional[1] == "documents" {
+                return Ok(CliResponse {
+                    output: if json_output {
+                        json!({"document_salvage":result.document_salvage,"native_recovery":result,"physical_media_access":false,"repaired_originals":0}).to_string()
+                    } else {
+                        result.document_salvage.as_ref().map_or_else(
+                            || format!("Disk {disk_number:03}: no eligible incomplete .doc/.dot candidates. Native report: {}. No original repaired or physical media accessed.",result.report_path.display()),
+                            |s| format!("Disk {disk_number:03}: {} documents with readable text; {} UTF-8 segments / {} character positions; {} missing positions; {} refused documents.\nFolder: {}\nReport: {}\nFORENSIC TEXT ONLY: no repaired DOC, original replacement, formatting or whole-file completeness claimed.",s.documents_with_text,s.text_segments,s.recovered_character_positions,s.missing_character_positions,s.refused_documents,s.output_directory.display(),s.report_path.display())
+                        )
+                    },
+                    exit_code: 3,
+                });
+            }
             let inventory = manifest::build_manifest(
                 &ManifestRequest {
                     extracted_root: project.extracted_dir(),
@@ -141,7 +154,7 @@ pub(super) fn run_advanced(
                     json!({"recovery":result,"manifest":inventory.path,"physical_media_access":false}).to_string()
                 } else {
                     format!(
-                        "Disk {disk_number:03}: {} payloads recovered{} ({} validated signature candidates); {} entries skipped; {} validated long names; {} short-name fallbacks.\nLayout: {}{}{}{}\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
+                        "Disk {disk_number:03}: {} payloads recovered{} ({} validated signature/fragment candidates); {} entries skipped; {} validated long names; {} short-name fallbacks.\nLayout: {}{}{}{}{}{}\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
                         result.files,
                         if result.reused {
                             " (verified result reused)"
@@ -169,6 +182,8 @@ pub(super) fn run_advanced(
                                 }
                             )),
                         result.fragments.as_ref().map_or(String::new(), |f| format!("\nRaw partial-file evidence: {} fragments / {} bytes (NOT complete files). Report: {}", f.files, f.bytes, f.report_path.display())),
+                        result.document_salvage.as_ref().map_or(String::new(), |s| format!("\nWord text salvage: {} segments / {} readable character positions (NOT repaired DOC files). Report: {}",s.text_segments,s.recovered_character_positions,s.report_path.display())),
+                        if result.reconstructed_directories > 0 || result.fragmented_parents_with_candidates > 0 { format!("\nLost-directory roots: {}; missing-link candidate parents: {} ({} with competing alternatives). WARNING: original directory parent/name/ownership and fragment-tail association remain unknown; candidates are non-authoritative.", result.reconstructed_directories, result.fragmented_parents_with_candidates, result.ambiguous_fragmented_parents) } else { String::new() },
                         result.output_directory.display(),
                         result.report_path.display()
                     )

@@ -124,6 +124,8 @@ Usage:
                                     Reconstruct only provable mirrored FAT sectors
   fluxvault recovery extract N [--include-deleted] [--project PATH]
                                     Recover intact/signature files offline; deleted opt-in stays forensic-only
+  fluxvault recovery documents N [--project PATH]
+                                    Native recovery plus forensic Word text salvage
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
   fluxvault conversion plan [--project PATH]
@@ -1661,7 +1663,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     || (positional.len() == 3
                         && matches!(
                             positional[1].as_str(),
-                            "composite" | "fat" | "import" | "extract"
+                            "composite" | "fat" | "import" | "extract" | "documents"
                         ))) =>
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;

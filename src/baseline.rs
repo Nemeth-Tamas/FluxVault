@@ -348,6 +348,16 @@ fn current_files(root: &Path, origin: &'static str) -> Result<Vec<Payload>, Stri
                     .any(|p| p.eq_ignore_ascii_case("SignatureRecovery"))
                 {
                     "signature_carved"
+                } else if relative
+                    .split('/')
+                    .any(|p| p.eq_ignore_ascii_case("DirectoryRecovery"))
+                {
+                    "reconstructed_directory"
+                } else if relative
+                    .split('/')
+                    .any(|p| p.eq_ignore_ascii_case("FragmentRecovery"))
+                {
+                    "fragment_chain_hypothesis"
                 } else {
                     origin
                 };
@@ -833,6 +843,10 @@ mod tests {
         fs::create_dir_all(root.join("SignatureRecovery")).unwrap();
         fs::write(root.join("SignatureRecovery/carved.doc"), b"candidate").unwrap();
         fs::write(root.join("normal.doc"), b"reachable").unwrap();
+        for folder in ["DirectoryRecovery", "FragmentRecovery"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+            fs::write(root.join(folder).join("candidate.doc"), b"hypothesis").unwrap();
+        }
         let rows = current_files(&root, "native_readable_chains").unwrap();
         assert_eq!(
             rows.iter()
@@ -845,6 +859,18 @@ mod tests {
             rows.iter().find(|f| f.path == "normal.doc").unwrap().origin,
             "native_readable_chains"
         );
+        for (prefix, origin) in [
+            ("DirectoryRecovery", "reconstructed_directory"),
+            ("FragmentRecovery", "fragment_chain_hypothesis"),
+        ] {
+            assert_eq!(
+                rows.iter()
+                    .find(|f| f.path.starts_with(prefix))
+                    .unwrap()
+                    .origin,
+                origin
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

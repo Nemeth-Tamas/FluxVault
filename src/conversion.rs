@@ -64,6 +64,8 @@ enum RecoveryMethod {
     NativeFat12,
     DmdeFilesystem,
     Signature,
+    ReconstructedDirectory,
+    FragmentHypothesis,
 }
 
 impl RecoveryMethod {
@@ -75,6 +77,12 @@ impl RecoveryMethod {
             }
             Self::DmdeFilesystem => "DMDE filesystem recovery; artifact folders removed",
             Self::Signature => "Signature recovered; original filename unavailable",
+            Self::ReconstructedDirectory => {
+                "Reconstructed directory; original parent/name and live/deleted ownership unknown"
+            }
+            Self::FragmentHypothesis => {
+                "Fragment-chain hypothesis; structurally validated, original missing FAT link unproven"
+            }
         }
     }
 }
@@ -200,7 +208,14 @@ pub(crate) fn build_conversion_plan_reserved(
                 .map_err(|error| format!("Forensic relatívútvonal-hiba: {error}"))?;
             let forensic_text = forensic_path.to_string_lossy().replace('/', "\\");
             let (mut delivery_relative, mut recovery_method) = clean_delivery_path(forensic_path)?;
-            if native_recovery && recovery_method != RecoveryMethod::Signature {
+            if native_recovery
+                && !matches!(
+                    recovery_method,
+                    RecoveryMethod::Signature
+                        | RecoveryMethod::ReconstructedDirectory
+                        | RecoveryMethod::FragmentHypothesis
+                )
+            {
                 recovery_method = RecoveryMethod::NativeFat12;
             }
             let original_delivery_relative = delivery_relative.clone();
@@ -434,12 +449,22 @@ pub(crate) fn comparison_path(path: &Path) -> Result<PathBuf, String> {
 fn clean_delivery_path(path: &Path) -> Result<(PathBuf, RecoveryMethod), String> {
     let mut clean = Vec::new();
     let mut signature = false;
+    let mut reconstructed_directory = false;
+    let mut fragment = false;
     let mut dmde = false;
     for component in path.components() {
         let Component::Normal(part) = component else {
             continue;
         };
         let text = part.to_string_lossy();
+        if text.eq_ignore_ascii_case("FragmentRecovery") {
+            fragment = true;
+            continue;
+        }
+        if text.eq_ignore_ascii_case("DirectoryRecovery") {
+            reconstructed_directory = true;
+            continue;
+        }
         if text.eq_ignore_ascii_case("[$Raw Files by Signatures]")
             || text.eq_ignore_ascii_case("$Raw")
             || text.eq_ignore_ascii_case("SignatureRecovery")
@@ -463,6 +488,10 @@ fn clean_delivery_path(path: &Path) -> Result<(PathBuf, RecoveryMethod), String>
     }
     if signature {
         clean.insert(0, "Signature-Recovered".into());
+    } else if reconstructed_directory {
+        clean.insert(0, "Directory-Recovered".into());
+    } else if fragment {
+        clean.insert(0, "Fragment-Hypotheses".into());
     }
     if clean.is_empty() {
         clean.push("Unsorted-Recovery".into());
@@ -474,6 +503,10 @@ fn clean_delivery_path(path: &Path) -> Result<(PathBuf, RecoveryMethod), String>
     }
     let method = if signature {
         RecoveryMethod::Signature
+    } else if reconstructed_directory {
+        RecoveryMethod::ReconstructedDirectory
+    } else if fragment {
+        RecoveryMethod::FragmentHypothesis
     } else if dmde {
         RecoveryMethod::DmdeFilesystem
     } else {
@@ -615,6 +648,27 @@ mod tests {
                 .join("file.doc")
         );
         assert_eq!(method, RecoveryMethod::Signature);
+    }
+
+    #[test]
+    fn reconstructed_directories_and_fragment_hypotheses_keep_their_labels() {
+        for (input, expected, kind) in [
+            (
+                "DirectoryRecovery/cluster_0002/folder/file.doc",
+                "Directory-Recovered/cluster_0002/folder/file.doc",
+                RecoveryMethod::ReconstructedDirectory,
+            ),
+            (
+                "FragmentRecovery/carved.doc",
+                "Fragment-Hypotheses/carved.doc",
+                RecoveryMethod::FragmentHypothesis,
+            ),
+        ] {
+            let (path, method) = clean_delivery_path(Path::new(input)).unwrap();
+            assert_eq!(path, PathBuf::from(expected));
+            assert_eq!(method, kind);
+            assert!(!method.label().contains("Native FAT12"));
+        }
     }
 
     #[test]

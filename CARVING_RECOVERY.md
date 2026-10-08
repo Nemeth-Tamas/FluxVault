@@ -1,6 +1,6 @@
 # Automatic saved-image carving
 
-Native recovery generation **4** salvages validated candidates from allocated orphan chains, readable parts of damaged files, and images without a usable filesystem layout. Normal `fv scan`, extraction and `fv process` use this fallback automatically. No new recovery policy or swap-time decision is required.
+Native recovery generation **5** retains generation 4's validated carving and adds [lost-directory / missing-link tail recovery and forensic Word text](DEEP_RECOVERY.md). It salvages validated candidates from allocated orphan chains, readable parts of damaged files, and images without a usable filesystem layout. Normal `fv scan`, extraction and `fv process` use this fallback automatically. No new recovery policy or swap-time decision is required.
 
 To reprocess an existing project without inserting disks:
 
@@ -40,9 +40,9 @@ The parser references the [Microsoft compound-file specification](https://learn.
 
 ## Evidence and folders
 
-Generation 4 publishes separately under `Extracted/NNN/attempt_NNN_native_v4` or `legacy_native_v4`. Older managed generations and operator recovery are preserved. Signature candidates use `SignatureRecovery/carved_OFFSET_HASH.ext`; delivery mirrors use **`Signature-Recovered`**, not invented original filenames. Conversion maps and baseline comparisons keep their signature-recovered origin rather than relabeling them ordinary FAT files.
+Generation 5 publishes separately under `Extracted/NNN/attempt_NNN_native_v5` or `legacy_native_v5`. Older managed generations and operator recovery are preserved. Signature candidates use `SignatureRecovery/carved_OFFSET_HASH.ext`; delivery mirrors use **`Signature-Recovered`**, not invented original filenames. Conversion maps and baseline comparisons keep their signature-recovered origin rather than relabeling them ordinary FAT files.
 
-The immutable native report is `Recovery/NNN/attempt_NNN_fat12_v4.json`, also bound by hash to the managed inventory. It includes:
+The immutable native report is `Recovery/NNN/attempt_NNN_fat12_v5.json`, also bound by hash to the managed inventory. It includes:
 
 - Source image SHA-256 and acquisition-reported bad LBAs.
 - Normal FAT analysis, if possible; otherwise `analysis: null` and `filesystem_error`.
@@ -70,4 +70,4 @@ The historical archive comparison remains **38/89 byte-identical payloads, 51 mi
 
 Results: `C:\Users\User\Desktop\FluxVault-Test\Native-Carving-021-032-20261007-v4-CLI`. `Reports/NativeCarvingValidation.json`, native per-disk reports, `ConversionSummary.csv`, `DeliveryPathMap.csv` and immutable baseline snapshots explain the result.
 
-Automatic raw partial-fragment preservation and explicit forensic-only deleted recovery are now implemented; see [commands and measured results](DELETED_AND_FRAGMENT_RECOVERY.md). Still open: pre-OLE legacy Word/PDF/other signatures, erased/ambiguous fragmented allocation, deeper directory reconstruction, arbitrary damaged-document text recovery and complete historical recovery-yield parity. The program does not brute-force plausible text and call it authentic.
+Automatic raw partial-fragment preservation and explicit forensic-only deleted recovery are implemented; see [commands and measured results](DELETED_AND_FRAGMENT_RECOVERY.md). Generation 5 also supports bounded evidenced lost-directory reconstruction, one missing-link tail hypotheses and mapped Word main-text salvage; see [checks and results](DEEP_RECOVERY.md). Still open: pre-OLE legacy Word/PDF/other signatures, erased/multiple-boundary fragmented allocation, damaged compound metadata and complete historical recovery-yield parity. The program does not brute-force plausible text and call it authentic.

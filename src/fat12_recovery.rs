@@ -80,6 +80,9 @@ pub struct RecoveryResult {
     pub source_sha256: String,
     pub files: usize,
     pub carved_files: usize,
+    pub reconstructed_directories: usize,
+    pub fragmented_parents_with_candidates: usize,
+    pub ambiguous_fragmented_parents: usize,
     pub orphan_chains_scanned: usize,
     pub rejected_candidates: usize,
     pub carving_warning: Option<String>,
@@ -97,6 +100,7 @@ pub struct RecoveryResult {
     pub deleted_contiguous_hypotheses: usize,
     pub deleted_warning: Option<String>,
     pub fragments: Option<crate::fragments::FragmentResult>,
+    pub document_salvage: Option<crate::document_salvage::SalvageResult>,
 }
 
 pub fn recover_attempt(
@@ -268,7 +272,11 @@ fn recover_with_mode(
         expected_bad.sort_unstable();
         if report.disk != disk
             || report.attempt != attempt.attempt_number
-            || report.native_engine_version != fat12::RECOVERY_ENGINE_VERSION
+            || if include_deleted {
+                !(4..=fat12::RECOVERY_ENGINE_VERSION).contains(&report.native_engine_version)
+            } else {
+                report.native_engine_version != fat12::RECOVERY_ENGINE_VERSION
+            }
             || report.deleted.is_some() != include_deleted
             || report
                 .deleted
@@ -283,6 +291,8 @@ fn recover_with_mode(
         if !include_deleted {
             result.fragments =
                 crate::fragments::preserve(&snapshot, &image, &recovery_disk, &report)?;
+            result.document_salvage =
+                crate::document_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
         }
         return Ok(result);
     }
@@ -296,6 +306,14 @@ fn recover_with_mode(
         .and_then(|a| a.layout_evidence.warning.as_ref())
     {
         progress(&format!("Native FAT12 layout WARNING: {warning}"));
+    }
+    if let Some(a) = &analysis
+        && !a.reconstructed_directories.is_empty()
+    {
+        progress(&format!(
+            "Native FAT12: {} evidenced lost-directory roots; reconstructed wrappers, original parent/name/live-versus-deleted status unknown",
+            a.reconstructed_directories.len()
+        ));
     }
     progress(
         "Native recovery: validating orphan-chain/signature candidates from readable image bytes...",
@@ -329,8 +347,33 @@ fn recover_with_mode(
         (Some(deleted), carved)
     } else {
         let mut carved = carving::analyze(&snapshot, &attempt.bad_sectors, &regions, &hashes)?;
+        if let Some(a) = &analysis {
+            let mut known = hashes.clone();
+            known.extend(carved.files.iter().map(|f| f.sha256.clone()));
+            let hypotheses = fat12::fragmented_hypotheses(&snapshot, a, &known)?;
+            let mut candidate_bytes = carved.files.iter().map(|f| f.bytes).sum::<usize>();
+            for file in hypotheses.files {
+                if carved.files.len() >= 256
+                    || candidate_bytes + file.bytes > fat12::MAX_IMAGE_BYTES
+                {
+                    carved.limits_reached = true;
+                    break;
+                }
+                candidate_bytes += file.bytes;
+                carved.files.push(file);
+            }
+            carved.fragmented_suffix_trials = hypotheses.fragmented_suffix_trials;
+            carved.fragmented_parents_with_candidates =
+                hypotheses.fragmented_parents_with_candidates;
+            carved.ambiguous_fragmented_parents = hypotheses.ambiguous_fragmented_parents;
+            carved.limits_reached |= hypotheses.limits_reached;
+            carved
+                .allocation_issues
+                .extend(hypotheses.allocation_issues);
+            carved.rejected.extend(hypotheses.rejected);
+        }
         carved.orphan_chains_scanned = chains;
-        carved.allocation_issues = issues;
+        carved.allocation_issues.extend(issues);
         (None, carved)
     };
     carved.bad_lbas.sort_unstable();
@@ -340,12 +383,12 @@ fn recover_with_mode(
         );
     }
     if !include_deleted && (analysis.is_none() || !carved.files.is_empty()) {
-        carved.allocation_warning = Some("Reconstructed candidate names; original live/deleted ownership unknown. Known deleted chains and free clusters are excluded when FAT layout is readable; unknown filesystems cannot establish deletion status. Structural validation is not original-content/customer certification.".into());
+        carved.allocation_warning = Some("Reconstructed candidate names; original live/deleted ownership unknown. Missing-FAT-link hypotheses are separate non-authoritative alternatives, never proven original associations. Known deleted chains and free clusters are excluded when FAT layout is readable; unknown filesystems cannot establish deletion status. Structural validation is not original-content/customer certification.".into());
     }
     let report = RecoveryReport { schema_version:1, native_engine_version:fat12::RECOVERY_ENGINE_VERSION, method:if include_deleted {"native_fat12_deleted_candidates"} else {"native_fat12_and_validated_carving"}.into(),
         source_image:image.file_name().unwrap_or_default().to_string_lossy().to_string(), source_sha256:source_sha256.clone(),
         disk, attempt:attempt.attempt_number, analysis, carving:Some(carved), filesystem_error,
-        warning:deleted.as_ref().map_or_else(|| "Recovered bytes came only from acquisition-reported readable sectors. Layout hypotheses never fabricate boot bytes. Carved names/paths are reconstructed, not original; recorded extents bind every payload to the saved image. No missing bytes are guessed or joined across holes. Known deleted/free allocation is excluded when readable FAT metadata exists; raw fallback cannot determine live/deleted status. Pixel/CRC/container validation does not prove document semantics or original custody. Single-capture confidence is unchanged; disk/customer completeness remains unverified.".into(), |d| d.warning.clone()), deleted };
+        warning:deleted.as_ref().map_or_else(|| "Recovered bytes came only from acquisition-reported readable sectors. Layout hypotheses never fabricate boot bytes. Carved names/paths and lost-directory wrappers are reconstructed, not original; original directory parent/name/live-versus-deleted status may be unknown. Missing-FAT-link suffix hypotheses remain non-authoritative alternatives, not certified original file associations. Recorded extents bind every payload to the saved image. No missing bytes are guessed or joined across holes. Known deleted/free allocation is excluded when readable FAT metadata exists; raw fallback cannot determine live/deleted status. Pixel/CRC/container validation does not prove document semantics or original custody. Single-capture confidence is unchanged; disk/customer completeness remains unverified.".into(), |d| d.warning.clone()), deleted };
     let staging = publication_root.join(format!(
         ".tmp-native-{disk:03}-{}-{}",
         std::process::id(),
@@ -385,7 +428,7 @@ fn recover_with_mode(
         if include_deleted {
             "forensic deleted"
         } else {
-            "intact reachable"
+            "intact evidenced (including marked reconstructed directories)"
         },
         report.carving.as_ref().map_or(0, |a| a.files.len()),
         report.carving.as_ref().map_or(0, |a| a.rejected.len())
@@ -393,6 +436,17 @@ fn recover_with_mode(
     let mut result = result(&report, output, report_path, false);
     if !include_deleted {
         result.fragments = crate::fragments::preserve(&snapshot, &image, &recovery_disk, &report)?;
+        result.document_salvage =
+            crate::document_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
+        if let Some(text) = &result.document_salvage {
+            progress(&format!(
+                "Document text salvage: {} readable segments / {} character positions; {} missing positions; {} refusals. Separate forensic text only, not repaired DOC files.",
+                text.text_segments,
+                text.recovered_character_positions,
+                text.missing_character_positions,
+                text.refused_documents
+            ));
+        }
         if let Some(fragments) = &result.fragments {
             progress(&format!(
                 "Partial-file evidence: {} raw readable fragments / {} bytes preserved separately; zero complete files claimed",
@@ -427,6 +481,18 @@ fn result(
         source_sha256: report.source_sha256.clone(),
         files: report.payloads().len(),
         carved_files: report.carving.as_ref().map_or(0, |a| a.files.len()),
+        reconstructed_directories: report
+            .analysis
+            .as_ref()
+            .map_or(0, |a| a.reconstructed_directories.len()),
+        fragmented_parents_with_candidates: report
+            .carving
+            .as_ref()
+            .map_or(0, |a| a.fragmented_parents_with_candidates),
+        ambiguous_fragmented_parents: report
+            .carving
+            .as_ref()
+            .map_or(0, |a| a.ambiguous_fragmented_parents),
         orphan_chains_scanned: report
             .carving
             .as_ref()
@@ -470,6 +536,7 @@ fn result(
             .map_or(0, |d| d.contiguous_hypotheses),
         deleted_warning: report.deleted.as_ref().map(|d| d.warning.clone()),
         fragments: None,
+        document_salvage: None,
     }
 }
 
@@ -1095,8 +1162,11 @@ mod tests {
             let directory = project
                 .extracted_dir()
                 .join(format!("{:03}", disk.disk_number));
-            let current =
-                directory.join(format!("attempt_{:03}_native_v4", attempt.attempt_number));
+            let current = directory.join(format!(
+                "attempt_{:03}_native_v{}",
+                attempt.attempt_number,
+                fat12::RECOVERY_ENGINE_VERSION
+            ));
             let held = directory.join(".held-native-v4");
             let previous =
                 directory.join(format!("attempt_{:03}_native_v3", attempt.attempt_number));
@@ -1547,7 +1617,7 @@ mod tests {
         assert!(
             recovered
                 .output_directory
-                .ends_with("attempt_001_native_v4")
+                .ends_with("attempt_001_native_v5")
         );
         fs::remove_dir_all(project.root()).unwrap();
     }
@@ -1699,20 +1769,23 @@ mod tests {
         let mut archive = zip::ZipArchive::new(fs::File::open(package.zip_path).unwrap()).unwrap();
         assert!(
             archive
-                .by_name("Extracted/001/attempt_001_native_v4/Árvíztűrő.txt")
+                .by_name("Extracted/001/attempt_001_native_v5/Árvíztűrő.txt")
                 .is_ok()
         );
-        assert!(archive.by_name("Extracted/001/attempt_001_native_v4/System Volume Information/IndexerVolumeGuid").is_err());
+        assert!(archive.by_name("Extracted/001/attempt_001_native_v5/System Volume Information/IndexerVolumeGuid").is_err());
         assert!(
             archive
-                .by_name("Recovery/001/attempt_001_fat12_v4.json")
+                .by_name("Recovery/001/attempt_001_fat12_v5.json")
                 .is_ok()
         );
         drop(archive);
         fs::remove_dir_all(destination).unwrap();
         // A modeled later report cannot discard validated naming evidence just
         // because its directory has a higher numeric generation suffix.
-        let later = project.extracted_dir().join("001/attempt_001_native_v5");
+        let later = project.extracted_dir().join(format!(
+            "001/attempt_001_native_v{}",
+            fat12::RECOVERY_ENGINE_VERSION + 1
+        ));
         let mut report: RecoveryReport = serde_json::from_slice(
             &fs::read(
                 recovered
@@ -1891,11 +1964,217 @@ mod tests {
         fs::rename(&initial.report_path, &old_report).unwrap();
         fs::write(&old_report, &old_bytes).unwrap();
         let upgraded = recover(&project, &attempt).unwrap();
-        assert!(upgraded.output_directory.ends_with("attempt_001_native_v4"));
+        assert!(upgraded.output_directory.ends_with("attempt_001_native_v5"));
         assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
         assert_eq!(fs::read(old_report).unwrap(), old_bytes);
         assert!(old.join("GOOD.TXT").is_file());
         assert!(recover(&project, &attempt).unwrap().reused);
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn generation_four_and_its_raw_fragments_survive_generation_five_publication() {
+        let (project, attempt, bytes) = fixture(&[34]);
+        let initial = recover(&project, &attempt).unwrap();
+        let old = project.extracted_dir().join("001/attempt_001_native_v4");
+        fs::rename(&initial.output_directory, &old).unwrap();
+        let mut report: RecoveryReport =
+            serde_json::from_slice(&fs::read(&initial.report_path).unwrap()).unwrap();
+        report.native_engine_version = 4;
+        let old_bytes = serde_json::to_vec_pretty(&report).unwrap();
+        fs::write(old.join(extraction::FAT12_REPORT_NAME), &old_bytes).unwrap();
+        extraction::write_native_managed_metadata(
+            &old,
+            &project.images_dir().join(&attempt.image_file),
+            &attempt.sha256,
+            hash(&old_bytes),
+        )
+        .unwrap();
+        let old_report = project.recovery_dir().join("001/attempt_001_fat12_v4.json");
+        fs::rename(&initial.report_path, &old_report).unwrap();
+        fs::write(&old_report, &old_bytes).unwrap();
+        let recovery_disk = project.recovery_dir().join("001").canonicalize().unwrap();
+        let legacy_fragments = crate::fragments::preserve(
+            &bytes,
+            &project.images_dir().join(&attempt.image_file),
+            &recovery_disk,
+            &report,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            legacy_fragments
+                .output_directory
+                .ends_with("attempt_001_fragments_v1")
+        );
+        let legacy_bytes = fs::read(&legacy_fragments.report_path).unwrap();
+        let upgraded = recover(&project, &attempt).unwrap();
+        assert_eq!(upgraded.native_engine_version, 5);
+        assert_eq!(fs::read(&old_report).unwrap(), old_bytes);
+        assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
+        assert_eq!(
+            fs::read(&legacy_fragments.report_path).unwrap(),
+            legacy_bytes
+        );
+        assert!(
+            crate::fragments::preserve(
+                &bytes,
+                &project.images_dir().join(&attempt.image_file),
+                &recovery_disk,
+                &report
+            )
+            .unwrap()
+            .unwrap()
+            .reused
+        );
+        assert!(
+            upgraded
+                .fragments
+                .unwrap()
+                .output_directory
+                .ends_with("attempt_001_fragments_v2")
+        );
+        assert_eq!(
+            fs::read(project.images_dir().join(&attempt.image_file)).unwrap(),
+            bytes
+        );
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn pre_upgrade_forensic_deleted_v1_generation_reuses_without_rewriting_its_evidence() {
+        let (project, attempt, _) = fixture(&[34]);
+        let first = recover_deleted_attempt(
+            &project.images_dir(),
+            &project.extracted_dir(),
+            &project.recovery_dir(),
+            1,
+            &attempt,
+            &|_| {},
+        )
+        .unwrap();
+        let mut report: RecoveryReport =
+            serde_json::from_slice(&fs::read(&first.report_path).unwrap()).unwrap();
+        report.native_engine_version = 4;
+        let old_bytes = serde_json::to_vec_pretty(&report).unwrap();
+        fs::write(
+            first.output_directory.join(extraction::FAT12_REPORT_NAME),
+            &old_bytes,
+        )
+        .unwrap();
+        fs::write(&first.report_path, &old_bytes).unwrap();
+        extraction::write_native_managed_metadata(
+            &first.output_directory,
+            &project.images_dir().join(&attempt.image_file),
+            &attempt.sha256,
+            hash(&old_bytes),
+        )
+        .unwrap();
+        let repeated = recover_deleted_attempt(
+            &project.images_dir(),
+            &project.extracted_dir(),
+            &project.recovery_dir(),
+            1,
+            &attempt,
+            &|_| {},
+        )
+        .unwrap();
+        assert!(repeated.reused);
+        assert_eq!(repeated.native_engine_version, 4);
+        assert_eq!(fs::read(&first.report_path).unwrap(), old_bytes);
+        assert_eq!(repeated.output_directory, first.output_directory);
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn lost_directory_and_missing_link_hypothesis_flow_through_native_delivery_and_reuse() {
+        let (project, previous, _) = fixture(&[1, 10, 19]);
+        let mut bytes = fat12::tests::image();
+        let rtf = [b"{\\rtf1 ".as_slice(), &vec![b'x'; 600], b"}"].concat();
+        fat12::tests::entry(
+            &mut bytes,
+            20 * 512,
+            b"BROKEN  RTF",
+            2,
+            rtf.len() as u32,
+            false,
+        );
+        bytes[33 * 512..34 * 512].copy_from_slice(&rtf[..512]);
+        for copy in 0..2 {
+            for cluster in [350, 500, 501] {
+                fat12::tests::set_fat(&mut bytes, copy, cluster, 0xfff);
+            }
+        }
+        let tail = (33 + 350 - 2) * 512;
+        bytes[tail..tail + rtf.len() - 512].copy_from_slice(&rtf[512..]);
+        let dir = (33 + 500 - 2) * 512;
+        fat12::tests::entry(&mut bytes, dir, b".          ", 500, 0, true);
+        fat12::tests::entry(&mut bytes, dir + 32, b"..         ", 0, 0, true);
+        fat12::tests::file(
+            &mut bytes,
+            dir + 64,
+            b"SAVED   TXT",
+            501,
+            b"from lost directory",
+        );
+        for lba in [1, 10, 19] {
+            bytes[lba * 512..(lba + 1) * 512].fill(0);
+        }
+        let sha = hash(&bytes);
+        fs::write(project.images_dir().join(&previous.image_file), &bytes).unwrap();
+        let mut metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&previous.metadata_path).unwrap()).unwrap();
+        metadata["sha256"] = serde_json::json!(sha);
+        fs::write(
+            &previous.metadata_path,
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        let log = Path::new(&previous.log_file);
+        fs::write(
+            log,
+            fs::read_to_string(log)
+                .unwrap()
+                .replace(&previous.sha256, &sha),
+        )
+        .unwrap();
+        let attempt = imaging::load_attempts_for_disk(&project.images_dir(), 1)
+            .unwrap()
+            .remove(0);
+        let first = recover(&project, &attempt).unwrap();
+        assert_eq!(first.files, 2);
+        assert_eq!(first.reconstructed_directories, 1);
+        assert_eq!(first.fragmented_parents_with_candidates, 1);
+        let plan = conversion::build_conversion_plan(&planning(&project), &|_| {}).unwrap();
+        assert_eq!(plan.mirrored_files, 2);
+        assert_eq!(
+            fs::read(
+                project
+                    .converted_dir()
+                    .join("001/Directory-Recovered/cluster_0500/SAVED.TXT")
+            )
+            .unwrap(),
+            b"from lost directory"
+        );
+        let path_map = fs::read_to_string(&plan.path_map).unwrap();
+        assert!(path_map.contains("Fragment-Hypotheses"));
+        assert!(path_map.contains("missing FAT link"));
+        assert!(path_map.contains("original parent/name"));
+        let repeated = recover(&project, &attempt).unwrap();
+        assert!(repeated.reused);
+        assert_eq!(repeated.files, first.files);
+        let output = crate::cli::run(
+            &["recovery".into(), "extract".into(), "1".into()],
+            project.root(),
+        )
+        .unwrap();
+        assert_eq!(output.exit_code, 3);
+        assert!(output.output.contains("Lost-directory roots: 1"));
+        assert!(output.output.contains("non-authoritative"));
+        assert_eq!(
+            fs::read(project.images_dir().join(&attempt.image_file)).unwrap(),
+            bytes
+        );
         fs::remove_dir_all(project.root()).unwrap();
     }
 }

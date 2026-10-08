@@ -154,13 +154,25 @@ pub(crate) fn preserve(
         schema_version: 1, source_image: native.source_image.clone(), source_sha256: native.source_sha256.clone(),
         disk: native.disk, attempt: native.attempt, bad_lbas: analysis.bad_lbas.clone(),
         partial_parents: analysis.unrecovered_files.clone(), fragments: records,
-        warning: "Raw fragments of incomplete live files, NOT complete documents or customer delivery. Logical parent offsets, physical extents, metadata/FAT provenance and exact missing ranges/unmapped tails are retained. Unknown bytes are not filled or joined. Final-sector slack is excluded. Ambiguous/crosslinked ownership is not exported. Bytes are acquisition-reported readable, not certified original content. Unsupported/unknown filesystem layouts remain unresolved.".into(),
+        warning: if native.native_engine_version >= 5 {
+            "Raw fragments of incomplete file candidates, NOT complete documents or customer delivery. Reconstructed-directory parents may have unknown original path/live-versus-deleted status. Logical parent offsets, physical extents, metadata/FAT provenance and exact missing ranges/unmapped tails are retained. Unknown bytes are not filled or joined. Final-sector slack is excluded. Ambiguous/crosslinked ownership is not exported. Bytes are acquisition-reported readable, not certified original content. Unsupported/unknown filesystem layouts remain unresolved."
+        } else {
+            "Raw fragments of incomplete live files, NOT complete documents or customer delivery. Logical parent offsets, physical extents, metadata/FAT provenance and exact missing ranges/unmapped tails are retained. Unknown bytes are not filled or joined. Final-sector slack is excluded. Ambiguous/crosslinked ownership is not exported. Bytes are acquisition-reported readable, not certified original content. Unsupported/unknown filesystem layouts remain unresolved."
+        }.into(),
     };
     let serialized = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
     if serialized.len() > 16 * 1024 * 1024 {
         return Err("Fragment provenance size ceiling reached; no publication".into());
     }
-    let output = recovery_disk.join(format!("attempt_{:03}_fragments_v1", native.attempt));
+    let generation = if native.native_engine_version >= 5 {
+        2
+    } else {
+        1
+    };
+    let output = recovery_disk.join(format!(
+        "attempt_{:03}_fragments_v{generation}",
+        native.attempt
+    ));
     let report_path = output.join("fragments.json");
     let reused = output.exists();
     if reused {

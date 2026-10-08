@@ -48,12 +48,14 @@ fv process
 They are stored separately:
 
 ```text
-Recovery/027/attempt_001_fragments_v1/
+Recovery/027/attempt_001_fragments_v2/
   fragment_ENTRYOFFSET_FILEOFFSET_HASH.bin
   fragments.json
 ```
 
 Each fragment records its parent file, **logical parent byte offset**, SHA-256 and exact physical source extents. The report contains the parent allocation/FAT/name provenance, precise unreadable ranges and unmapped tail lengths. Fragment-relative offsets start at zero; the separate parent offset identifies where those bytes belonged.
+
+Native generation 5 uses fragment **v2**, preserving older fragment-v1 evidence rather than changing its parent inventory. It can include incomplete children from marked reconstructed-directory trees, whose original parent/name/live-versus-deleted status is unknown. Existing forensic deleted-v1 outputs continue verified reuse. Additional mapped Word-text segments are separate evidence, never repaired originals; see [deeper recovery](DEEP_RECOVERY.md).
 
 - A missing sector splits a run. It is never filled or skipped over inside one fragment.
 - Known fragmented allocation follows logical file order; physical extents remain explicit.

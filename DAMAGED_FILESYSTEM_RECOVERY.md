@@ -1,6 +1,6 @@
 # Damaged-filesystem recovery
 
-Native recovery gets past some missing boot sectors and now automatically salvages validated signature candidates from orphan chains and damaged-file regions. It runs on saved images, never the inserted floppy. See [automatic carving](CARVING_RECOVERY.md) for generation 4 and its measured customer-capture results; this is not complete DMDE replacement.
+Native recovery gets past some missing boot sectors and automatically salvages validated signature candidates from orphan chains and damaged-file regions. Generation 5 adds [evidenced lost directories, missing-link file-tail alternatives and forensic Word text](DEEP_RECOVERY.md). It runs on saved images, never the inserted floppy; this is not complete DMDE replacement.
 
 ## Use it
 
@@ -14,7 +14,7 @@ fv recovery extract 9
 
 Use `fluxvault` instead of `fv` if you have not installed the short launcher. The command needs neither Greaseweazle nor 7-Zip/LibreOffice. It returns **3 (attention)** even when complete files are recovered. `--json` includes `layout_method`, `layout_warning`, the source hash and the report location. Human output keeps the warning visible on reuse as well.
 
-New results live in `Extracted/NNN/attempt_NNN_native_v4` (or `legacy_native_v4`) and `Recovery/NNN/attempt_NNN_fat12_v4.json`. Older generations/manual folders are preserved, not rewritten. A changed source, incomplete acquisition map or altered managed inventory still blocks recovery. If no layout can be established, generation 4 records `analysis: null`, the filesystem error, and its bounded readable-region carving results instead of inventing geometry.
+New results live in `Extracted/NNN/attempt_NNN_native_v5` (or `legacy_native_v5`) and `Recovery/NNN/attempt_NNN_fat12_v5.json`. Older generations/manual folders are preserved, not rewritten. A changed source, incomplete acquisition map or altered managed inventory still blocks recovery. If no layout can be established, the engine records `analysis: null`, the filesystem error, and its bounded readable-region carving results instead of inventing geometry.
 
 ## What missing-boot inference means
 
@@ -55,4 +55,4 @@ $env:FLUXVAULT_FAT12_TEST_PROJECT = 'C:\Users\User\Desktop\FluxVault-Test\Custom
 cargo test --lib real_saved_pilot_payloads -- --ignored --nocapture
 ```
 
-Next: deeper evidence-ranked metadata reconstruction, erased fragmented deleted chains/directories, additional signatures and document-aware salvage. Bounded orphan/signature recovery, raw readable partial-fragment preservation and opt-in forensic deleted recovery are implemented; full historical yield equivalence and 136-disk acceptance remain separate work.
+Generation 5 now adds bounded lost-directory reconstruction, one missing FAT-link tail hypotheses and mapped Word main-text salvage. [Commands, evidence and tests](DEEP_RECOVERY.md). Erased fragmented deleted chains/directories, multiple missing allocation boundaries, damaged compound metadata, additional formats and editable-document reconstruction remain open; full historical yield equivalence and 136-disk acceptance are separate work.

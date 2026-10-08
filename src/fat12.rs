@@ -13,13 +13,18 @@ mod orphan_recovery;
 pub(crate) use orphan_recovery::{orphan_regions, partial_file_regions, partial_file_safe};
 #[path = "fat12_deleted.rs"]
 mod deleted_recovery;
+#[path = "fat12_directories.rs"]
+mod directory_recovery;
+#[path = "fat12_fragmented.rs"]
+mod fragmented_recovery;
 pub(crate) use deleted_recovery::analyze_deleted;
 pub use deleted_recovery::{DeletedAnalysis, DeletedEntry};
+pub(crate) use fragmented_recovery::hypotheses as fragmented_hypotheses;
 
 const SECTOR: usize = 512;
 const MAX_ENTRIES: usize = 16_384;
 pub const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
-pub const RECOVERY_ENGINE_VERSION: u32 = 4;
+pub const RECOVERY_ENGINE_VERSION: u32 = 5;
 
 /// An inferred standard layout is a bounded hypothesis, not recovered boot bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +139,8 @@ pub struct Analysis {
     pub deleted_clusters_excluded: Vec<u16>,
     #[serde(default)]
     pub deleted_entries: Vec<DeletedEntry>,
+    #[serde(default)]
+    pub reconstructed_directories: Vec<directory_recovery::DirectoryEvidence>,
     pub customer_delivery_certified: bool,
 }
 
@@ -325,6 +332,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
         owned_clusters: Vec::new(),
         deleted_clusters_excluded: Vec::new(),
         deleted_entries: Vec::new(),
+        reconstructed_directories: Vec::new(),
         customer_delivery_certified: false,
     };
     let bad = result.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
@@ -334,7 +342,7 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
             .map(|i| layout.root_start * SECTOR + i * 32)
             .collect(),
         ancestors: Vec::new(),
-        metadata: layout_evidence.source_lbas.into_iter().collect(),
+        metadata: layout_evidence.source_lbas.iter().copied().collect(),
         depth: 0,
         namespace_keys: Vec::new(),
     }]);
@@ -345,7 +353,54 @@ pub fn analyze(image: &[u8], bad_lbas: &[u64]) -> Result<Analysis, String> {
     let mut entries_seen = 0;
     let mut chain_visits = 0usize;
     let mut paths = BTreeMap::<String, usize>::new();
-    while let Some(dir) = queue.pop_front() {
+    let mut searched_lost_directories = false;
+    loop {
+        if queue.is_empty() && !searched_lost_directories {
+            searched_lost_directories = true;
+            let (found, issues) = directory_recovery::discover(
+                image,
+                &layout,
+                &bad,
+                &owners.keys().copied().collect(),
+                &result.deleted_clusters_excluded.iter().copied().collect(),
+                &directory_seen,
+            );
+            result.skipped.extend(issues);
+            for evidence in found {
+                let path = format!("DirectoryRecovery/cluster_{:04}", evidence.start_cluster);
+                *paths.entry(path.to_uppercase()).or_default() += 1;
+                for cluster in &evidence.clusters {
+                    owners.entry(*cluster).or_default().insert(path.clone());
+                }
+                directory_seen.insert(evidence.start_cluster);
+                let mut metadata = layout_evidence
+                    .source_lbas
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>();
+                metadata.extend(evidence.metadata_lbas.iter().copied());
+                queue.push_back(Directory {
+                    path: path.clone(),
+                    offsets: evidence
+                        .clusters
+                        .iter()
+                        .flat_map(|c| {
+                            let begin = layout.cluster_start(*c) * SECTOR;
+                            (0..layout.sectors_per_cluster * SECTOR / 32)
+                                .map(move |i| begin + i * 32)
+                        })
+                        .collect(),
+                    ancestors: evidence.clusters.clone(),
+                    metadata,
+                    depth: 0,
+                    namespace_keys: vec![path.to_uppercase()],
+                });
+                result.reconstructed_directories.push(evidence);
+            }
+        }
+        let Some(dir) = queue.pop_front() else {
+            break;
+        };
         let mut pending_name = PendingName::default();
         for at in dir.offsets {
             entries_seen += 1;

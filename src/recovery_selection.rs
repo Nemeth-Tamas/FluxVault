@@ -174,6 +174,8 @@ pub(crate) fn select_managed(
             *coverage.entry(key.clone()).or_default() += 1;
             if !file.relative_path.split(['/', '\\']).any(|p| {
                 p.eq_ignore_ascii_case("SignatureRecovery")
+                    || p.eq_ignore_ascii_case("DirectoryRecovery")
+                    || p.eq_ignore_ascii_case("FragmentRecovery")
                     || p.eq_ignore_ascii_case("[$Raw Files by Signatures]")
             }) {
                 *reachable.entry(key).or_default() += 1;
@@ -411,7 +413,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn reachable_payload_cannot_be_downgraded_to_signature_only() {
+    fn reachable_payload_cannot_be_downgraded_to_reconstructed_or_hypothetical_only() {
         let root = fixture();
         let old = generation(&root, "attempt_001", &[("a", b"same")]);
         generation(
@@ -420,6 +422,14 @@ mod tests {
             &[
                 ("SignatureRecovery/a", b"same"),
                 ("SignatureRecovery/b", b"extra"),
+            ],
+        );
+        generation(
+            &root,
+            "attempt_001_native_v5",
+            &[
+                ("DirectoryRecovery/cluster_0002/a", b"same"),
+                ("FragmentRecovery/alternative", b"extra"),
             ],
         );
         assert_eq!(

@@ -405,6 +405,7 @@ fn ordinary_clean_acquisition_stays_preferred_and_manual_recovery_is_not_replace
         b"operator recovery"
     );
     assert!(!manual.join("attempt_003_native_v4").exists());
+    assert!(!manual.join("attempt_003_native_v5").exists());
     fs::remove_dir_all(project.root()).unwrap();
     let (project, _) = fixture(&[vec![0, 33], vec![]]);
     let attempts = imaging::load_attempts_for_disk(&project.images_dir(), 1).unwrap();
