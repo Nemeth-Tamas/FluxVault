@@ -62,6 +62,8 @@ Offline reference comparison: `fv benchmark compare --baseline ZIP [--include-de
 
 For setup and the recorded live checks, see [GREASEWEAZLE_PREFLIGHT.md](GREASEWEAZLE_PREFLIGHT.md). The working shop drive is the Mitsumi on selector **B**; the original NEC has a faulty head/read path.
 
+Windows automatically binds GW, probes, extraction and Office host-process trees to controller/operation lifetimes before execution. Closing/crashing the controller stops its supervised descendants; completed captures may resume offline while partial evidence remains intact. Normal `QUIT` still drains gracefully. New host audit records expose `controller_supervision`; old records remain compatible. No new scan flags/admin/registry changes. [Crash supervision and restart boundaries](PROCESS_SUPERVISION.md). [Next 053–075 batch commands](NEXT_SCAN.md).
+
 ## Installation and command catalog
 
 Build with `cargo build --release`; the executable is `target\release\fluxvault.exe`. Install the current copy with `powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath` from the repository; omit `-AddToPath` to avoid changing PATH, or add `-WhatIf` to preview. Reopen the terminal after a PATH change. **Repeat installation after a new build**: installed `fv.exe`/`fluxvault.exe` are copies. Alternatively run the full release path using PowerShell's `&` operator. [Beginner setup](TUTORIAL.md#1-install-or-refresh-the-short-command).

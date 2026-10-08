@@ -76,6 +76,8 @@ pub struct CommandAudit {
     pub stderr: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_supervision: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,7 +271,7 @@ pub fn run_audited_command_with_version(
 ) -> AuditedCommandResult {
     let started_unix_ms = current_unix_ms();
     let started = Instant::now();
-    let output = Command::new(executable).args(arguments).output();
+    let output = crate::process_supervision::output(Command::new(executable).args(arguments));
     let duration_ms = started.elapsed().as_millis();
 
     let audit = match output {
@@ -284,6 +286,7 @@ pub fn run_audited_command_with_version(
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
             version,
+            controller_supervision: crate::process_supervision::audit_mode(),
         },
         Err(error) => CommandAudit {
             tool: tool_name.to_owned(),
@@ -296,6 +299,7 @@ pub fn run_audited_command_with_version(
             stdout: String::new(),
             stderr: error.to_string(),
             version,
+            controller_supervision: crate::process_supervision::audit_mode(),
         },
     };
     let audit_error = append_audit(audit_path, &audit).err();
@@ -314,11 +318,12 @@ pub fn run_audited_probe(
 ) -> AuditedCommandResult {
     let started_unix_ms = current_unix_ms();
     let started = Instant::now();
-    let outcome = Command::new(executable)
-        .args(arguments)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+    let outcome = crate::process_supervision::spawn(
+        Command::new(executable)
+            .args(arguments)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
     let (success, exit_code, stdout, stderr) = match outcome {
         Ok(mut child) => {
             let mut stdout_pipe = child.stdout.take();
@@ -344,13 +349,13 @@ pub fn run_audited_probe(
                     Ok(Some(status)) => break Some(status),
                     Ok(None) if started.elapsed() >= timeout => {
                         timed_out = true;
-                        issue = terminate_process_tree(&mut child).err();
+                        issue = child.terminate_tree().err();
                         break child.wait().ok();
                     }
                     Ok(None) => thread::sleep(Duration::from_millis(20)),
                     Err(error) => {
                         issue = Some(format!("Process wait failed: {error}"));
-                        let _ = terminate_process_tree(&mut child);
+                        let _ = child.terminate_tree();
                         break child.wait().ok();
                     }
                 }
@@ -364,11 +369,14 @@ pub fn run_audited_probe(
             if timed_out {
                 stderr.push_str(&format!("\nProbe timed out after {}s", timeout.as_secs()));
             }
+            let wait_or_termination_failed = issue.is_some();
             if let Some(issue) = issue {
                 stderr.push_str(&format!("\nProcess termination issue: {issue}"));
             }
             (
-                status.as_ref().is_some_and(|status| status.success()) && !timed_out,
+                status.as_ref().is_some_and(|status| status.success())
+                    && !timed_out
+                    && !wait_or_termination_failed,
                 status.and_then(|status| status.code()),
                 stdout,
                 stderr.trim().to_owned(),
@@ -387,6 +395,7 @@ pub fn run_audited_probe(
         stdout,
         stderr,
         version: None,
+        controller_supervision: crate::process_supervision::audit_mode(),
     };
     let audit_error = append_audit(audit_path, &audit).err();
     AuditedCommandResult { audit, audit_error }
@@ -627,6 +636,14 @@ pub(crate) fn first_non_empty_line(value: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn older_command_audits_remain_readable_without_supervision_claims() {
+        let audit: super::CommandAudit = serde_json::from_str(r#"{"tool":"old host","executable":"gw.exe","arguments":["info"],"started_unix_ms":1,"duration_ms":2,"success":true,"exit_code":0,"stdout":"old output","stderr":""}"#).unwrap();
+        assert!(audit.version.is_none());
+        assert!(audit.controller_supervision.is_none());
+        let serialized = serde_json::to_value(audit).unwrap();
+        assert!(serialized.get("controller_supervision").is_none());
+    }
     use super::*;
 
     #[test]

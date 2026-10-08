@@ -698,8 +698,7 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
         for (key, val) in &self.extra_envs {
             cmd.env(key, val);
         }
-        let mut child = cmd
-            .spawn()
+        let mut child = crate::process_supervision::spawn(&mut cmd)
             .map_err(|error| format!("A Greaseweazle indítása sikertelen: {error}"))?;
 
         let child_stdout = child
@@ -761,12 +760,12 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
                 }
                 Ok(None) if started.elapsed() >= timeout => {
                     timed_out = true;
-                    termination_issue = external_tools::terminate_process_tree(&mut child).err();
+                    termination_issue = child.terminate_tree().err();
                     break child.wait().ok();
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(20)),
                 Err(error) => {
-                    let issue = external_tools::terminate_process_tree(&mut child).err();
+                    let issue = child.terminate_tree().err();
                     let _ = child.wait();
                     return Err(format!(
                         "Greaseweazle folyamat várakozási hiba: {error}{}",
@@ -831,6 +830,7 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
             stdout: stdout_trimmed.clone(),
             stderr: stderr_trimmed.clone(),
             version: self.host_version.clone(),
+            controller_supervision: crate::process_supervision::audit_mode(),
         };
 
         let audit_error = external_tools::append_audit(&self.audit_path, &audit).err();

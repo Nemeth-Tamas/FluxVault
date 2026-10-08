@@ -1,5 +1,7 @@
 # Hardware test launcher: fresh scan, resume, or collect
 
+**Current next cohort:** [customer 053–075](NEXT_SCAN.md), with two-drive numbered feeding or this launcher's simpler GW-only Enter mode. Earlier 009/058 instructions below remain individual repeat-check recipes, not the current requested batch.
+
 For ordinary scanning, follow [the beginner tutorial](TUTORIAL.md). This optional test launcher uses the freshly built executable directly and collects review-ready results. No installation, policy file or format map required. Each invocation without `-Project` creates a **new** isolated project under `Desktop\FluxVault-Test` and prints its path.
 
 ## Beginner: fresh one-disk checks

@@ -108,6 +108,8 @@ Read the text if colors are unavailable. Partial does not mean nothing was recov
 
 Type `QUIT` at a waiting prompt. Feeding stops and saved-file work finishes. Do not pull a floppy out during a physical read to stop the program.
 
+If the console unexpectedly closes, Windows stops FluxVault's supervised external host processes and their children. Keep partial files and reopen the same project/scan command; wait for drive activity to settle and reconfirm its displayed disk. Completed raw captures can resume offline decoding, but partial captures are not successful reads. This is crash cleanup, not a replacement for graceful `QUIT`. [Details and tested boundaries](PROCESS_SUPERVISION.md).
+
 ### Resume the same batch
 
 Reopen PowerShell, enter the **same project**, repeat the scan command:

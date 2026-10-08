@@ -120,7 +120,168 @@ fn default_background_scan_runs_the_whole_cli_path_without_physical_hardware() {
         serde_json::from_slice(&fs::read(project.join(".fluxvault-gw-scan.json")).unwrap())
             .unwrap();
     assert_eq!(journal["background_processing"], true);
+    // No filesystem means attention, not an empty "successful" customer package.
+    let destination = root.join("delivery");
+    fs::create_dir(&destination).unwrap();
+    let blocked = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &[
+            "finalize",
+            "--destination",
+            destination.to_str().unwrap(),
+            "--json",
+        ],
+        true,
+    );
+    assert_eq!(blocked.status.code(), Some(3));
+    let blocked: serde_json::Value = serde_json::from_slice(&blocked.stdout).unwrap();
+    assert_eq!(blocked["package_status"], "blocked_by_attention");
+    assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+
+    // A separate valid disposable FAT12 document exercises the actual complete
+    // numbered-scan path with installed 7-Zip/Office, including verified delivery.
+    complete_document_workflow(&root, &app_data, &destination);
     fs::remove_dir_all(root).unwrap();
+}
+
+fn complete_document_workflow(root: &Path, app_data: &Path, destination: &Path) {
+    use std::io::Read;
+    let project = root.join("valid-project");
+    assert!(
+        invoke_with_mock_gw(root, app_data, &["init", project.to_str().unwrap()], false)
+            .status
+            .success()
+    );
+    let rtf = b"{\\rtf1\\ansi Disposable end-to-end FluxVault document}";
+    let mut image = vec![0; 2880 * 512];
+    image[..3].copy_from_slice(&[0xeb, 0x3c, 0x90]);
+    image[3..11].copy_from_slice(b"FVTEST  ");
+    image[11..13].copy_from_slice(&512u16.to_le_bytes());
+    image[13] = 1;
+    image[14..16].copy_from_slice(&1u16.to_le_bytes());
+    image[16] = 2;
+    image[17..19].copy_from_slice(&224u16.to_le_bytes());
+    image[19..21].copy_from_slice(&2880u16.to_le_bytes());
+    image[21] = 0xf0;
+    image[22..24].copy_from_slice(&9u16.to_le_bytes());
+    image[24..26].copy_from_slice(&18u16.to_le_bytes());
+    image[26..28].copy_from_slice(&2u16.to_le_bytes());
+    image[38] = 0x29;
+    image[43..54].copy_from_slice(b"FV FIXTURE ");
+    image[54..62].copy_from_slice(b"FAT12   ");
+    image[510..512].copy_from_slice(&[0x55, 0xaa]);
+    for at in [512, 10 * 512] {
+        image[at..at + 5].copy_from_slice(&[0xf0, 0xff, 0xff, 0xff, 0x0f]);
+    }
+    let entry = 19 * 512;
+    image[entry..entry + 11].copy_from_slice(b"NOTE    RTF");
+    image[entry + 11] = 0x20;
+    image[entry + 26..entry + 28].copy_from_slice(&2u16.to_le_bytes());
+    image[entry + 28..entry + 32].copy_from_slice(&(rtf.len() as u32).to_le_bytes());
+    image[33 * 512..33 * 512 + rtf.len()].copy_from_slice(rtf);
+    let fixture = root.join("disposable-fat12.img");
+    fs::write(&fixture, &image).unwrap();
+    let scanned = invoke_mock_with_input(
+        &project,
+        app_data,
+        &["scan", "--last-disk", "1", "--json"],
+        false,
+        Some(b"1\n"),
+        &[("MOCK_GW_IMAGE", fixture.to_str().unwrap())],
+    );
+    assert!(
+        scanned.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&scanned.stdout),
+        String::from_utf8_lossy(&scanned.stderr)
+    );
+    let scanned: serde_json::Value = serde_json::from_slice(&scanned.stdout).unwrap();
+    assert_eq!(scanned["processing"]["converted_ok"], 1);
+    assert_eq!(
+        fs::read(project.join("Images/001_attempt_001.img")).unwrap(),
+        image
+    );
+    let audit = fs::read_to_string(project.join("Logs/external-tools.jsonl")).unwrap();
+    #[cfg(windows)]
+    for record in audit
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+    {
+        assert_eq!(
+            record["controller_supervision"],
+            "windows_controller_and_operation_jobs"
+        );
+    }
+    let finalized = invoke_with_mock_gw(
+        &project,
+        app_data,
+        &[
+            "finalize",
+            "--destination",
+            destination.to_str().unwrap(),
+            "--json",
+        ],
+        true,
+    );
+    assert!(
+        finalized.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&finalized.stdout),
+        String::from_utf8_lossy(&finalized.stderr)
+    );
+    let finalized: serde_json::Value = serde_json::from_slice(&finalized.stdout).unwrap();
+    assert_eq!(finalized["package_status"], "verified_archival_zip");
+    assert_eq!(finalized["customer_delivery_certified"], false);
+    let package = &finalized["package"];
+    let archive_path = Path::new(package["zip"].as_str().unwrap());
+    assert_eq!(
+        format!("{:x}", Sha256::digest(fs::read(archive_path).unwrap())),
+        package["sha256"].as_str().unwrap()
+    );
+    assert!(Path::new(package["sha256_file"].as_str().unwrap()).is_file());
+    let mut archive = zip::ZipArchive::new(fs::File::open(archive_path).unwrap()).unwrap();
+    let mut original = false;
+    let mut docx = false;
+    let mut pdf = false;
+    for index in 0..archive.len() {
+        let mut member = archive.by_index(index).unwrap();
+        let name = member.name().to_owned();
+        let mut bytes = vec![];
+        member.read_to_end(&mut bytes).unwrap(); // includes member CRC verification
+        let extension = Path::new(&name)
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        if name.starts_with("Converted/") && extension == "rtf" {
+            assert_eq!(bytes, rtf);
+            original = true;
+        } else if name.starts_with("Converted/") && extension == "docx" {
+            let mut document = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut text = String::new();
+            document
+                .by_name("word/document.xml")
+                .unwrap()
+                .read_to_string(&mut text)
+                .unwrap();
+            assert!(text.contains("Disposable end-to-end FluxVault document"));
+            docx = true;
+        } else if name.starts_with("Converted/") && extension == "pdf" {
+            assert!(bytes.starts_with(b"%PDF-"));
+            pdf = true;
+        }
+    }
+    assert!(
+        original && docx && pdf,
+        "verified archive must contain original ({original}) and both real conversions ({docx}/{pdf}); {}",
+        root.display()
+    );
+    assert_eq!(fs::read(&fixture).unwrap(), image);
+    assert_eq!(
+        fs::read(project.join("Images/001_attempt_001.img")).unwrap(),
+        image
+    );
 }
 
 #[test]

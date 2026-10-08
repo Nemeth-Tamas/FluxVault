@@ -69,6 +69,8 @@ FluxVault never writes to source floppies. Missing bytes are not fabricated. Fra
 | Optional recovery budgets | [Policies without homework](POLICIES.md) |
 | Background work and conversion workers | [Background processing](BACKGROUND_PROCESSING.md) |
 | Lossless capture packing and safe restart | [Capture storage](CAPTURE_STORAGE.md) |
+| Console closes/crashes: host cleanup and restart | [Process supervision](PROCESS_SUPERVISION.md) |
+| Next measured 053–075 batch, single or dual drive | [Next scan](NEXT_SCAN.md) |
 | Native recovery and missing boot metadata | [Damaged-filesystem recovery](DAMAGED_FILESYSTEM_RECOVERY.md) |
 | Automatic orphan/signature/embedded salvage | [Carving recovery](CARVING_RECOVERY.md) |
 | Fragments and opt-in deleted recovery | [Deleted and fragment recovery](DELETED_AND_FRAGMENT_RECOVERY.md) |

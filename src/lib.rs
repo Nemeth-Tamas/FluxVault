@@ -32,6 +32,7 @@ pub mod manual_recovery_import;
 mod offline_images;
 pub mod package;
 pub mod pipeline;
+pub mod process_supervision;
 pub mod processing;
 pub mod production;
 pub mod project;

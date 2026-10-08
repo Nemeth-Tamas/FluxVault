@@ -732,12 +732,13 @@ fn convert_output(
         ];
         let started_unix_ms = unix_ms();
         let started = Instant::now();
-        let mut child = Command::new(&request.libreoffice_executable)
-            .args(&arguments)
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .map_err(|error| format!("LibreOffice indítási hiba: {error}"))?;
+        let mut child = crate::process_supervision::spawn(
+            Command::new(&request.libreoffice_executable)
+                .args(&arguments)
+                .stdout(Stdio::from(stdout))
+                .stderr(Stdio::from(stderr)),
+        )
+        .map_err(|error| format!("LibreOffice indítási hiba: {error}"))?;
         let mut timed_out = false;
         let mut termination_issue = None;
         let exit_status = loop {
@@ -745,14 +746,14 @@ fn convert_output(
                 Ok(Some(status)) => break status,
                 Ok(None) if started.elapsed() >= Duration::from_secs(request.timeout_seconds) => {
                     timed_out = true;
-                    termination_issue = terminate_process_tree(&mut child).err();
+                    termination_issue = child.terminate_tree().err();
                     break child.wait().map_err(|error| {
                         format!("LibreOffice timeout utáni wait hiba: {error}")
                     })?;
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(100)),
                 Err(error) => {
-                    let termination_issue = terminate_process_tree(&mut child).err();
+                    let termination_issue = child.terminate_tree().err();
                     let _ = child.wait();
                     return Err(format!(
                         "LibreOffice wait hiba: {error}{}",
@@ -785,6 +786,7 @@ fn convert_output(
                 None => stderr_text.clone(),
             },
             version: None,
+            controller_supervision: crate::process_supervision::audit_mode(),
         };
         external_tools::append_audit(&request.command_audit_path, &audit)?;
         if timed_out {
@@ -884,6 +886,7 @@ fn retryable_failure(detail: String) -> OutputResult {
     }
 }
 
+#[cfg(test)]
 fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String> {
     external_tools::terminate_process_tree(child)
 }
