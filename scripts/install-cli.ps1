@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $repoRoot 'target\release\fluxvault.exe'
+$completionSource = Join-Path $PSScriptRoot 'FluxVault.Completion.ps1'
 if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
     throw "Release executable not found: $source. Run cargo build --release first."
 }
@@ -21,6 +22,11 @@ $shortDestination = Join-Path $resolvedInstall 'fv.exe'
 if ($PSCmdlet.ShouldProcess($shortDestination, 'Install short fv command (same FluxVault executable)')) {
     New-Item -ItemType Directory -Path $resolvedInstall -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $shortDestination -Force
+}
+$completionDestination = Join-Path $resolvedInstall 'FluxVault.Completion.ps1'
+if ($PSCmdlet.ShouldProcess($completionDestination, 'Install optional PowerShell 7 Tab completion (no profile changes)')) {
+    New-Item -ItemType Directory -Path $resolvedInstall -Force | Out-Null
+    Copy-Item -LiteralPath $completionSource -Destination $completionDestination -Force
 }
 
 if ($AddToPath) {
@@ -46,3 +52,4 @@ if ($AddToPath) {
 
 Write-Output "FluxVault CLI target: $destination"
 Write-Output "Short command target: $shortDestination"
+Write-Output ("PowerShell 7 Tab completion, current terminal only: . '{0}'" -f $completionDestination.Replace("'", "''"))

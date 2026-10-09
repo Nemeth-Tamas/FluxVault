@@ -1,5 +1,7 @@
 # FluxVault CLI — advanced reference
 
+Optional PowerShell 7 command/flag completion: `fluxvault completions powershell` prints the static trusted script. [Enable it in one line](SHELL_COMPLETION.md); no project or media access, no automatic profile changes.
+
 For your first run, use [the beginner tutorial](TUTORIAL.md). For daily commands, use [the cheat sheet](CHEATSHEET.md). This reference explains optional controls and evidence semantics; it is not a sequence to paste and run in full.
 
 - [Everyday workflow](#everyday-short-workflow)

@@ -15,6 +15,14 @@ powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath
 
 Reopen PowerShell, then `fv --help`. Reinstall after a new build to refresh the copied executable. No installation wanted? Use the full executable path with `& $fv`; [example](TUTORIAL.md#1-install-or-refresh-the-short-command).
 
+### Optional: Tab completion (PowerShell 7)
+
+```powershell
+. 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\scripts\FluxVault.Completion.ps1'
+```
+
+Then `fv sc` + Tab completes `scan`; `fv scan --no` + Tab completes `--no-verify`. Current terminal only; no drive probes or automatic profile edits. [Guide](SHELL_COMPLETION.md).
+
 ### New batch: create, enter, scan
 
 Choose a **fresh folder name**. Do not initialize an existing archive to resume it.

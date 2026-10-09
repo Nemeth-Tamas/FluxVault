@@ -19,6 +19,7 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 | Recovered files, conversion issues and delivery hashes | [Final report guide](FINAL_REPORTS.md): `fv report export` |
 | Finish/archive saved results and resume interrupted finishing | [Finishing guide](FINALIZATION.md): `fv finalize --destination PATH` |
 | Check benchmark readiness | [Single-GW gates](SINGLE_GW_READINESS.md) |
+| Less typing in PowerShell 7 | [Tab completion](SHELL_COMPLETION.md): optional one-line setup |
 | Want development status | [Progress](PROGRESS.md) and [TODO](TODO.md) |
 
 ## Beginner: the usual workflow

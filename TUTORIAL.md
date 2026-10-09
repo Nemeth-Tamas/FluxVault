@@ -182,6 +182,10 @@ The destination must exist **outside the project**, on workstation storage. `fin
 
 `package build` is an expert archival command, **not** a shortcut to recovery certification. An archive can preserve partial evidence without proving complete customer recovery.
 
+## Optional: Tab completes commands
+
+In PowerShell 7, load the [optional completion script](SHELL_COMPLETION.md), then type `fv sc` + Tab or `fv scan --no` + Tab. No project or drive is inspected, no read starts, and your profile is not modified automatically.
+
 ## Advanced: optional controls
 
 USB-only: `fv scan --usb --write-blocker-verified` uses A: and asks for each number. The **opt-in two-drive pilot** is `fv scan --double --write-blocker-verified`: one console, `u1` / `g2`, and `gOLD` for an earlier USB partial. Both readers feed background processing. Exact label/open-tab and existing USB protection checks remain; dual rejects `--no-verify`. Start with the [small 007–010 test](DUAL_SCAN.md), not 136 disks. Ordinary `fv scan` remains GW-only.

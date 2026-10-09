@@ -1,6 +1,7 @@
 //! Command-line entry points over the guarded workflow services.
 
 mod acquire;
+mod completion;
 mod dual_scan;
 mod finalize;
 mod flux;
@@ -158,6 +159,7 @@ Usage:
   fluxvault package build --destination PATH [--project PATH]
                                     Create and verify an archival ZIP
   fluxvault --help                  Show this help
+  fluxvault completions powershell Generate static PowerShell 7+ Tab completion
 Options:
   --usb                             scan: existing USB-only loop, default Windows A:
   --double                         scan: opt-in simultaneous USB/GW pilot; exact labels
@@ -271,6 +273,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             output: HELP.to_owned(),
             exit_code: 0,
         });
+    }
+    if args.first().is_some_and(|arg| arg == "completions") {
+        return completion::run(args);
     }
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
