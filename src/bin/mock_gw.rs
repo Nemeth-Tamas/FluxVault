@@ -21,6 +21,12 @@ fn main() {
         println!("mock_gw 1.23");
         return;
     }
+    // Saved-file finalization fixture: satisfy the 7-Zip health probe, then
+    // deliberately leave extraction to FluxVault's native FAT12 fallback.
+    if args.as_slice() == ["i"] && env::var_os("MOCK_GW_SEVENZIP_PROBE").is_some() {
+        println!("7-Zip 24.09 mock saved-file fixture");
+        return;
+    }
     // Disposable Office-runner lifecycle fixture; never opens hardware.
     if args.first().is_some_and(|arg| arg == "--headless") {
         use std::io::Write;

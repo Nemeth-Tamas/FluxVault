@@ -45,9 +45,11 @@ Saved-file commands need no inserted disk:
 fv processing resume
 fv storage resume
 fv conversion retry
+fv finalize status
+fv finalize resume
 ```
 
-`fv stop` controls single-GW, USB-only and dual scans; `process`; `processing resume`; `storage resume`; `conversion run` / `conversion retry`; and `package build`. `finalize` exposes its processing/package phases separately, not one atomic operation. Other expert commands are not registered for second-console stop; Windows Ctrl+C reaches their shared cooperative boundaries/supervised host runners. An inactive control lock does not certify independently launched applications have exited.
+`fv stop` controls single-GW, USB-only and dual scans; `process`; `processing resume`; `storage resume`; `conversion run` / `conversion retry`; `audit`; `report export`; `package build`; and the **whole `finalize` operation**, including tool checks and the processing/package transition. Finishing uses Ctrl+C or second-console stop, not typed stdin STOP. [Saved finishing receipts and resume](FINALIZATION.md). Other expert commands are not registered for second-console stop; Windows Ctrl+C reaches their shared cooperative boundaries/supervised host runners. An inactive control lock does not certify independently launched applications have exited.
 
 ## Exit codes and scripts
 

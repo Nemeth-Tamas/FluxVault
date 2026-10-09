@@ -174,6 +174,46 @@ fn default_background_scan_runs_the_whole_cli_path_without_physical_hardware() {
     assert_eq!(blocked["package_status"], "blocked_by_attention");
     assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
 
+    // Explicit partial archiving is opt-in and remains attention (exit 3).
+    // Resume rechecks the saved image rather than trusting the prior receipt.
+    let archived = invoke_with_mock_gw(
+        &project,
+        &app_data,
+        &["finalize", "resume", "--allow-attention", "--json"],
+        true,
+    );
+    assert_eq!(
+        archived.status.code(),
+        Some(3),
+        "{}\n{}",
+        String::from_utf8_lossy(&archived.stdout),
+        String::from_utf8_lossy(&archived.stderr)
+    );
+    let archived: serde_json::Value = serde_json::from_slice(&archived.stdout).unwrap();
+    assert_eq!(
+        archived["package_status"],
+        "verified_archival_zip_with_attention"
+    );
+    assert_eq!(archived["customer_delivery_certified"], false);
+    let archive = Path::new(archived["package"]["zip"].as_str().unwrap());
+    assert!(archive.is_file());
+    let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
+    assert!(zip.by_name("Reports/FinalReportLatest.json").is_ok());
+    assert_eq!(
+        format!("{:x}", Sha256::digest(fs::read(archive).unwrap())),
+        archived["package"]["sha256"].as_str().unwrap()
+    );
+    drop(zip);
+    let receipt = invoke_with_mock_gw(&project, &app_data, &["finalize", "status", "--json"], true);
+    assert!(receipt.status.success());
+    let receipt: serde_json::Value = serde_json::from_slice(&receipt.stdout).unwrap();
+    assert_eq!(receipt["record"]["phase"], "complete_attention");
+    assert_eq!(receipt["active"], false);
+    assert_eq!(receipt["project_owner_active"], false);
+    let finished =
+        invoke_with_mock_gw(&project, &app_data, &["finalize", "resume", "--json"], true);
+    assert_eq!(finished.status.code(), Some(2));
+
     // A separate valid disposable FAT12 document exercises the actual complete
     // numbered-scan path with installed 7-Zip/Office, including verified delivery.
     complete_document_workflow(&root, &app_data, &destination);

@@ -1,197 +1,255 @@
-//! Image-only finishing workflow: process evidence, then package only a clean run.
+//! One owned, stoppable saved-image finishing operation; no media access.
+#[path = "finalization_state.rs"]
+mod state;
 
-use std::path::{Path, PathBuf};
-
+use super::{CliResponse, process};
+use crate::{
+    imaging,
+    package::{self, PackageRequest},
+    pipeline,
+    project::ProjectState,
+};
 use serde_json::{Value, json};
-
-use crate::{imaging, project::ProjectState};
-
-use super::{CliResponse, run as run_cli};
+use state::{Options, Phase, Record};
+use std::path::{Path, PathBuf};
 
 pub(super) fn run(
     cwd: &Path,
     project_root: PathBuf,
     destination: PathBuf,
     workers: usize,
+    allow_attention: bool,
     json_output: bool,
 ) -> Result<CliResponse, String> {
+    state::workstation(&project_root)?;
     let project = ProjectState::open_without_session(project_root)?;
-    let root = project
-        .root()
-        .canonicalize()
-        .map_err(|error| format!("Cannot resolve project directory: {error}"))?;
-    let destination = if destination.is_absolute() {
-        destination
-    } else {
-        cwd.join(destination)
-    };
-    let destination = destination.canonicalize().map_err(|error| {
-        format!(
-            "Package destination must be an existing directory: {} ({error})",
-            destination.display()
-        )
-    })?;
-    if !destination.is_dir() || destination.starts_with(&root) {
-        return Err(
-            "Package destination must be an existing folder outside the project".to_owned(),
-        );
-    }
-    if imaging::load_project_statistics(&project.images_dir())?.disk_count == 0 {
-        return Err("No saved disk images to finalize; no package was created".to_owned());
-    }
+    let root = project.root().canonicalize().map_err(|e| e.to_string())?;
+    let destination = state::destination(cwd, &root, destination)?;
+    execute(
+        &project,
+        Options {
+            destination,
+            workers,
+            allow_attention,
+        },
+        json_output,
+    )
+}
 
-    let process = run_cli(
-        &[
-            "process".to_owned(),
-            "--project".to_owned(),
-            root.display().to_string(),
-            "--conversion-workers".to_owned(),
-            workers.to_string(),
-            "--json".to_owned(),
-        ],
-        cwd,
-    )?;
-    finish(process, json_output, || {
-        run_cli(
-            &[
-                "package".to_owned(),
-                "build".to_owned(),
-                "--project".to_owned(),
-                root.display().to_string(),
-                "--destination".to_owned(),
-                destination.display().to_string(),
-                "--json".to_owned(),
-            ],
-            cwd,
-        )
+pub(super) fn resume(
+    project: &ProjectState,
+    allow_attention: bool,
+    json_output: bool,
+) -> Result<CliResponse, String> {
+    // Hold ownership before reading the options, not just before their use.
+    let owner = crate::project_work::reserve(project.root())?;
+    let record = state::load(project)?.ok_or("No saved finalization to resume")?;
+    if record.phase.complete() {
+        return Err("Finalization already completed. Its receipt is historical, not a fresh verification; use finalize --destination PATH for a new checked archive".into());
+    }
+    let root = project.root().canonicalize().map_err(|e| e.to_string())?;
+    let mut options = record.options;
+    options.destination = state::destination(project.root(), &root, options.destination)?;
+    options.allow_attention |= allow_attention;
+    execute_owned(project, options, json_output, &owner)
+}
+
+pub(super) fn status(project: &ProjectState, json_output: bool) -> Result<CliResponse, String> {
+    let record = state::load(project)?;
+    let control = crate::run_control::status(project)?;
+    let active = control["active"].as_bool() == Some(true)
+        && control["record"]["operation"].as_str() == Some("finalize");
+    let value = json!({"record":record, "active":active,
+        "project_owner_active":crate::project_work::active(project.root())?,
+        "physical_media_access":false, "receipt_is_historical_not_current_verification":true,
+        "resume_rechecks_inputs_and_outputs":true, "customer_delivery_certified":false});
+    Ok(CliResponse {
+        exit_code: 0,
+        output: if json_output {
+            value.to_string()
+        } else {
+            match record {
+                Some(record) => format!(
+                    "Finalization: {:?} ({})\nDestination: {}\nSaved receipt only; files/package have not been rechecked by status.\n{}",
+                    record.phase,
+                    if active { "active" } else { "inactive" },
+                    record.options.destination.display(),
+                    if record.phase.complete() {
+                        "Finished; use finalize --destination PATH for a new checked archive."
+                    } else {
+                        "Continue offline with: fv finalize resume"
+                    }
+                ),
+                None => "No saved finalization. Use fv finalize --destination PATH.".into(),
+            }
+        },
     })
 }
 
-fn finish(
-    process: CliResponse,
+fn execute(
+    project: &ProjectState,
+    options: Options,
     json_output: bool,
-    build_package: impl FnOnce() -> Result<CliResponse, String>,
 ) -> Result<CliResponse, String> {
-    let process_json: Value = serde_json::from_str(&process.output)
-        .map_err(|error| format!("Invalid internal process result: {error}"))?;
-    if process.exit_code == 3 {
-        return Ok(CliResponse {
-            output: if json_output {
-                json!({
-                    "processing": process_json,
-                    "package": null,
-                    "package_status": "blocked_by_attention",
-                    "customer_delivery_certified": false
-                })
-                .to_string()
-            } else {
-                format!(
-                    "Processing finished with unresolved attention; no package was created.\n{}",
-                    process.output
-                )
-            },
-            exit_code: 3,
-        });
+    let owner = crate::project_work::reserve(project.root())?;
+    execute_owned(project, options, json_output, &owner)
+}
+
+fn execute_owned(
+    project: &ProjectState,
+    options: Options,
+    json_output: bool,
+    _owner: &std::fs::File,
+) -> Result<CliResponse, String> {
+    crate::processing::validate_workspace(project)?;
+    if imaging::load_project_statistics(&project.images_dir())?.disk_count == 0 {
+        return Err("No saved disk images to finalize; no package was created".into());
     }
-    if process.exit_code != 0 {
-        return Err("Processing did not complete; no package was created".to_owned());
-    }
-    let package = build_package()?;
-    let package_json: Value = serde_json::from_str(&package.output)
-        .map_err(|error| format!("Invalid internal package result: {error}"))?;
-    Ok(CliResponse {
-        output: if json_output {
-            json!({
-                "processing": process_json,
-                "package": package_json,
-                "package_status": "verified_archival_zip",
-                "customer_delivery_certified": false
-            })
-            .to_string()
+    let _control = crate::run_control::Session::start(project, "finalize")?;
+    let mut record = Record::new(project, options)?;
+    record.save(project)?;
+    let outcome = finish_owned(project, &mut record, json_output);
+    if let Err(error) = &outcome {
+        record.phase = if crate::cancellation::stopped(error) {
+            Phase::Interrupted
         } else {
-            format!("{}\n{}", process.output, package.output)
+            Phase::Failed
+        };
+        record.error = Some(error.chars().take(4096).collect());
+        if let Err(receipt_error) = record.save(project) {
+            eprintln!(
+                "Could not save finalization failure receipt: {receipt_error}. Earlier receipt/evidence retained."
+            );
+        }
+    }
+    outcome
+}
+
+fn finish_owned(
+    project: &ProjectState,
+    record: &mut Record,
+    json_output: bool,
+) -> Result<CliResponse, String> {
+    let workers = record.options.workers;
+    let destination = record.options.destination.clone();
+    finish_with(
+        project,
+        record,
+        json_output,
+        || {
+            eprintln!("FINALIZE / processing saved images; no floppy needed");
+            let result =
+                pipeline::run_pipeline(&process::request(project, workers)?, &|message| {
+                    eprintln!("{message}")
+                })?;
+            Ok(process::response(&result, &project.reports_dir(), true))
         },
-        exit_code: package.exit_code,
-    })
+        || {
+            let result = package::build_package(
+                &PackageRequest {
+                    project_root: project.root().to_path_buf(),
+                    destination,
+                    project_name: project.name().to_owned(),
+                },
+                &|message| eprintln!("{message}"),
+            )?;
+            Ok(
+                json!({"zip":result.zip_path,"sha256_file":result.sha256_path,"sha256":result.sha256,
+            "files":result.file_count,"bytes":result.total_bytes,"customer_delivery_certified":false}),
+            )
+        },
+    )
+}
+
+fn finish_with(
+    project: &ProjectState,
+    record: &mut Record,
+    json_output: bool,
+    process: impl FnOnce() -> Result<CliResponse, String>,
+    package: impl FnOnce() -> Result<Value, String>,
+) -> Result<CliResponse, String> {
+    crate::cancellation::check()?;
+    let process = process()?;
+    if !matches!(process.exit_code, 0 | 3) {
+        return Err("Processing did not complete; no package was created".into());
+    }
+    let process_json: Value = serde_json::from_str(&process.output).map_err(|e| e.to_string())?;
+    let attention = process.exit_code == 3;
+    record.processing = Some(process_json.clone());
+    if attention && !record.options.allow_attention {
+        record.phase = Phase::BlockedByAttention;
+        record.save(project)?;
+        return Ok(response(process_json, None, attention, false, json_output));
+    }
+    crate::cancellation::check()?;
+    if attention {
+        eprintln!(
+            "FINALIZE / ATTENTION: explicitly archiving partial results with reports; NOT customer-certified"
+        );
+    }
+    record.phase = Phase::Packaging;
+    record.save(project)?;
+    // Snapshot stays held during inventory, streaming and verification. The
+    // processing owner is held for the entire command, including tool checks.
+    let _snapshot = crate::project_work::snapshot(project.root())?;
+    let package_json = package()?;
+    record.package = Some(package_json.clone());
+    record.phase = if attention {
+        Phase::CompleteAttention
+    } else {
+        Phase::CompleteClean
+    };
+    record.save(project)?;
+    Ok(response(
+        process_json,
+        Some(package_json),
+        attention,
+        record.options.allow_attention,
+        json_output,
+    ))
+}
+
+fn response(
+    process: Value,
+    package: Option<Value>,
+    attention: bool,
+    allow_attention: bool,
+    json_output: bool,
+) -> CliResponse {
+    let status = if package.is_some() {
+        if attention {
+            "verified_archival_zip_with_attention"
+        } else {
+            "verified_archival_zip"
+        }
+    } else {
+        "blocked_by_attention"
+    };
+    let output = if json_output {
+        json!({"processing":process,"package":package,"package_status":status,
+            "allow_attention":allow_attention,"physical_media_access":false,
+            "customer_delivery_certified":false})
+        .to_string()
+    } else if let Some(package) = package {
+        format!(
+            "Finalization complete{}; verified archival ZIP, NOT customer-certified.\n{}\nSHA-256: {}\nReport: {}",
+            if attention { " WITH ATTENTION" } else { "" },
+            package["zip"].as_str().unwrap_or(""),
+            package["sha256"].as_str().unwrap_or(""),
+            process["workbook"].as_str().unwrap_or("")
+        )
+    } else {
+        format!(
+            "Processing finished with attention; no package was created.\nReport: {}\nTo explicitly archive partial results and their warnings: fv finalize resume --allow-attention",
+            process["workbook"].as_str().unwrap_or("")
+        )
+    };
+    CliResponse {
+        output,
+        exit_code: if attention { 3 } else { 0 },
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    #[test]
-    fn finalize_refuses_empty_project_and_project_internal_destination_before_tools() {
-        let root = std::env::temp_dir().join(format!(
-            "fluxvault-finalize-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let project = ProjectState::create_without_session(root.join("project")).unwrap();
-        let outside = root.join("outside");
-        fs::create_dir_all(&outside).unwrap();
-        assert!(
-            run(&root, project.root().to_path_buf(), outside, 1, true)
-                .unwrap_err()
-                .contains("No saved disk images")
-        );
-        assert!(
-            run(
-                &root,
-                project.root().to_path_buf(),
-                project.reports_dir(),
-                1,
-                true
-            )
-            .unwrap_err()
-            .contains("outside the project")
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn unresolved_processing_never_starts_package_building() {
-        let result = finish(
-            CliResponse {
-                output: json!({"evidence_attention": 1}).to_string(),
-                exit_code: 3,
-            },
-            true,
-            || panic!("partial evidence must never be packaged by finalize"),
-        )
-        .unwrap();
-        assert_eq!(result.exit_code, 3);
-        let output: Value = serde_json::from_str(&result.output).unwrap();
-        assert!(output["package"].is_null());
-        assert_eq!(output["package_status"], "blocked_by_attention");
-    }
-
-    #[test]
-    fn clean_processing_returns_verified_package_result() {
-        let result = finish(
-            CliResponse {
-                output: json!({"evidence_attention": 0}).to_string(),
-                exit_code: 0,
-            },
-            true,
-            || {
-                Ok(CliResponse {
-                    output: json!({"zip": "disposable.zip", "files": 2}).to_string(),
-                    exit_code: 0,
-                })
-            },
-        )
-        .unwrap();
-        assert_eq!(result.exit_code, 0);
-        let output: Value = serde_json::from_str(&result.output).unwrap();
-        assert_eq!(output["package"]["files"], 2);
-        assert_eq!(output["package_status"], "verified_archival_zip");
-        assert_eq!(output["customer_delivery_certified"], false);
-    }
-}
+#[path = "finalize_tests.rs"]
+mod tests;

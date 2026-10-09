@@ -24,7 +24,7 @@ fv status
 
 `processing status` shows the recorded stage, pending/failed jobs, attention jobs and whether a processing owner is actually active. A stale stage after interruption is explicitly flagged. Add `--json` for source bindings/details. These commands do not check tools or access hardware.
 
-While processing owns the project, another extraction/conversion/audit/report/package command is refused. Read-only status remains available. This prevents two processes from racing shared delivery files or reports. Use final reconciled reports after feeding/draining ends: intermediate project audits may include newly arrived images not processed yet.
+While processing owns the project, another extraction/conversion/audit/report/package command is refused. Read-only status remains available. This prevents two processes from racing shared delivery files or reports. Use final reconciled reports after feeding/draining ends: intermediate project audits may include newly arrived images not processed yet. [Finalization](FINALIZATION.md) then refreshes saved processing/reports and verifies an archive under one continuous owner; optional `--allow-attention` retains partial-result warnings and exit 3. `finalize status`/`resume` need no media. Automatic endpoint-triggered packaging remains planned.
 
 ## After interruption, without a floppy
 

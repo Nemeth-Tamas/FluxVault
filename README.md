@@ -17,6 +17,7 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 | Understand a difficult saved disk | [Saved-flux diagnostics](FLUX_DIAGNOSTICS.md): `fv diagnose 59` |
 | Stop active work and continue later | [Stop/resume](STOP_RESUME.md): `STOP`, `fv stop`, `fv start` |
 | Recovered files, conversion issues and delivery hashes | [Final report guide](FINAL_REPORTS.md): `fv report export` |
+| Finish/archive saved results and resume interrupted finishing | [Finishing guide](FINALIZATION.md): `fv finalize --destination PATH` |
 | Check benchmark readiness | [Single-GW gates](SINGLE_GW_READINESS.md) |
 | Want development status | [Progress](PROGRESS.md) and [TODO](TODO.md) |
 

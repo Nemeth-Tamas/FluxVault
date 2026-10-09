@@ -78,7 +78,7 @@ New-Item -ItemType Directory -Path 'C:\Users\User\Desktop\FluxVault-Delivery' -F
 fv finalize --destination 'C:\Users\User\Desktop\FluxVault-Delivery'
 ```
 
-Destination must exist outside the project. Finalize blocks automatic packaging if unresolved attention remains. Keep the project; a ZIP is not proof of complete recovery.
+Destination must exist outside the project, never on a floppy. Default finalize blocks attention; add `--allow-attention` to explicitly archive partial results with their warnings (still exit 3). Use `fv finalize status` and `fv finalize resume` after a stop/crash; saved products are rechecked offline. Ctrl+C or second-console `fv stop` stops finishing. [Guide](FINALIZATION.md). Keep the project; a ZIP is not proof of complete recovery.
 
 ## Beginner: read the banner
 

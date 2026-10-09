@@ -75,12 +75,15 @@ pub(crate) fn build_package(
     stage: &impl Fn(&str),
 ) -> Result<PackageResult, String> {
     crate::cancellation::check()?;
+    crate::safety::workstation_path(&request.project_root)?;
+    crate::safety::workstation_path(&request.destination)?;
     let project = request.project_root.canonicalize().map_err(|error| {
         format!(
             "Project directory cannot be resolved {}: {error}",
             request.project_root.display()
         )
     })?;
+    crate::safety::workstation_path(&project)?;
     if !project.join("project.json").is_file() {
         return Err("The selected source is not a FluxVault project.".to_owned());
     }
@@ -118,6 +121,7 @@ pub(crate) fn build_package(
             request.destination.display()
         )
     })?;
+    crate::safety::workstation_path(&destination)?;
     if destination.starts_with(&project) {
         return Err("Package destination must be outside the project tree.".to_owned());
     }
@@ -178,7 +182,10 @@ pub(crate) fn build_package(
         .write(true)
         .create_new(true)
         .open(&sha256_path)
-        .and_then(|mut file| file.write_all(hash_line.as_bytes()))
+        .and_then(|mut file| {
+            file.write_all(hash_line.as_bytes())
+                .and_then(|_| file.sync_all())
+        })
         .map_err(|error| {
             format!("ZIP is complete, but its SHA-256 sidecar could not be written: {error}")
         })?;
@@ -494,7 +501,9 @@ fn write_and_verify(
         .map_err(|error| error.to_string())?;
     zip.write_all(readme.as_bytes())
         .map_err(|error| error.to_string())?;
-    zip.finish().map_err(|error| error.to_string())?;
+    zip.finish()
+        .and_then(|file| file.sync_all().map_err(zip::result::ZipError::Io))
+        .map_err(|error| error.to_string())?;
 
     stage("Verifying every ZIP member against the manifest...");
     let input = File::open(partial_path).map_err(|error| error.to_string())?;

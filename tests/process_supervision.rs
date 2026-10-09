@@ -501,6 +501,177 @@ fn cooperative_office_stop_retains_partial_and_retries_saved_issue_without_publi
     assert!(state["issues"].as_array().unwrap().is_empty());
     fs::remove_dir_all(temporary).unwrap(); // Only this fixture's own retained scratch.
 }
+fn interrupted_finalization(cooperative: bool) {
+    let f = Fixture::new();
+    let rtf = b"{\\rtf1\\ansi Disposable end-to-end FluxVault document}";
+    let mut image = vec![0; 2880 * 512];
+    image[..3].copy_from_slice(&[0xeb, 0x3c, 0x90]);
+    image[3..11].copy_from_slice(b"FVTEST  ");
+    image[11..13].copy_from_slice(&512u16.to_le_bytes());
+    image[13] = 1;
+    image[14..16].copy_from_slice(&1u16.to_le_bytes());
+    image[16] = 2;
+    image[17..19].copy_from_slice(&224u16.to_le_bytes());
+    image[19..21].copy_from_slice(&2880u16.to_le_bytes());
+    image[21] = 0xf0;
+    image[22..24].copy_from_slice(&9u16.to_le_bytes());
+    image[24..26].copy_from_slice(&18u16.to_le_bytes());
+    image[26..28].copy_from_slice(&2u16.to_le_bytes());
+    image[38] = 0x29;
+    image[43..54].copy_from_slice(b"FV FIXTURE ");
+    image[54..62].copy_from_slice(b"FAT12   ");
+    image[510..512].copy_from_slice(&[0x55, 0xaa]);
+    for at in [512, 10 * 512] {
+        image[at..at + 5].copy_from_slice(&[0xf0, 0xff, 0xff, 0xff, 0x0f]);
+    }
+    let entry = 19 * 512;
+    image[entry..entry + 11].copy_from_slice(b"NOTE    RTF");
+    image[entry + 11] = 0x20;
+    image[entry + 26..entry + 28].copy_from_slice(&2u16.to_le_bytes());
+    image[entry + 28..entry + 32].copy_from_slice(&(rtf.len() as u32).to_le_bytes());
+    image[33 * 512..33 * 512 + rtf.len()].copy_from_slice(rtf);
+    let fixture = f.root.join("disposable-fat12.img");
+    fs::write(&fixture, &image).unwrap();
+
+    let mut acquisition = f
+        .command()
+        .args([
+            "scan",
+            "--last-disk",
+            "1",
+            "--acquisition-only",
+            "--capture-storage",
+            "raw",
+            "--json",
+        ])
+        .env("MOCK_GW_IMAGE", &fixture)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    acquisition.stdin.take().unwrap().write_all(b"1\n").unwrap();
+    let acquired = acquisition.wait_with_output().unwrap();
+    assert!(
+        acquired.status.success(),
+        "{}",
+        String::from_utf8_lossy(&acquired.stderr)
+    );
+    fs::write(
+        f.appdata.join("FluxVault/settings.json"),
+        json!({
+            "greaseweazle_path":env!("CARGO_BIN_EXE_mock_gw"),
+            "seven_zip_path":env!("CARGO_BIN_EXE_mock_gw"),
+            "libreoffice_path":env!("CARGO_BIN_EXE_mock_gw")
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let delivery = f.root.join("delivery");
+    fs::create_dir(&delivery).unwrap();
+    let image_path = f.project.images_dir().join("001_attempt_001.img");
+    let original = fs::read(&image_path).unwrap();
+    let mut run = Running(
+        f.command()
+            .args([
+                "finalize",
+                "--destination",
+                delivery.to_str().unwrap(),
+                "--allow-attention",
+                "--conversion-workers",
+                "1",
+                "--json",
+            ])
+            .env("MOCK_GW_OFFICE_TREE", "1")
+            .env("MOCK_GW_SEVENZIP_PROBE", "1")
+            .env("MOCK_GW_TREE_ROOT", f.root.join("tree"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let (leader, worker) = f.tree();
+    let active = f
+        .command()
+        .args(["finalize", "status", "--json"])
+        .output()
+        .unwrap();
+    let value: Value = serde_json::from_slice(&active.stdout).unwrap();
+    assert_eq!(value["active"], true);
+    assert_eq!(value["record"]["phase"], "processing");
+    assert_eq!(value["record"]["options"]["workers"], 1);
+    assert_eq!(value["record"]["options"]["allow_attention"], true);
+    let competing = f.command().args(["process", "--json"]).output().unwrap();
+    assert_eq!(competing.status.code(), Some(2));
+    if cooperative {
+        assert!(f.command().arg("stop").output().unwrap().status.success());
+        assert_eq!(run.wait_stopped(), 130);
+    } else {
+        run.kill();
+    }
+    leader.exited();
+    worker.exited();
+    assert_eq!(fs::read(&image_path).unwrap(), original);
+    assert_eq!(fs::read_dir(&delivery).unwrap().count(), 0);
+    let stopped = f
+        .command()
+        .args(["finalize", "status", "--json"])
+        .output()
+        .unwrap();
+    let stopped: Value = serde_json::from_slice(&stopped.stdout).unwrap();
+    assert_eq!(stopped["active"], false);
+    assert_eq!(
+        stopped["record"]["phase"],
+        if cooperative {
+            "interrupted"
+        } else {
+            "processing"
+        }
+    );
+    let resumed = f
+        .command()
+        .args(["finalize", "resume", "--json"])
+        .env("MOCK_GW_SEVENZIP_PROBE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        matches!(resumed.status.code(), Some(0 | 3)),
+        "{}\n{}",
+        String::from_utf8_lossy(&resumed.stdout),
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    let resumed: Value = serde_json::from_slice(&resumed.stdout).unwrap();
+    assert!(
+        resumed["package_status"]
+            .as_str()
+            .unwrap()
+            .starts_with("verified_archival_zip")
+    );
+    assert_eq!(resumed["customer_delivery_certified"], false);
+    let archive = Path::new(resumed["package"]["zip"].as_str().unwrap());
+    assert!(archive.is_file());
+    let mut zip = zip::ZipArchive::new(fs::File::open(archive).unwrap()).unwrap();
+    assert!(zip.by_name("Reports/FinalReportLatest.json").is_ok());
+    drop(zip);
+    assert_eq!(fs::read(&image_path).unwrap(), original);
+    assert_eq!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn finalize_stop_cancels_office_tree_and_saved_settings_resume_to_archive() {
+    interrupted_finalization(true);
+}
+
+#[test]
+fn forced_finalize_exit_preserves_receipt_and_rechecks_on_resume_without_media() {
+    interrupted_finalization(false);
+}
 fn interrupted_decode(cooperative: bool) {
     let f = Fixture::new();
     let mut run = f.scan(false, Some("MOCK_GW_CONVERT_TREE"));

@@ -178,7 +178,7 @@ New-Item -ItemType Directory -Path 'C:\Users\User\Desktop\FluxVault-Delivery' -F
 fv finalize --destination 'C:\Users\User\Desktop\FluxVault-Delivery'
 ```
 
-The destination must exist **outside the project**. `finalize` processes saved files and creates/verifies an archive only if checks allow it. Attention can block automatic packaging. Keep the original project regardless.
+The destination must exist **outside the project**, on workstation storage. `finalize` processes saved files and verifies an archive; attention blocks packaging by default. To explicitly archive partial results and their warnings, add `--allow-attention` (still exit 3). Stop with Ctrl+C or second-console `fv stop`, then use `fv finalize status` / `fv finalize resume`; resume rechecks saved products without reading media. [Finishing guide](FINALIZATION.md). Keep the original project regardless.
 
 `package build` is an expert archival command, **not** a shortcut to recovery certification. An archive can preserve partial evidence without proving complete customer recovery.
 

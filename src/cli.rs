@@ -7,6 +7,7 @@ mod flux;
 mod flux_scan;
 mod media_reservation;
 mod office;
+mod process;
 mod read_progress;
 mod recovery;
 mod scan;
@@ -23,7 +24,7 @@ use serde_json::json;
 use crate::{
     audit,
     batch_extraction::{self, BatchExtractionRequest},
-    conversion_run::{self, DEFAULT_CONVERSION_WORKERS},
+    conversion_run::DEFAULT_CONVERSION_WORKERS,
     external_tools::{self, ToolHealth, ToolKind},
     floppy::{self, FloppyDrive, WriteProtectionStatus},
     greaseweazle::{
@@ -33,7 +34,6 @@ use crate::{
     imaging,
     manifest::{self, ManifestRequest},
     package::{self, PackageRequest},
-    pipeline::{self, PipelineRequest},
     project::ProjectState,
     recovery_backup::{self, RecoveryBackupRequest},
     recovery_plan::{self, RecoveryAction},
@@ -151,8 +151,10 @@ Usage:
                                     Extract, convert, audit, and report
   fluxvault processing status      Show durable background work without tools or hardware
   fluxvault processing resume      Drain interrupted saved-image work offline
-  fluxvault finalize --destination PATH [--project PATH]
-                                    Process saved images, then package only if clean
+  fluxvault finalize --destination PATH [--allow-attention] [--project PATH]
+                                    Process/report and verify an archive; clean-only by default
+  fluxvault finalize resume         Resume interrupted finishing offline; rechecks evidence
+  fluxvault finalize status         Inspect historical finishing receipts, no tools/media
   fluxvault package build --destination PATH [--project PATH]
                                     Create and verify an archival ZIP
   fluxvault --help                  Show this help
@@ -163,6 +165,7 @@ Options:
   --json                            Output machine-readable JSON
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
+  --allow-attention                 finalize: explicitly archive partial results with warnings (exit 3)
   --drive LETTER:                   Enumerated removable drive for read-only probe
   --disk N                          Disk number for acquisition
   --retries N                       Bad-sector retry passes for acquisition (0-10; default 2)
@@ -282,6 +285,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut import_log: Option<PathBuf> = None;
     let mut baseline_zip: Option<PathBuf> = None;
     let mut include_deleted = false;
+    let mut allow_attention = false;
     let mut conversion_workers: Option<usize> = None;
     let mut details = false;
     let mut report_language = None;
@@ -308,6 +312,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         match args[index].as_str() {
             "--json" => json_output = true,
             "--include-deleted" => include_deleted = true,
+            "--allow-attention" => allow_attention = true,
             "--baseline" => {
                 index += 1;
                 baseline_zip = Some(PathBuf::from(
@@ -500,6 +505,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         index += 1;
     }
 
+    if allow_attention && positional != ["finalize"] && positional != ["finalize", "resume"] {
+        return Err("--allow-attention is only valid with finalize or finalize resume".into());
+    }
     if details && !(positional.len() == 3 && positional[0] == "disk" && positional[1] == "show") {
         return Err("--details is only valid with disk show N".to_owned());
     }
@@ -2204,86 +2212,29 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("process") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
-            let _control = crate::run_control::Session::start(&project, "process")?;
-            let reports_directory = project.reports_dir();
-            let settings = external_tools::load_settings()?;
-            let command_audit_path = project.logs_dir().join("external-tools.jsonl");
-            let seven_zip_executable = external_tools::find_ready_tool(
-                ToolKind::SevenZip,
-                settings.path(ToolKind::SevenZip),
-                &command_audit_path,
-            )?;
-            let libreoffice_executable = external_tools::find_ready_tool(
-                ToolKind::LibreOffice,
-                settings.path(ToolKind::LibreOffice),
-                &command_audit_path,
-            )?;
-            let result = pipeline::run_pipeline(
-                &PipelineRequest {
-                    project,
-                    seven_zip_executable,
-                    libreoffice_executable,
-                    command_audit_path,
-                    conversion_workers: conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
-                },
-                &|stage| eprintln!("{stage}"),
-            )?;
-            let conversion_state = conversion_run::snapshot_path(&reports_directory);
-            needs_attention = result.audit.attention_disks > 0
-                || result.raw_format_exceptions > 0
-                || result.extraction.recovery_disks > 0
-                || result.declined_composites > 0
-                || result.declined_recovery_publications > 0
-                || result.conversion.partial > 0
-                || result.conversion.failed > 0;
-            if json_output {
-                Ok(json!({"disks": result.extraction.total_disks,
-                    "raw_format_exceptions":result.raw_format_exceptions,
-                    "composited_disks": result.composited_disks,
-                    "composites_reused": result.reused_composites,
-                    "composites_declined": result.declined_composites,
-                    "published_recovery_images": result.published_recovery_images,
-                    "reused_recovery_images": result.reused_recovery_images,
-                    "declined_recovery_publications": result.declined_recovery_publications,
-                    "recovery_decisions": result.recovery_decisions_path,
-                    "mirrored_fat_derived_disks": result.reconstructed_disks,
-                    "mirrored_fat_reused": result.reused_reconstructions,
-                    "extracted": result.extraction.extracted_disks,
-                    "recovery_queue": result.extraction.recovery_disks,
-                    "converted_ok": result.conversion.ok,
-                    "converted_partial": result.conversion.partial,
-                    "converted_failed": result.conversion.failed,
-                    "converted_retried_outputs": result.conversion.retried_outputs,
-                    "conversion_state": conversion_state,
-                    "evidence_verified": result.audit.verified_disks,
-                    "evidence_attention": result.audit.attention_disks,
-                    "workbook": result.workbook_path,
-                    "customer_delivery_certified": false})
-                .to_string())
-            } else {
-                Ok(format!(
-                    "Project processing complete: {} image disks, {} verified evidence sets, {} image disks need attention.\nRaw-only format exceptions: {} (separate from image counts; decoding/recovery still needed).\nComposites: {} derived disk(s), {} reused, {} declined.\nMirrored FAT: {} derived disk(s), {} reused.\nAutomatic DERIVED image handoff: {} published/verified, {} reused, {} declined.\nConversions: {} OK, {} partial, {} failed, {} outputs retried.\nRecovery decisions: {}\nWorkbook: {}\nConversion state: {}",
-                    result.extraction.total_disks,
-                    result.audit.verified_disks,
-                    result.audit.attention_disks,
-                    result.raw_format_exceptions,
-                    result.composited_disks,
-                    result.reused_composites,
-                    result.declined_composites,
-                    result.reconstructed_disks,
-                    result.reused_reconstructions,
-                    result.published_recovery_images,
-                    result.reused_recovery_images,
-                    result.declined_recovery_publications,
-                    result.conversion.ok,
-                    result.conversion.partial,
-                    result.conversion.failed,
-                    result.conversion.retried_outputs,
-                    result.recovery_decisions_path.display(),
-                    result.workbook_path.display(),
-                    conversion_state.display()
-                ))
+            return process::run(
+                &project,
+                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                json_output,
+            );
+        }
+        Some("finalize") if positional == ["finalize", "status"] && destination.is_none() => {
+            if conversion_workers.is_some() {
+                return Err("finalize status does not accept conversion workers".into());
             }
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            return finalize::status(&ProjectState::open_without_session(root)?, json_output);
+        }
+        Some("finalize") if positional == ["finalize", "resume"] && destination.is_none() => {
+            if conversion_workers.is_some() {
+                return Err("finalize resume uses saved conversion workers; start a new finalize to change settings".into());
+            }
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            return finalize::resume(
+                &ProjectState::open_without_session(root)?,
+                allow_attention,
+                json_output,
+            );
         }
         Some("finalize") if positional.len() == 1 => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
@@ -2293,6 +2244,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 root,
                 destination,
                 conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                allow_attention,
                 json_output,
             );
         }

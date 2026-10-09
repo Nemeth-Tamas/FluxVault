@@ -116,6 +116,9 @@ fluxvault report export --language en --json
 fluxvault audit
 fluxvault package build --destination C:\CustomerPackages
 fluxvault finalize --destination C:\CustomerPackages
+fluxvault finalize --destination C:\CustomerPackages --allow-attention
+fluxvault finalize status
+fluxvault finalize resume
 ```
 
 Use `--project C:\path\to\project` to select a project explicitly. Add `--json` to a command for machine-readable stdout (including structured errors); long-running progress goes to stderr. Exit code 0 means complete, 3 means attention/partial, and 2 means invalid input or an operation error. These codes will be refined as production automation is added.
@@ -247,6 +250,6 @@ Incomplete file-candidate readable runs automatically preserve `.bin` fragments 
 
 Saved-image validation on 2026-10-06 recovered **22 forensic files / 1,208,710 bytes** from WinWord 1, preserved the original image SHA-256, and retained partial audit status for unreadable LBA 24. Generation 2 validated two long names and matched all 22 paths and hashes against independent 7-Zip extraction. A fresh `process` run produced 21 installer delivery originals, excluding one 76-byte Windows metadata file. Verified reuse and non-overwriting generation upgrade passed. There were no new physical reads and no Office conversion candidates on that installer disk. This is not a full corrupted-filesystem recovery benchmark.
 
-`finalize --destination PATH` combines saved-image processing and package verification in one command. It requires at least one image and an existing destination outside the project. If recovery, conversion, or audit still needs attention, it reports that status and does **not** create a package. A successfully verified archival ZIP is still not a certification that every original customer byte was recovered.
+`finalize --destination PATH` refreshes saved-image recovery/extraction/conversion/audit/final reports and builds/verifies an archive under one project owner and stoppable run. It requires at least one image and an existing workstation destination outside the project. Default attention blocks packaging; explicit `--allow-attention` archives partial results with reports, still returns 3, and never bypasses fatal evidence/package errors. `finalize status` inspects historical receipts offline; `finalize resume` uses saved options and rechecks current products without physical reads. Completed receipts require a new finalize for a fresh snapshot. ZIP integrity is not customer-delivery certification. [Beginner/advanced finishing guide](FINALIZATION.md).
 
 The CLI has guided read-only acquisition, bounded IBM discovery/raw-only exception continuation, native intact-chain/layout recovery and coalesced single-GW background processing. Deeper damaged/deleted-file recovery, additional format decoding, full live acceptance and two-drive scheduling remain in [TODO.md](TODO.md).
