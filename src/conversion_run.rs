@@ -60,7 +60,7 @@ pub struct ConversionResult {
     pub issues: Vec<ConversionIssue>,
     pub summary_path: PathBuf,
     pub failures_path: PathBuf,
-    rows: Vec<JobResult>,
+    pub(crate) rows: Vec<JobResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ pub struct ConversionIssue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum OutputState {
+pub(crate) enum OutputState {
     Ok,
     Reused,
     Failed,
@@ -93,27 +93,27 @@ impl OutputState {
         }
     }
 
-    fn successful(self) -> bool {
+    pub(crate) fn successful(self) -> bool {
         matches!(self, Self::Ok | Self::Reused)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct OutputResult {
-    state: OutputState,
-    detail: String,
+pub(crate) struct OutputResult {
+    pub(crate) state: OutputState,
+    pub(crate) detail: String,
     retryable: bool,
     retry_count: u8,
     #[serde(default)]
-    output_sha256: Option<String>,
+    pub(crate) output_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct JobResult {
-    job: ConversionJob,
-    modern: OutputResult,
-    pdf: OutputResult,
-    duration_seconds: f64,
+pub(crate) struct JobResult {
+    pub(crate) job: ConversionJob,
+    pub(crate) modern: OutputResult,
+    pub(crate) pdf: OutputResult,
+    pub(crate) duration_seconds: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -235,7 +235,7 @@ pub(crate) fn load_snapshot(
 }
 
 impl JobResult {
-    fn status(&self) -> &'static str {
+    pub(crate) fn status(&self) -> &'static str {
         match (self.modern.state.successful(), self.pdf.state.successful()) {
             (true, true) => "OK",
             (true, false) | (false, true) => "PARTIAL",

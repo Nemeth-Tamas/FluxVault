@@ -34,35 +34,36 @@ pub struct AuditResult {
     pub disk_count: usize,
     pub verified_disks: usize,
     pub attention_disks: usize,
+    pub(crate) document: AuditDocument,
 }
 
-#[derive(Debug, Serialize)]
-struct AuditDocument {
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AuditDocument {
     schema_version: u32,
     scope: &'static str,
     customer_delivery_certified: bool,
     project: String,
-    disks: Vec<DiskEvidence>,
+    pub(crate) disks: Vec<DiskEvidence>,
 }
 
-#[derive(Debug, Serialize)]
-struct DiskEvidence {
-    disk: String,
-    attempt: u32,
-    image: String,
-    image_status: String,
-    bad_sectors: usize,
-    image_sha256: String,
-    image_hash_verified: bool,
-    extraction_status: String,
-    extracted_files: usize,
-    extracted_bytes: u64,
-    extracted_hashes_verified: bool,
-    conversion_status: String,
-    conversion_jobs: usize,
-    converted_outputs_verified: usize,
-    evidence_status: String,
-    issue: String,
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DiskEvidence {
+    pub(crate) disk: String,
+    pub(crate) attempt: u32,
+    pub(crate) image: String,
+    pub(crate) image_status: String,
+    pub(crate) bad_sectors: usize,
+    pub(crate) image_sha256: String,
+    pub(crate) image_hash_verified: bool,
+    pub(crate) extraction_status: String,
+    pub(crate) extracted_files: usize,
+    pub(crate) extracted_bytes: u64,
+    pub(crate) extracted_hashes_verified: bool,
+    pub(crate) conversion_status: String,
+    pub(crate) conversion_jobs: usize,
+    pub(crate) converted_outputs_verified: usize,
+    pub(crate) evidence_status: String,
+    pub(crate) issue: String,
 }
 
 #[derive(Debug, Default)]
@@ -105,7 +106,6 @@ pub(crate) fn run_audit(
         else {
             continue;
         };
-        let image_path = project.images_dir().join(&attempt.image_file);
         let mut record = DiskEvidence {
             disk: format!("{:03}", summary.disk_number),
             attempt: attempt.attempt_number,
@@ -123,6 +123,17 @@ pub(crate) fn run_audit(
             converted_outputs_verified: 0,
             evidence_status: "CHECK".to_owned(),
             issue: String::new(),
+        };
+        let image_path = match crate::recovery_plan::resolve_image_path(
+            &project.images_dir(),
+            &attempt.image_file,
+        ) {
+            Ok(path) => path,
+            Err(error) => {
+                record.issue = format!("Image location refused: {error}");
+                disks.push(record);
+                continue;
+            }
         };
         let actual_image_hash = match hash_file(&image_path) {
             Ok(hash) => hash,
@@ -298,6 +309,7 @@ pub(crate) fn run_audit(
         disk_count: report.disks.len(),
         verified_disks,
         attention_disks,
+        document: report,
     })
 }
 
@@ -461,7 +473,7 @@ fn confined_output(root: &Path, relative_text: &str) -> Result<PathBuf, String> 
     Ok(path)
 }
 
-fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, String> {
+pub(crate) fn parse_csv(text: &str) -> Result<Vec<Vec<String>>, String> {
     let mut chars = text.trim_start_matches('\u{feff}').chars().peekable();
     let mut rows = Vec::new();
     let mut row = Vec::new();
@@ -521,6 +533,7 @@ fn hash_file(path: &Path) -> Result<String, String> {
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        crate::cancellation::check()?;
         let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
         if count == 0 {
             break;

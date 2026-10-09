@@ -200,6 +200,38 @@ pub(crate) fn resolve_image_path(
     };
     let images_root = fs::canonicalize(images_directory)
         .map_err(|error| format!("Cannot resolve Images directory: {error}"))?;
+    // Reject an absolute foreign/device path before even querying that target.
+    // Live acquisition metadata may use DOS or verbatim spelling of this same folder.
+    let normalize = |p: &Path| {
+        let text = p.to_string_lossy();
+        let text = text
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&text)
+            .replace('\\', "/");
+        if cfg!(windows) {
+            text.to_lowercase()
+        } else {
+            text
+        }
+    };
+    if path.parent().is_none_or(|parent| {
+        normalize(parent) != normalize(&images_root)
+            && normalize(parent) != normalize(images_directory)
+    }) {
+        return Err("Image is outside the project's Images directory".to_owned());
+    }
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|e| format!("Cannot inspect recorded image: {e}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("Recorded image must be a regular workstation file".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("Recorded image is a reparse point".into());
+        }
+    }
     let resolved = fs::canonicalize(&path)
         .map_err(|error| format!("Cannot resolve recorded image: {error}"))?;
     if resolved.parent() != Some(images_root.as_path()) {
@@ -317,5 +349,31 @@ mod tests {
         assert!(resolve_image_path(&images, &outside.display().to_string()).is_err());
         assert!(resolve_image_path(&images, "../outside.img").is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn foreign_device_image_paths_are_refused_before_target_lookup() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-plan-device-{}-{}",
+            std::process::id(),
+            crate::external_tools::current_unix_ms()
+        ));
+        fs::create_dir(&root).unwrap();
+        for path in [
+            r"A:\customer.img",
+            r"B:\customer.img",
+            r"\\.\A:",
+            r"\\?\B:\customer.img",
+        ] {
+            assert!(
+                resolve_image_path(&root, path)
+                    .unwrap_err()
+                    .contains("outside")
+                    || resolve_image_path(&root, path)
+                        .unwrap_err()
+                        .contains("simple filename")
+            );
+        }
+        fs::remove_dir(root).unwrap();
     }
 }

@@ -515,6 +515,15 @@ fn clean_delivery_path(path: &Path) -> Result<(PathBuf, RecoveryMethod), String>
     Ok((clean.iter().collect(), method))
 }
 
+/// Use exactly the same recovery labels as delivery planning, without copying files.
+pub(crate) fn report_recovery_method(path: &Path, native: bool) -> Result<String, String> {
+    let (_, mut method) = clean_delivery_path(path)?;
+    if native && method == RecoveryMethod::Filesystem {
+        method = RecoveryMethod::NativeFat12;
+    }
+    Ok(method.label().to_owned())
+}
+
 fn collision_path(path: &Path, ordinal: usize) -> Result<PathBuf, String> {
     let stem = path
         .file_stem()
@@ -551,6 +560,21 @@ fn office_plan(path: &Path) -> Option<OfficePlan> {
     }
 }
 
+pub(crate) fn requires_conversion(path: &Path) -> bool {
+    office_plan(path).is_some()
+}
+
+pub(crate) fn delivery_eligible(path: &Path) -> bool {
+    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+    !filename.starts_with("__")
+        && !filename.starts_with(".fluxvault-")
+        && !path.components().any(|c| {
+            let name = c.as_os_str().to_string_lossy();
+            name.eq_ignore_ascii_case("System Volume Information")
+                || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+        })
+}
+
 fn same_file_hash(path: &Path, expected_sha256: &str) -> Result<bool, String> {
     if !path.is_file() {
         return Ok(false);
@@ -564,6 +588,7 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
+        crate::cancellation::check()?;
         let read = file
             .read(&mut buffer)
             .map_err(|error| format!("Hash olvasási hiba {}: {error}", path.display()))?;

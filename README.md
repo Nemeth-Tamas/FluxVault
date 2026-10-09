@@ -16,6 +16,7 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 | Running a measured batch | [136-disk runbook](PILOT_136.md) or [small-test launcher](TOMORROW_TEST.md) |
 | Understand a difficult saved disk | [Saved-flux diagnostics](FLUX_DIAGNOSTICS.md): `fv diagnose 59` |
 | Stop active work and continue later | [Stop/resume](STOP_RESUME.md): `STOP`, `fv stop`, `fv start` |
+| Recovered files, conversion issues and delivery hashes | [Final report guide](FINAL_REPORTS.md): `fv report export` |
 | Check benchmark readiness | [Single-GW gates](SINGLE_GW_READINESS.md) |
 | Want development status | [Progress](PROGRESS.md) and [TODO](TODO.md) |
 

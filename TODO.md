@@ -433,25 +433,25 @@ Replace the current updater/audit script chain with one in-app source of truth w
 
 - [x] Add a clearly scoped CLI evidence audit: re-hash acquisition images, managed recovered files, and conversion source copies; validate recorded Office/PDF outputs; flag missing/changed evidence per disk and export JSON/CSV without claiming customer-delivery certification.
 
-- [ ] Per-floppy audit state combines acquisition, image quality, extraction, recovered-file count, conversion status, and generated-file integrity.
-- [ ] Preserve useful statuses such as `OK`, `PARTIAL: IMAGE READ`, `PARTIAL: CONVERSION`, `CHECK: CONVERSION FAILED`, `CHECK: NO RECOVERED FILES`.
-- [ ] Summary metrics equivalent to the current final report.
-- [ ] Recovered-file inventory with recovery method + SHA-256.
-- [ ] Conversion result inventory and conversion-issues subset.
-- [ ] Generated-file integrity inventory.
-- [ ] Delivery-file manifest.
-- [ ] Export CSV/text reports.
-- [ ] Export `FloppyFinalReport.xlsx` equivalent from the app or a dedicated report exporter.
+- [x] Per-floppy audit state combines acquisition, image quality, extraction, recovered-file count, conversion status, and generated-file integrity.
+- [x] Preserve useful statuses such as `OK`, `PARTIAL: IMAGE READ`, `PARTIAL: CONVERSION`, `CHECK: CONVERSION FAILED`, `CHECK: NO RECOVERED FILES`.
+- [x] Summary metrics equivalent to the current final report.
+- [x] Recovered-file inventory with recovery method + SHA-256.
+- [x] Conversion result inventory and conversion-issues subset.
+- [x] Generated-file integrity inventory.
+- [x] Delivery-file manifest.
+- [x] Export CSV/text reports.
+- [x] Export `FloppyFinalReport.xlsx` equivalent from the app or a dedicated report exporter. Immutable bundles and a hash-bound complete-generation pointer replace the original final-audit script's useful outputs without Excel COM; not historical-yield certification or identical CSV schemas. See [FINAL_REPORTS.md](FINAL_REPORTS.md).
 - [x] Generate polished XLSX reports directly rather than depending on Excel COM automation.
 - [x] Primary report language is Hungarian.
-- [ ] Add English report export from the same underlying report data model.
+- [x] Add English report export from the same underlying report data model. `report export --language en`; Hungarian remains default, stable machine/status names and recorded forensic warnings are retained.
 - [x] Excel summary/dashboard sheet with major KPIs and project statistics.
 - [x] Include charts for useful project-wide metrics such as imaging status, bad-sector counts, recovery results, file counts, and conversion outcomes.
 - [x] Detailed per-floppy worksheet/table with filtering, frozen headers, sensible column widths, status highlighting, and consistent formatting.
-- [ ] Separate recovered-file, conversion, issue, and integrity tables where useful.
+- [x] Separate recovered-file, conversion, issue, and integrity tables where useful.
 - [x] Reports should be presentable to a customer without requiring manual cleanup in Excel.
 - [x] Audit must be re-runnable/idempotent and never alter source floppy media.
-- [ ] Audit runs automatically after every material state change and at batch completion; no manual spreadsheet update step remains.
+- [ ] Audit runs automatically after every material state change and at batch completion; no manual spreadsheet update step remains. Scan/process background and final reconciliation automatically produce the combined report. Direct expert mutations still need process/report refresh; all-command invalidation/refresh remains open.
 
 ## 15. Customer package builder
 

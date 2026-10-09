@@ -144,9 +144,9 @@ Usage:
                                     Retry saved issues after restart; optionally one source
   fluxvault files manifest [--project PATH]
                                     Refresh recovered-file inventory
-  fluxvault audit [--project PATH]  Verify image/extraction evidence
-  fluxvault report export [--project PATH]
-                                    Export the Hungarian XLSX workbook
+  fluxvault audit [--project PATH]  Check saved evidence and current delivery
+  fluxvault report export [--project PATH] [--language hu|en]
+                                    Export full reports (Hungarian by default)
   fluxvault process [--project PATH] [--conversion-workers N]
                                     Extract, convert, audit, and report
   fluxvault processing status      Show durable background work without tools or hardware
@@ -284,6 +284,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut include_deleted = false;
     let mut conversion_workers: Option<usize> = None;
     let mut details = false;
+    let mut report_language = None;
     let mut gw_drive: Option<char> = None;
     let mut gw_profile: Option<GreaseweazleProfile> = None;
     let mut automatic_format: Option<bool> = None;
@@ -314,6 +315,12 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 ));
             }
             "--details" => details = true,
+            "--language" => {
+                index += 1;
+                report_language = Some(crate::final_report::Language::parse(
+                    args.get(index).ok_or("--language requires hu or en")?,
+                )?);
+            }
             "--no-verify" => no_verify = true,
             "--usb" => usb_only = true,
             "--double" => double = true,
@@ -709,6 +716,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
 
     let mut needs_attention = false;
+    if report_language.is_some() && positional != ["report", "export"] {
+        return Err("--language is only valid with report export".into());
+    }
     if baseline_zip.is_some()
         && !(positional.len() == 2 && positional[0] == "benchmark" && positional[1] == "compare")
     {
@@ -2021,22 +2031,31 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("audit") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
-            let result = audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
+            let _control = crate::run_control::Session::start(&project, "audit")?;
+            let _snapshot = crate::project_work::snapshot(project.root())?;
+            let mut result = audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
+            let final_report = crate::final_report::export(
+                &project,
+                &result,
+                crate::final_report::Language::Hungarian,
+            )?;
+            crate::final_report::reconcile_audit(&mut result, &final_report);
             let raw_exceptions = crate::flux_recovery::format_exceptions(&project)?.len();
             needs_attention = result.attention_disks > 0 || raw_exceptions > 0;
             if json_output {
                 Ok(json!({"json": result.json_path, "csv": result.csv_path, "disks": result.disk_count,
                     "verified": result.verified_disks, "attention": result.attention_disks,
                     "raw_format_exceptions":raw_exceptions,
+                    "final_report":final_report,
                     "customer_delivery_certified": false}).to_string())
             } else {
                 Ok(format!(
-                    "Evidence audit: {} of {} image evidence sets verified; {} need attention. Raw-only format exceptions: {}.\nReport: {}",
+                    "Combined audit: {} of {} image evidence sets verified; {} need attention. Raw-only format exceptions: {}.\nFinal report: {}",
                     result.verified_disks,
                     result.disk_count,
                     result.attention_disks,
                     raw_exceptions,
-                    result.csv_path.display()
+                    final_report.workbook.display()
                 ))
             }
         }
@@ -2153,6 +2172,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            let _control = crate::run_control::Session::start(&project, "report export")?;
+            let _snapshot = crate::project_work::snapshot(project.root())?;
+            let audit = crate::audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
             let statistics = imaging::load_project_statistics(&project.images_dir())?;
             let workbook = report::export_hungarian_report(
                 project.name(),
@@ -2160,12 +2182,23 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 &project.images_dir(),
                 &statistics,
             )?;
+            let final_report =
+                crate::final_report::export(&project, &audit, report_language.unwrap_or_default())?;
             if json_output {
-                Ok(json!({"project": project.root(), "workbook": workbook,
-                    "disks": statistics.disk_count})
-                .to_string())
+                Ok(
+                    json!({"project": project.root(), "workbook": final_report.workbook,
+                    "acquisition_workbook": workbook, "disks": final_report.disks,
+                    "final_report": final_report, "customer_delivery_certified": false})
+                    .to_string(),
+                )
             } else {
-                Ok(format!("Workbook exported: {}", workbook.display()))
+                Ok(format!(
+                    "Final report exported: {}\nInventories, status and hashes: {}\n{} disk(s), {} needing attention. Integrity checks are not a completeness certificate.",
+                    final_report.workbook.display(),
+                    final_report.directory.display(),
+                    final_report.disks,
+                    final_report.attention_disks
+                ))
             }
         }
         Some("process") if positional.len() == 1 && destination.is_none() => {
@@ -2495,6 +2528,9 @@ mod tests {
         assert_eq!(response.exit_code, 0);
         assert_eq!(json["disks"], 0);
         assert!(Path::new(json["workbook"].as_str().unwrap()).is_file());
+        assert!(Path::new(json["final_report"]["latest"].as_str().unwrap()).is_file());
+        let invalid = run(&["status".into(), "--language".into(), "en".into()], &root).unwrap_err();
+        assert!(invalid.contains("only valid with report export"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -154,6 +154,8 @@ When saved attempts can supply missing sectors or readable FAT redundancy can re
 
 ### Find your files
 
+The full report is automatic after processing. Refresh/open its location with `fv report export` (optionally `--language en`). Open the printed `FloppyFinalReport.xlsx`: disk status, recovered files, conversion issues, integrity and delivery hashes are together. No floppy/LibreOffice/Excel automation needed. [Report guide](FINAL_REPORTS.md).
+
 | Folder | Contents |
 | --- | --- |
 | `Images` | Sector images, acquisition metadata and explicitly labeled DERIVED offline improvements. |

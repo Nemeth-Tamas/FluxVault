@@ -115,12 +115,12 @@ struct ExtractionInventory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ExtractedFile {
-    relative_path: String,
-    bytes: u64,
+pub(crate) struct ExtractedFile {
+    pub(crate) relative_path: String,
+    pub(crate) bytes: u64,
     modified_unix_ms: Option<u64>,
     attributes: String,
-    sha256: String,
+    pub(crate) sha256: String,
 }
 
 pub fn spawn_extraction(request: ExtractionRequest) -> Receiver<ExtractionEvent> {
@@ -333,6 +333,7 @@ fn count_manual_files(root: &Path, skip_managed_children: bool) -> Result<(usize
     let mut total_bytes = 0u64;
 
     while let Some(directory) = pending.pop() {
+        crate::cancellation::check()?;
         let entries = fs::read_dir(&directory).map_err(|error| {
             format!(
                 "Nem sikerült megvizsgálni a recovery mappát {}: {error}",
@@ -697,7 +698,7 @@ fn parse_attempt_name(image_path: &Path) -> Result<(u32, u32), String> {
     Ok((disk_number, attempt_number))
 }
 
-fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String> {
+pub(crate) fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String> {
     let mut pending = vec![root.to_path_buf()];
     let mut files = Vec::new();
 
@@ -777,6 +778,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     let mut buffer = vec![0_u8; 1024 * 1024];
 
     loop {
+        crate::cancellation::check()?;
         let bytes_read = file
             .read(&mut buffer)
             .map_err(|error| format!("Hash olvasási hiba {}: {error}", path.display()))?;

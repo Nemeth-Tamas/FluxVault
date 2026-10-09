@@ -279,9 +279,15 @@ fn complete_document_workflow(root: &Path, app_data: &Path, destination: &Path) 
     let mut original = false;
     let mut docx = false;
     let mut pdf = false;
+    let mut final_workbooks = 0;
+    let mut report_pointer = false;
     for index in 0..archive.len() {
         let mut member = archive.by_index(index).unwrap();
         let name = member.name().to_owned();
+        final_workbooks += usize::from(
+            name.starts_with("Reports/FinalReports/") && name.ends_with("/FloppyFinalReport.xlsx"),
+        );
+        report_pointer |= name == "Reports/FinalReportLatest.json";
         let mut bytes = vec![];
         member.read_to_end(&mut bytes).unwrap(); // includes member CRC verification
         let extension = Path::new(&name)
@@ -313,6 +319,8 @@ fn complete_document_workflow(root: &Path, app_data: &Path, destination: &Path) 
         root.display()
     );
     assert_eq!(fs::read(&fixture).unwrap(), image);
+    assert_eq!(final_workbooks, 1);
+    assert!(report_pointer);
     assert_eq!(
         fs::read(project.join("Images/001_attempt_001.img")).unwrap(),
         image

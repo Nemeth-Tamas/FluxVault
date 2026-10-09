@@ -125,12 +125,15 @@ Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count 
 | Mirror originals/plan conversions | `fv conversion plan` |
 | Run Office conversions | `fv conversion run` |
 | Retry saved conversion issues | `fv conversion retry` |
-| Export workbook | `fv report export` |
+| Refresh full final report/inventories | `fv report export` |
+| English final report | `fv report export --language en` |
 | Identify saved raw format | `fv greaseweazle identify 9` |
 | Pack capture, keep raw | `fv storage pack 7` |
 | Pack, explicitly retire verified raw | `fv storage pack 7 --retire-raw` |
 
 Normal scans/processing need their saved-file tools; standalone native extraction needs neither 7-Zip nor LibreOffice. Deleted candidates and raw fragments are not complete/live customer documents.
+
+Final reports are automatic after saved-file processing. Open the printed `FloppyFinalReport.xlsx`; `Reports/FinalReportLatest.json` records the latest complete bundle. Standalone export needs no floppy/tools and changes no payload. [Statuses and limits](FINAL_REPORTS.md).
 
 Native generation 5 / Word-text engine 2 automatically adds evidenced lost-directory recovery, bounded missing-FAT-link tail alternatives and Word text salvage, including supported containers with unrelated directory damage. No new scan flag is needed. `fv recovery documents 24` prints a readable offline `.html` edition path: open it to see the text with explicit gaps, without assembling segments yourself. Text/editions live under `Recovery`, not as repaired DOCs; the command returns attention code 3. [Simple commands and limits](DEEP_RECOVERY.md).
 

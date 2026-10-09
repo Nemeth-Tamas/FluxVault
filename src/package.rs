@@ -48,6 +48,7 @@ pub struct PackageResult {
 struct PackageFile {
     source: PathBuf,
     archive_path: String,
+    expected_sha256: Option<String>,
 }
 
 #[derive(Debug)]
@@ -253,10 +254,23 @@ fn collect_project_files(project: &Path) -> Result<Vec<PackageFile>, String> {
                     files.push(PackageFile {
                         source: path,
                         archive_path,
+                        expected_sha256: None,
                     });
                 }
             }
         }
+    }
+    for (source, hash) in crate::final_report::package_files(project)? {
+        let archive_path = source
+            .strip_prefix(project)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.push(PackageFile {
+            source,
+            archive_path,
+            expected_sha256: Some(hash),
+        });
     }
     files.sort_by(|left, right| left.archive_path.cmp(&right.archive_path));
     Ok(files)
@@ -441,11 +455,22 @@ fn write_and_verify(
             digest.update(&buffer[..count]);
             bytes += count as u64;
         }
+        let sha256 = format!("{:x}", digest.finalize());
+        if item
+            .expected_sha256
+            .as_ref()
+            .is_some_and(|expected| expected != &sha256)
+        {
+            return Err(format!(
+                "Final-report bundle changed during packaging: {}",
+                item.archive_path
+            ));
+        }
         rows.push(ManifestRow {
             archive_path: item.archive_path.clone(),
             bytes,
             modified_utc,
-            sha256: format!("{:x}", digest.finalize()),
+            sha256,
         });
     }
     let total_bytes = rows.iter().map(|row| row.bytes).sum();

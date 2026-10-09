@@ -18,6 +18,7 @@ pub mod extraction;
 pub mod fat12;
 mod fat12_names;
 pub mod fat12_recovery;
+pub mod final_report;
 pub mod floppy;
 pub mod flux_archive;
 pub mod flux_capture;

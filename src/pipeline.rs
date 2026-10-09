@@ -488,15 +488,19 @@ fn run_pipeline_mode(
     )?;
     let _snapshot = crate::project_work::snapshot(project.root())?;
     stage("4/5: Auditing source images and managed extracted files...");
-    let audit = audit::run_audit(project, &|message| stage(&format!("4/5: {message}")))?;
-    stage("5/5: Creating the Hungarian project workbook...");
+    let mut audit = audit::run_audit(project, &|message| stage(&format!("4/5: {message}")))?;
+    stage("5/5: Creating the acquisition and full final-audit workbooks...");
     let statistics = imaging::load_project_statistics(&project.images_dir())?;
-    let workbook_path = report::export_hungarian_report(
+    report::export_hungarian_report(
         project.name(),
         &project.reports_dir(),
         &project.images_dir(),
         &statistics,
     )?;
+    let final_report =
+        crate::final_report::export(project, &audit, crate::final_report::Language::Hungarian)?;
+    crate::final_report::reconcile_audit(&mut audit, &final_report);
+    let workbook_path = final_report.workbook;
     Ok(PipelineResult {
         raw_format_exceptions,
         composited_disks,

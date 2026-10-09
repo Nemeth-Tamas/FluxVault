@@ -8,6 +8,8 @@ fv scan --last-disk 136
 
 After each verified acquisition, the disk enters a durable saved-image queue. Extraction, safe offline recovery, conversion, audit and workbook work continue while you swap/read the next disk. One separate worker losslessly packs raw captures. Neither worker opens a physical drive.
 
+Report work now includes the full combined final audit, source inventory, current output hashes, actual delivery manifest and eight-sheet workbook. Immutable bundles and a complete-generation pointer protect report promotion; final reconciliation uses stronger checks for attention. [Report guide](FINAL_REPORTS.md).
+
 Safe composites/mirrored-FAT results now flow into extraction automatically as catalogued **DERIVED** attempts. Their source/sector recipes are replayed before reuse; they remain attention evidence, not new clean physical reads. Unsupported publication is recorded without abandoning ordinary processing. [Handoff, restart and bounds](OFFLINE_RECOVERY_HANDOFF.md).
 
 **Follow the scan's big swap banner.** Background progress goes to saved logs, not over your waiting prompt. `QUIT` or the endpoint ends feeding, drains saved work and reconciles the whole project. A completed partial disk stays partial; successful processing does not mean every original byte was recovered.

@@ -112,6 +112,7 @@ fluxvault conversion issues
 fluxvault conversion retry
 fluxvault conversion retry C:\path\to\Extracted\001\problem.rtf
 fluxvault report export
+fluxvault report export --language en --json
 fluxvault audit
 fluxvault package build --destination C:\CustomerPackages
 fluxvault finalize --destination C:\CustomerPackages
@@ -120,6 +121,8 @@ fluxvault finalize --destination C:\CustomerPackages
 Use `--project C:\path\to\project` to select a project explicitly. Add `--json` to a command for machine-readable stdout (including structured errors); long-running progress goes to stderr. Exit code 0 means complete, 3 means attention/partial, and 2 means invalid input or an operation error. These codes will be refined as production automation is added.
 
 `disk show N` summarizes saved attempts. Add `--details` for their hashes, bad-sector LBAs, retry counts, and evidence paths; JSON includes those fields without an extra flag. Neither view accesses the floppy drive.
+
+`report export [--language hu|en]` refreshes audit and writes a complete versioned final bundle without tools/media or payload changes. JSON `workbook` now points to combined `FloppyFinalReport.xlsx`; `acquisition_workbook` retains the narrower Hungarian report. `final_report` includes directory/JSON/latest-pointer paths and attention counts. Scan/process also generate it and use stronger combined checks for attention. Export itself returns 0 when a warning report was successfully written. [Files and compatibility](FINAL_REPORTS.md).
 
 ## USB acquisition: optional advanced path
 
