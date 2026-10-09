@@ -34,6 +34,7 @@ GW scans reuse saved defaults for omitted profile/map, selector, policy, endpoin
 fv scan --conversion-workers 12
 fv scan --no-verify
 fv scan --color never
+fv scan --sound on
 fv storage benchmark 7
 ```
 
@@ -42,6 +43,12 @@ fv storage benchmark 7
 Large ASCII banners distinguish **WAITING FOR YOU**, **READING / DO NOT REMOVE**, **DONE / REMOVE / INSERT**, **PARTIAL SAVED** and final processing/results. Clean swaps are green; partial-saved swaps are red with an explicit safe-to-swap instruction. Warnings/raw-only exceptions remain amber, and read failures are red without advancing the number. The endpoint says **BATCH FINISHED**, not insert the next cursor. Automatic color decorates stderr only when it is a terminal, unless `NO_COLOR` is set or `TERM=dumb`; `--color always`/`never` override detection. JSON/stdout remains undecorated even with forced stderr color.
 
 Interactive recovery/scan displays a temporary ASCII bar with disk identity, phase, elapsed time and unique reported tracks out of the host's selected range. Targeted rereads reset that range; duplicate track reports do not inflate completion. Unknown/unsupported ranges and quiet checking/decoding/verifying stages use an animated indeterminate marker. Track visitation is not readable-sector yield. The display is cleared before stage diagnostics and on recovery success/error, before any swap cue. Redirected stderr and `TERM=dumb` do not animate, even with forced color; monochrome terminals retain the ASCII bar.
+
+### Optional scan sound cues
+
+`scan --sound on` (also `start`, explicit GW scan, USB-only scan and `--double`) enables short Windows tones after saved-result/error cues. Default `--sound off` is unchanged silence. This setting is **per invocation, not persisted**; it changes no read, retry, recovery or custody policy. Saved clean results use one tone, partial/raw-only saved results two descending tones, and failed reads/reseat instructions three tones. USB starts at a lower pitch than GW so dual-station cues differ. Cancellation and recurring progress/status messages do not trigger completion sounds.
+
+Sound is supplemental: read the station/label/banner before moving a disk; a sound never authorizes removal. Only interactive stderr on Windows enables audio, even with `--sound on`; redirected output and `TERM=dumb` stay silent. No BEL/ANSI sound bytes enter stdout, JSON or logs, and `NO_COLOR` does not disable requested audio. Native Windows audio respects the machine's audio configuration. One bounded non-blocking worker drops busy/stale notices and discards queued cues at shutdown; audio unavailability/failure never interrupts acquisition. A final cue may be skipped during immediate exit. There is no external player, profile/registry change or physical-drive access for audio.
 
 `scan --conversion-workers N` accepts 1–16 and persists the request at custody commit. Background conversion caps it to available logical CPUs minus two (minimum one); status records requested/effective counts. Isolated LibreOffice profiles and a shared balanced queue interleave estimated long/short jobs, retaining stable report order. Four is the conservative default; more is not guaranteed faster. Whole-project ownership prevents competing report/delivery writers, while short snapshots permit acquisition publication outside Office work. See [BACKGROUND_PROCESSING.md](BACKGROUND_PROCESSING.md).
 

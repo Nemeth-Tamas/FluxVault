@@ -133,7 +133,7 @@ This is the first “we can actually use FluxVault on customer media” target. 
 - [x] Show a live 80x2-ish track/head/sector heatmap: unread, good, retry-recovered, bad.
 - [x] End state clearly reports `OK`, `PARTIAL`, or `FAILED` and exact bad-sector count.
 - [x] Offer **Next floppy** while preserving media-change confirmation.
-- [ ] Add audible completion/error cues optionally (configurable).
+- [x] Add optional per-invocation `scan --sound on|off` completion/error cues for single-GW, USB-only and dual scanning. Default silent; station/outcome-specific short Windows tones run in one bounded non-blocking worker, never contaminate redirected JSON/logs, change acquisition policy, or replace written custody/swap instructions. Busy/stale/shutdown notices may be dropped; audio availability is not guaranteed. Parser, mock scan/redirection, worker pressure/cancellation and real PowerShell-completion tests cover the interface without playing audio or touching media.
 - [ ] Test against several known-good disks and several damaged disks from the current batch.
 - [ ] Add a continuous production mode that automatically runs acquisition, hashes, triage, extraction, and audit after one **Disk inserted** confirmation.
 - [ ] Detect stable media removal/insertion automatically where the hardware permits, while retaining one-button confirmation as a reliable fallback.

@@ -37,6 +37,8 @@ Check the label and open write-protect hole, insert the displayed disk, then pre
 
 No policy/format file is needed. New scans identify supported 720 KB/1.44 MB formats, recover within limits, process saved files in the background and pack captures.
 
+Optional audible swap/error reminders: add `--sound on`, for example `fv scan --last-disk 136 --no-verify --sound on`. Off by default and not remembered on restart. USB/GW tones differ; clean/partial/error patterns differ. Audio is best-effort and interactive-only: always follow the written saved/swap cue, not a sound alone. [Details](CLI.md#optional-scan-sound-cues).
+
 ### Existing batch: enter, inspect, continue
 
 ```powershell

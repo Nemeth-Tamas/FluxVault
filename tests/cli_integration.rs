@@ -26,6 +26,34 @@ fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
 }
 
 #[test]
+fn sound_validation_preserves_json_errors_and_help_never_touches_a_project() {
+    for args in [
+        vec!["status", "--sound", "on", "--json"],
+        vec!["scan", "--sound", "invalid", "--json"],
+        vec!["scan", "--double", "--plan", "--sound", "on", "--json"],
+    ] {
+        let output = invoke(Path::new(env!("CARGO_MANIFEST_DIR")), &args, None);
+        assert_eq!(output.status.code(), Some(2));
+        let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error["error"]["code"], "operation_error");
+        assert!(!output.stdout.contains(&7));
+        assert!(!output.stderr.contains(&7));
+    }
+    let help = invoke(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &["scan", "--sound", "on", "--help"],
+        None,
+    );
+    assert!(help.status.success());
+    assert!(
+        String::from_utf8(help.stdout)
+            .unwrap()
+            .contains("--sound on|off")
+    );
+    assert!(help.stderr.is_empty());
+}
+
+#[test]
 #[ignore = "requires FLUXVAULT_TEST_7Z and FLUXVAULT_TEST_LIBREOFFICE; real saved-file tools, mock Greaseweazle only"]
 fn default_background_scan_runs_the_whole_cli_path_without_physical_hardware() {
     let root = std::env::temp_dir().join(format!(
@@ -814,6 +842,8 @@ fn cli_no_index_reseats_preserve_attempts_same_disk_custody_and_json_contract() 
         "--no-verify",
         "--acquisition-only",
         "--json",
+        "--sound",
+        "on",
         "--color",
         "always",
     ];
@@ -1310,6 +1340,8 @@ fn cli_guided_gw_scan_numbering_restart_partial_and_tamper_contract() {
         Some(b"READ\nREAD 999\nREAD 001\nREAD 002\n"),
         &[],
     );
+    assert!(!first.stdout.contains(&7));
+    assert!(!first.stderr.contains(&7));
     assert_eq!(
         first.status.code(),
         Some(0),

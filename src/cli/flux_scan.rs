@@ -19,7 +19,9 @@ use crate::{
 };
 
 use super::{
-    CliResponse, flux,
+    CliResponse,
+    audible::{Cues, Outcome as SoundOutcome, Station as SoundStation},
+    flux,
     media_reservation::GreaseweazleReservation,
     terminal::{self, Cue},
 };
@@ -43,6 +45,7 @@ pub(super) struct ScanOptions {
     pub json_output: bool,
     pub no_verify: bool,
     pub color: bool,
+    pub sound: bool,
     pub conversion_workers: usize,
 }
 
@@ -581,6 +584,7 @@ where
     let mut waiting: Option<(u32, Instant)> = None;
     let mut no_index_reseats = 0usize;
     let mut reseat_error: Option<String> = None;
+    let sounds = Cues::start(options.sound);
     loop {
         crate::cancellation::check()?;
         if options.count.is_some_and(|limit| results.len() >= limit) {
@@ -647,6 +651,7 @@ where
                         "Physical read has stopped; safe to remove the floppy.\nRemove and fully reinsert disk {disk:03}, check label/protection, drive power and closed door/lever.\nDo NOT insert the next disk. No read starts until you confirm again; QUIT stops safely.\nAttempt evidence retained.\n{error}"
                     ),
                 )?;
+                sounds.notify(SoundStation::Greaseweazle, SoundOutcome::Failed);
             } else {
                 terminal::banner(
                     output,
@@ -765,6 +770,9 @@ where
                             "Evidence retained. No automatic next-disk read; inspect the error before retrying."
                         },
                     )?;
+                    if !crate::cancellation::requested() {
+                        sounds.notify(SoundStation::Greaseweazle, SoundOutcome::Failed);
+                    }
                     return Err(error);
                 }
             }
@@ -791,6 +799,7 @@ where
                 &format!("VERIFICATION FAILED {disk:03} / NUMBER NOT ADVANCED"),
                 "Saved evidence did not pass integrity checks. No next-disk read started.",
             )?;
+            sounds.notify(SoundStation::Greaseweazle, SoundOutcome::Failed);
             return Err(error);
         }
         let selected_profile = result
@@ -877,6 +886,14 @@ where
                 }
             ),
         )?;
+        sounds.notify(
+            SoundStation::Greaseweazle,
+            if result.status == "acquired" {
+                SoundOutcome::Saved
+            } else {
+                SoundOutcome::PartialSaved
+            },
+        );
         results.push(result);
         no_index_reseats = 0;
         reseat_error = None;
@@ -1037,6 +1054,7 @@ mod tests {
             json_output: true,
             no_verify: false,
             color: false,
+            sound: false,
             conversion_workers: default_conversion_workers(),
         }
     }

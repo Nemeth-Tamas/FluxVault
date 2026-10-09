@@ -28,6 +28,7 @@ fn stop_cancels_both_active_mock_stations_without_receipts_and_reopens_same_labe
             &mut vec![],
             false,
             None,
+            &Cues::start(false),
         )
         .unwrap()
     });
@@ -396,6 +397,7 @@ fn pause_preserves_saved_custody_and_resume_itself_launches_no_reader() {
         &mut output,
         false,
         None,
+        &Cues::start(false),
     )
     .unwrap();
     assert_eq!(value["completed_this_session"], 0);
@@ -471,6 +473,7 @@ fn live_event_pump_overlaps_both_readers_and_transfers_old_usb_label_without_sta
             &mut output,
             true,
             Some(&mut telemetry),
+            &Cues::start(false),
         )
         .unwrap();
         crate::dual_benchmark::record(&mut telemetry, "dual_session_finished", json!({})).unwrap();
@@ -555,6 +558,7 @@ fn quit_drains_inflight_work_ignores_later_commands_and_retains_removal_on_reope
         &mut Vec::new(),
         false,
         None,
+        &Cues::start(false),
     )
     .unwrap();
     assert_eq!(value["completed_this_session"], 1);
@@ -598,6 +602,7 @@ fn failure_keeps_usb_identity_but_gw_still_finishes_and_saved_usb_retry_adopts_w
         &mut Vec::new(),
         false,
         None,
+        &Cues::start(false),
     )
     .unwrap();
     assert_eq!(value["state"]["disks"]["1"]["phase"], "interrupted");
@@ -682,6 +687,7 @@ fn dual_preflight_settings_are_strict_resume_selectors_and_no_verify_never_opens
         acquisition_only: true,
         json: true,
         color: false,
+        sound: false,
     };
     let selected = settings(&p, &options).unwrap();
     save_settings(&p, &selected).unwrap();
@@ -705,6 +711,7 @@ fn dual_preflight_settings_are_strict_resume_selectors_and_no_verify_never_opens
         acquisition_only: true,
         json: true,
         color: false,
+        sound: false,
     };
     assert!(settings(&p, &bad).is_err());
     let unverified = Options {

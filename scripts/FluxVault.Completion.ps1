@@ -40,11 +40,11 @@ $fluxVaultCompleter = {
             if (-not $children.ContainsKey($leaf)) { $children[$leaf] = @() }
         }
     }
-    $scan = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--usb','--double','--plan','--drive','--retries','--write-blocker-verified')
+    $scan = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--sound','--usb','--double','--plan','--drive','--retries','--write-blocker-verified')
     $options = @{
         'scan' = $scan
         'start' = $scan
-        'greaseweazle scan' = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color')
+        'greaseweazle scan' = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--sound')
         'disk show' = @('--details')
         'drive probe' = @('--drive')
         'acquire' = @('--drive','--disk','--retries','--write-blocker-verified')
@@ -70,13 +70,14 @@ $fluxVaultCompleter = {
         '--gw-drive' = @('A','B')
         '--language' = @('hu','en')
         '--color' = @('auto','always','never')
+        '--sound' = @('on','off')
         '--capture-storage' = @('packed','raw')
         '--processing-mode' = @('background','tail')
         '--conversion-workers' = @('1','2','4','8','12','16')
         '--retries' = @(0..10 | ForEach-Object { [string]$_ })
         '--revs' = @(1..10 | ForEach-Object { [string]$_ })
     }
-    $takesValue = @('--project','--destination','--drive','--disk','--retries','--count','--last-disk','--source','--baseline','--dmde-log','--conversion-workers','--gw-drive','--profile','--capture-storage','--processing-mode','--color','--revs','--capture-attempt','--policy','--profile-map','--language')
+    $takesValue = @('--project','--destination','--drive','--disk','--retries','--count','--last-disk','--source','--baseline','--dmde-log','--conversion-workers','--gw-drive','--profile','--capture-storage','--processing-mode','--color','--sound','--revs','--capture-attempt','--policy','--profile-map','--language')
 
     # Only literal AST text before the cursor; never evaluate a variable,
     # subexpression, command substitution, or any user-supplied argument.
@@ -109,10 +110,10 @@ $fluxVaultCompleter = {
     $prefix = ([string]$wordToComplete).Trim([char[]](39,34))
     if ($context -in @('scan','start')) {
         if ($flags -contains '--double') {
-            $options[$context] = @('--drive','--gw-drive','--last-disk','--write-blocker-verified','--conversion-workers','--acquisition-only','--color','--plan')
+            $options[$context] = @('--drive','--gw-drive','--last-disk','--write-blocker-verified','--conversion-workers','--acquisition-only','--color','--sound','--plan')
             if ($flags -contains '--plan') { $options[$context] = @('--drive','--gw-drive','--last-disk') }
         } elseif ($flags -contains '--usb' -or $flags -contains '--drive' -or $flags -contains '--write-blocker-verified') {
-            $options[$context] = @('--drive','--count','--retries','--write-blocker-verified')
+            $options[$context] = @('--drive','--count','--retries','--write-blocker-verified','--sound')
         }
     }
     if ($expectValue) {

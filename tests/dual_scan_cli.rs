@@ -58,6 +58,8 @@ impl Fixture {
             "--json",
             "--color",
             "never",
+            "--sound",
+            "on",
         ]);
         if last {
             command.args(["--last-disk", "3"]);
@@ -133,6 +135,7 @@ impl Running {
         };
         let out = self.out.take().unwrap().join().unwrap();
         let err = self.err.take().unwrap().join().unwrap();
+        assert!(!out.contains('\x07') && !err.contains('\x07'));
         let value =
             serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}; stderr={err}"));
         (code, value, err)

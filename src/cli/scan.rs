@@ -9,13 +9,18 @@ use crate::{
     recovery_plan::{self, RecoveryAction},
 };
 
-use super::{CliResponse, acquire};
+use super::{
+    CliResponse, acquire,
+    audible::{Cues, Outcome, Station},
+    terminal::{self, Cue},
+};
 
 struct ScanConfig<'a> {
     json_output: bool,
     drive: Option<&'a str>,
     count: Option<usize>,
     write_blocker_verified: bool,
+    sound: bool,
 }
 
 pub(super) fn run(
@@ -25,6 +30,7 @@ pub(super) fn run(
     retries: usize,
     count: Option<usize>,
     write_blocker_verified: bool,
+    sound: bool,
 ) -> Result<CliResponse, String> {
     let _control = crate::run_control::Session::start(project, "usb_scan")?;
     let mut stderr = io::stderr().lock();
@@ -35,6 +41,7 @@ pub(super) fn run(
             drive,
             count,
             write_blocker_verified,
+            sound,
         },
         crate::run_control::Input::stdin(),
         &mut stderr,
@@ -62,6 +69,7 @@ fn run_with_io<
     }
     let mut scanned = 0usize;
     let mut partial = 0usize;
+    let sounds = Cues::start(config.sound);
     loop {
         crate::cancellation::check()?;
         if config.count.is_some_and(|limit| scanned >= limit) {
@@ -98,7 +106,22 @@ fn run_with_io<
                 continue;
             }
         }
-        let response = acquire_disk(project, disk)?;
+        let response = match acquire_disk(project, disk) {
+            Ok(response) => response,
+            Err(error) => {
+                terminal::banner(
+                    output,
+                    false,
+                    Cue::Error,
+                    &format!("USB {drive} / READ FAILED {disk:03} / NUMBER NOT ADVANCED"),
+                    "Evidence retained. On cancellation wait for STOPPED and drive idle before moving the disk.",
+                )?;
+                if !crate::cancellation::requested() {
+                    sounds.notify(Station::Usb, Outcome::Failed);
+                }
+                return Err(error);
+            }
+        };
         if response.exit_code != 0 && response.exit_code != 3 {
             return Err(format!("Acquisition for floppy {disk:03} did not complete"));
         }
@@ -107,6 +130,32 @@ fn run_with_io<
         scanned += 1;
         writeln!(output, "{}", response.output)
             .map_err(|error| format!("Cannot display scan result: {error}"))?;
+        terminal::banner(
+            output,
+            false,
+            if response.exit_code == 0 {
+                Cue::Success
+            } else {
+                Cue::Error
+            },
+            &format!(
+                "USB {drive} / {} SAVED {disk:03} / REMOVE {disk:03}",
+                if response.exit_code == 0 {
+                    "OK"
+                } else {
+                    "PARTIAL"
+                }
+            ),
+            "Image and acquisition metadata saved. Safe to swap; follow the next prompt.",
+        )?;
+        sounds.notify(
+            Station::Usb,
+            if response.exit_code == 0 {
+                Outcome::Saved
+            } else {
+                Outcome::PartialSaved
+            },
+        );
     }
     let queue = recovery_plan::plan_project(&project.images_dir())?
         .into_iter()
@@ -168,6 +217,7 @@ mod tests {
                 drive: Some("A:"),
                 count: Some(2),
                 write_blocker_verified: true,
+                sound: false,
             },
             Cursor::new(b"wrong\nREAD\nREAD\n"),
             &mut output,
@@ -218,6 +268,7 @@ mod tests {
                 drive: Some("A:"),
                 count: Some(2),
                 write_blocker_verified: true,
+                sound: false,
             },
             Cursor::new(b"\n002\n1\n001\n002\n"),
             &mut Vec::new(),
@@ -256,6 +307,7 @@ mod tests {
                 drive: Some("A:"),
                 count: None,
                 write_blocker_verified: false,
+                sound: false,
             },
             Cursor::new(b"READ\n"),
             &mut Vec::new(),
@@ -284,6 +336,7 @@ mod tests {
                 drive: Some("A:"),
                 count: Some(1),
                 write_blocker_verified: true,
+                sound: false,
             },
             Cursor::new(b"READ\n"),
             &mut Vec::new(),
@@ -304,6 +357,7 @@ mod tests {
                 drive: Some("A:"),
                 count: Some(1),
                 write_blocker_verified: true,
+                sound: false,
             },
             Cursor::new(b"READ\n"),
             &mut Vec::new(),

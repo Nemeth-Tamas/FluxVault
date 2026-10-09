@@ -1,6 +1,7 @@
 //! One input/event pump, two physical workers, one durable project owner.
 use super::{
     CliResponse,
+    audible::{Cues, Outcome as SoundOutcome, Station as SoundStation},
     media_reservation::{GreaseweazleReservation, UsbReservation},
     terminal::{self, Cue},
 };
@@ -38,6 +39,7 @@ pub(super) struct Options {
     pub acquisition_only: bool,
     pub json: bool,
     pub color: bool,
+    pub sound: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +146,13 @@ type Reader = Arc<
         + Send
         + Sync,
 >;
+
+fn sound_station(station: Station) -> SoundStation {
+    match station {
+        Station::Usb => SoundStation::Usb,
+        Station::Greaseweazle => SoundStation::Greaseweazle,
+    }
+}
 
 fn station_name(station: Station) -> &'static str {
     match station {
@@ -628,6 +637,7 @@ fn feed(
     output: &mut impl Write,
     color: bool,
     mut telemetry: Option<&mut crate::benchmark::Session>,
+    sounds: &Cues,
 ) -> Result<Value, String> {
     let feeding_started = Instant::now();
     let mut draining = false;
@@ -867,6 +877,14 @@ fn feed(
                                 read_ms as f64 / 1000.0
                             ),
                         )?;
+                        sounds.notify(
+                            sound_station(ticket.station),
+                            if partial {
+                                SoundOutcome::PartialSaved
+                            } else {
+                                SoundOutcome::Saved
+                            },
+                        );
                     }
                     Err(error) => {
                         session
@@ -910,6 +928,9 @@ fn feed(
                                 )
                             },
                         )?;
+                        if !crate::cancellation::requested() {
+                            sounds.notify(sound_station(ticket.station), SoundOutcome::Failed);
+                        }
                         errors.push(error);
                     }
                 }
@@ -1083,6 +1104,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
     };
     // Keep the owner across final processing too, even after the producer ends.
     let owner = session.coordinator.owner();
+    let sounds = Cues::start(options.sound);
     let result = feed(
         session,
         receiver,
@@ -1093,6 +1115,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
         &mut stderr,
         options.color,
         Some(&mut telemetry),
+        &sounds,
     );
     let outcome = processing.map(|q| q.finish());
     let storage_errors = packing.finish();

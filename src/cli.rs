@@ -1,6 +1,7 @@
 //! Command-line entry points over the guarded workflow services.
 
 mod acquire;
+mod audible;
 mod completion;
 mod dual_scan;
 mod finalize;
@@ -194,6 +195,7 @@ Options:
   --acquisition-only               Skip downstream processing after recovery
   --no-verify                      GW scan: Enter confirms displayed disk; skips label typing ONLY
   --color auto|always|never         GW scan cues (default auto; respects NO_COLOR)
+  --sound on|off                   Optional scan swap/error tones (default off; terminal only)
 During scanning: QUIT drains; STOP cancels active work. Windows Ctrl+C requests safe stop.
 Keep disks seated until STOPPED and drive activity has stopped. Resume the same command/project.
 Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error, 130 operator stop"#;
@@ -311,6 +313,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut double = false;
     let mut dual_plan = false;
     let mut color_mode = None;
+    let mut sound_mode = None;
     let mut positional = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -357,6 +360,12 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 color_mode = Some(terminal::ColorMode::parse(
                     args.get(index)
                         .ok_or("--color requires auto, always, or never")?,
+                )?);
+            }
+            "--sound" => {
+                index += 1;
+                sound_mode = Some(audible::SoundMode::parse(
+                    args.get(index).ok_or("--sound requires on or off")?,
                 )?);
             }
             "--gw-drive" => {
@@ -551,7 +560,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 || recovery_policy.is_some()
                 || profile_map_path.is_some()
             {
-                return Err("Dual pilot accepts --project, --drive, --gw-drive, --last-disk, --write-blocker-verified, --conversion-workers, --acquisition-only, --color and --json; recovery/format/storage defaults are automatic".into());
+                return Err("Dual pilot accepts --project, --drive, --gw-drive, --last-disk, --write-blocker-verified, --conversion-workers, --acquisition-only, --color, --sound and --json; recovery/format/storage defaults are automatic".into());
             }
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             return dual_scan::run(
@@ -564,6 +573,10 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     verified: write_blocker_verified,
                     acquisition_only,
                     json: json_output,
+                    sound: sound_mode.unwrap_or_default().enabled(
+                        std::io::stderr().is_terminal(),
+                        env::var("TERM").is_ok_and(|s| s == "dumb"),
+                    ),
                     color: color_mode.unwrap_or_default().enabled(
                         std::io::stderr().is_terminal(),
                         env::var_os("NO_COLOR").is_some(),
@@ -594,6 +607,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             || profile_map_path.is_some()
             || acquisition_only
             || color_mode.is_some()
+            || sound_mode.is_some()
         {
             return Err("Dual preview accepts only --project, --last-disk, --drive, --gw-drive and --json; no read is started".into());
         }
@@ -657,6 +671,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     if (no_verify || color_mode.is_some()) && !gw_scan {
         return Err("--no-verify and --color are only valid with Greaseweazle scan".to_owned());
+    }
+    if sound_mode.is_some() && !gw_scan && positional != ["scan"] {
+        return Err("--sound is only valid with scan or start".into());
     }
     if conversion_workers.is_some()
         && !gw_scan
@@ -1158,6 +1175,10 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                         acquisition_only,
                         json_output,
                         no_verify,
+                        sound: sound_mode.unwrap_or_default().enabled(
+                            std::io::stderr().is_terminal(),
+                            env::var("TERM").is_ok_and(|term| term == "dumb"),
+                        ),
                         color: color_mode.unwrap_or_default().enabled(
                             std::io::stderr().is_terminal(),
                             env::var_os("NO_COLOR").is_some(),
@@ -1397,6 +1418,10 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 acquisition_retries.unwrap_or(2),
                 scan_count,
                 write_blocker_verified,
+                sound_mode.unwrap_or_default().enabled(
+                    std::io::stderr().is_terminal(),
+                    env::var("TERM").is_ok_and(|term| term == "dumb"),
+                ),
             );
         }
         Some("stop") if positional.len() == 1 && destination.is_none() => {
@@ -2672,6 +2697,27 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn sound_options_are_strict_scan_only_and_preview_never_starts_audio() {
+        for args in [
+            vec!["status", "--sound", "on"],
+            vec!["process", "--sound", "off"],
+            vec!["acquire", "--sound", "on"],
+            vec!["greaseweazle", "recover", "1", "--sound", "on"],
+            vec!["scan", "--sound", "maybe"],
+            vec!["scan", "--sound"],
+            vec!["scan", "--double", "--plan", "--sound", "on"],
+        ] {
+            assert!(
+                run(
+                    &args.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                    Path::new("A:\\nonexistent-sound-project")
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
