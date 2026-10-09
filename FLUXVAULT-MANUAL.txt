@@ -825,6 +825,23 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     additional format decoding, full live acceptance and two-drive scheduling
     remain in TODO.md.
 
+SAVED-SECTOR INSPECTOR (ADVANCED)
+    fv recovery sector N --lba L [--sectors 1..8] [--attempt N] [--json]
+
+    Display saved image bytes as hex/ASCII, with LBA, CHS, image/sector hashes,
+    acquisition attempt and available donor/flux provenance. LBA starts at 0;
+    CHS sectors start at 1. Default is one sector from the best native attempt.
+    --attempt selects an image acquisition, not a raw capture. No floppy,
+    tools, reports or project state changes. Legacy bare images are unsupported
+    by this diagnostic only; their existing recovery commands remain available.
+
+    Missing/conflicting placeholders and unknown maps are not recovered data.
+    Offline-derived donor/FAT-copy recipes replay; flux origins are recorded,
+    hash-bound entries, not independent raw-flux replay. Exit 0: selected range
+    has readable saved evidence; 3: missing/unknown/derived range; 2: error.
+    Never certifies the physical label, whole disk or customer completeness.
+    More examples and limits: SECTOR_INSPECTION.md.
+
 SOURCE
     CLI.md in the FluxVault repository. This companion is a static snapshot;
     future CLI changes may require regenerating it. Use fv --help for the

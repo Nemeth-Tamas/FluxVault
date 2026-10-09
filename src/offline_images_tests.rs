@@ -232,6 +232,32 @@ fn standalone_mirrored_fat_handoff_preserves_derived_attention_even_with_no_gaps
         original
     );
     assert_eq!(files(&project).len(), 2);
+    let inspected =
+        crate::sector_inspection::inspect(&project, 1, 1, 1, Some(best.attempt_number)).unwrap();
+    assert_eq!(inspected["attention_required"], true);
+    assert_eq!(inspected["sectors"][0]["status"], "derived");
+    assert_eq!(inspected["sectors"][0]["origin"]["attempt"], 1);
+    assert_eq!(inspected["sectors"][0]["origin"]["lba"], 10);
+    assert_eq!(
+        inspected["sectors"][0]["origin"]["steps"][0]["method"],
+        "mirrored_fat"
+    );
+    fs::remove_dir_all(project.root()).unwrap();
+}
+
+#[test]
+fn sector_inspection_replays_composite_donors_without_publishing_or_mutating() {
+    let (project, _) = fixture(&[vec![0, 33], vec![19, 34]]);
+    let (attempts, c) = composite(&project);
+    let published = publish(&project, 1, &attempts, Some(&c), None).unwrap();
+    let before = fs::read(&published.image).unwrap();
+    let r = crate::sector_inspection::inspect(&project, 1, 0, 1, Some(published.attempt)).unwrap();
+    assert_eq!(r["sectors"][0]["origin"]["attempt"], 2);
+    assert_eq!(r["sectors"][0]["origin"]["lba"], 0);
+    assert_eq!(fs::read(&published.image).unwrap(), before);
+    let path = PathBuf::from(&attempts[1].log_file);
+    fs::write(path, b"changed").unwrap();
+    assert!(crate::sector_inspection::inspect(&project, 1, 0, 1, Some(published.attempt)).is_err());
     fs::remove_dir_all(project.root()).unwrap();
 }
 

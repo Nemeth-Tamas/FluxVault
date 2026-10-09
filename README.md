@@ -87,6 +87,7 @@ FluxVault never writes to source floppies. Missing bytes are not fabricated. Fra
 | Lost directories, fragmented-tail hypotheses, damaged Word streams and readable recovery editions | [Deeper recovery](DEEP_RECOVERY.md) |
 | Preferred generations and recoverable copy cleanup | [Recovery selection](RECOVERY_SELECTION.md) |
 | Automatic extraction from improved composite/FAT images | [Offline recovery handoff](OFFLINE_RECOVERY_HANDOFF.md) |
+| Optional hex/ASCII sectors, CHS and saved-attempt origins | [Sector inspector](SECTOR_INSPECTION.md) |
 | Comparing to the old archive | [Baseline comparison](BASELINE_COMPARISON.md) |
 | Opt-in two-drive live pilot and USB shortcut | [Dual scan](DUAL_SCAN.md) |
 

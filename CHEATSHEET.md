@@ -166,6 +166,7 @@ Dual timing: `fv production benchmark` exports saved timing JSON/CSV offline. Ne
 - `--json` gives machine-readable output; progress stays on stderr.
 - `--color never` removes colored scan cues; text instructions remain.
 - `fv --help` lists implemented commands. There is no GUI; two-drive mode remains an opt-in pilot, not full-collection production acceptance.
+- Expert saved-byte check: `fv recovery sector 59 --lba 24 --sectors 2`. Add `--attempt 2` for an image attempt or `--json`; this never reads a floppy. Missing/derived bytes stay labeled. [Sector inspector](SECTOR_INSPECTION.md).
 
 Selection/cleanup are automatic: verified richer generations become preferred, earlier evidence stays intact, and eligible obsolete original copies move into recoverable `Recovery/DeliveryQuarantine`. Edited/untracked/pre-ledger copies and old Office derivatives stay preserved. [Details](RECOVERY_SELECTION.md).
 

@@ -122,6 +122,8 @@ Usage:
                                     Inspect evidence-ranked offline next steps
   fluxvault recovery compare N [--project PATH]
                                     Compare the two latest saved attempts
+  fluxvault recovery sector N --lba L [--sectors 1..8] [--attempt N] [--json]
+                                    Saved-sector hex/ASCII, LBA/CHS and attempt provenance; read-only
   fluxvault recovery backup N [--project PATH]
                                     Create/reuse immutable pass-1 evidence backup
   fluxvault recovery queue [--project PATH]
@@ -315,10 +317,45 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut color_mode = None;
     let mut sound_mode = None;
     let mut positional = Vec::new();
+    let mut sector_lba = None;
+    let mut sector_count = None;
+    let mut sector_attempt = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" => json_output = true,
+            "--lba" => {
+                index += 1;
+                sector_lba = Some(
+                    args.get(index)
+                        .ok_or("--lba requires a zero-based sector number")?
+                        .parse::<u64>()
+                        .map_err(|_| "--lba requires a zero-based sector number")?,
+                );
+            }
+            "--sectors" => {
+                index += 1;
+                let count = args
+                    .get(index)
+                    .ok_or("--sectors requires 1..8")?
+                    .parse::<usize>()
+                    .map_err(|_| "--sectors requires 1..8")?;
+                if !(1..=8).contains(&count) {
+                    return Err("--sectors requires 1..8".into());
+                }
+                sector_count = Some(count);
+            }
+            "--attempt" => {
+                index += 1;
+                sector_attempt = Some(
+                    args.get(index)
+                        .ok_or("--attempt requires a positive image attempt")?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or("--attempt requires a positive image attempt")?,
+                );
+            }
             "--include-deleted" => include_deleted = true,
             "--allow-attention" => allow_attention = true,
             "--baseline" => {
@@ -519,6 +556,55 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         index += 1;
     }
 
+    let sector_inspector =
+        positional.len() == 3 && positional[0] == "recovery" && positional[1] == "sector";
+    if sector_inspector {
+        if args.iter().filter(|a| a.starts_with("--")).any(|a| {
+            !matches!(
+                a.as_str(),
+                "--project" | "--json" | "--lba" | "--sectors" | "--attempt"
+            )
+        }) {
+            return Err(
+                "recovery sector accepts only --project, --json, --lba, --sectors and --attempt"
+                    .into(),
+            );
+        }
+        let disk = positional[2]
+            .parse::<u32>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or("recovery sector requires a positive disk label")?;
+        let lba = sector_lba.ok_or("recovery sector requires --lba (zero-based)")?;
+        crate::safety::workstation_path(cwd)?;
+        if let Some(path) = &project_override {
+            crate::safety::workstation_path(path)?;
+        }
+        let root = resolve_project_root(cwd, project_override.as_deref())?;
+        let project = crate::sector_inspection::open_project(root)?;
+        let result = crate::sector_inspection::inspect(
+            &project,
+            disk,
+            lba,
+            sector_count.unwrap_or(1),
+            sector_attempt,
+        )?;
+        return Ok(CliResponse {
+            output: if json_output {
+                result.to_string()
+            } else {
+                crate::sector_inspection::render(&result)
+            },
+            exit_code: if result["attention_required"] == true {
+                3
+            } else {
+                0
+            },
+        });
+    }
+    if sector_lba.is_some() || sector_count.is_some() || sector_attempt.is_some() {
+        return Err("--lba, --sectors and --attempt are only valid with recovery sector N".into());
+    }
     if allow_attention && positional != ["finalize"] && positional != ["finalize", "resume"] {
         return Err("--allow-attention is only valid with finalize or finalize resume".into());
     }

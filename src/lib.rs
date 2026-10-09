@@ -48,4 +48,5 @@ mod resource_budget;
 pub mod run_control;
 pub mod safety;
 mod scp_diagnostics;
+pub mod sector_inspection;
 pub mod sector_recovery;

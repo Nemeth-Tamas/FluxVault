@@ -815,6 +815,87 @@ pub(crate) fn verify_metadata(
     Ok(())
 }
 
+/// Resolve selected sector origins only after the whole sealed recipe replays.
+pub(crate) fn inspection_origins(
+    images: &Path,
+    attempt: &AttemptSummary,
+    first: u64,
+    end: u64,
+) -> Result<Option<Vec<Value>>, String> {
+    let value: Value = serde_json::from_slice(&read(&attempt.metadata_path, CONTROL)?)
+        .map_err(|e| e.to_string())?;
+    if value["source_backend"] != BACKEND {
+        return Ok(None);
+    }
+    if value["attempt_number"] != attempt.attempt_number
+        || value["total_sectors"] != attempt.total_sectors
+        || value["sha256"] != attempt.sha256
+    {
+        return Err("Inspection summary differs from sealed derived metadata".into());
+    }
+    verify_metadata(images, &attempt.metadata_path, &value)?;
+    let root = images
+        .parent()
+        .ok_or("Invalid Images parent")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let name = value["offline_provenance"]
+        .as_str()
+        .ok_or("Missing offline provenance")?;
+    let bytes = read(&resolve(&root, &format!("Reports/{name}"))?, CONTROL)?;
+    if value["offline_provenance_sha256"] != hash(&bytes) {
+        return Err("Offline provenance changed during inspection".into());
+    }
+    let publication: Publication = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if publication.image_sha256 != attempt.sha256
+        || end > attempt.total_sectors as u64
+        || first >= end
+    {
+        return Err("Inspection provenance does not match selected image/range".into());
+    }
+    let source = |number: u32, lba: u64| -> Result<Value, String> {
+        let s = publication
+            .recipe
+            .sources
+            .iter()
+            .find(|s| s.attempt == number)
+            .ok_or("Missing provenance donor")?;
+        Ok(
+            json!({"attempt":number,"lba":lba,"image":s.image.path,"image_sha256":s.image.sha256,"steps":[]}),
+        )
+    };
+    let mut origins = (0..attempt.total_sectors as u64)
+        .map(|n| source(publication.recipe.base, n))
+        .collect::<Result<Vec<_>, _>>()?;
+    for step in &publication.recipe.steps {
+        match step {
+            Step::Composite { copies, .. } => {
+                for c in copies {
+                    origins[c.target_lba as usize] = source(c.source_attempt, c.target_lba)?;
+                }
+            }
+            Step::MirroredFat { copies, .. } => {
+                let before = origins.clone();
+                for c in copies {
+                    let mut origin = before[c.source_lba as usize].clone();
+                    origin["steps"].as_array_mut().ok_or("Invalid origin steps")?.push(json!({"method":"mirrored_fat","source_lba":c.source_lba,"target_lba":c.target_lba}));
+                    origins[c.target_lba as usize] = origin;
+                }
+            }
+        }
+    }
+    // Binding must still describe the same recipe after the second bounded read.
+    if value["offline_provenance_sha256"]
+        != hash(&read(
+            &resolve(&root, &format!("Reports/{name}"))?,
+            CONTROL,
+        )?)
+    {
+        return Err("Offline provenance changed during inspection".into());
+    }
+    Ok(Some(origins[first as usize..end as usize].to_vec()))
+}
+
 pub(crate) fn verify_attempt(images: &Path, attempt: &AttemptSummary) -> Result<(), String> {
     if attempt.status != "DERIVED"
         && !attempt

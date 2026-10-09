@@ -17,7 +17,7 @@ $fluxVaultCompleter = {
         'tools' = @('check','show','set','clear')
         'greaseweazle' = @('preview','info','capture','decode','identify','status','diagnose','compare','consensus','plan','recover','scan')
         'extract' = @('all','disk')
-        'recovery' = @('plan','compare','backup','queue','composite','fat','extract','documents','import')
+        'recovery' = @('plan','compare','backup','queue','composite','fat','extract','documents','import','sector')
         'conversion' = @('plan','run','issues','retry')
         'files' = @('manifest')
         'report' = @('export')
@@ -53,6 +53,7 @@ $fluxVaultCompleter = {
         'greaseweazle identify' = @('--capture-attempt')
         'greaseweazle recover' = @('--gw-drive','--profile','--policy','--source-write-protected','--acquisition-only')
         'recovery extract' = @('--include-deleted')
+        'recovery sector' = @('--lba','--sectors','--attempt')
         'recovery import' = @('--source','--dmde-log')
         'conversion run' = @('--conversion-workers')
         'conversion retry' = @('--conversion-workers')
@@ -71,13 +72,14 @@ $fluxVaultCompleter = {
         '--language' = @('hu','en')
         '--color' = @('auto','always','never')
         '--sound' = @('on','off')
+        '--sectors' = @(1..8 | ForEach-Object { [string]$_ })
         '--capture-storage' = @('packed','raw')
         '--processing-mode' = @('background','tail')
         '--conversion-workers' = @('1','2','4','8','12','16')
         '--retries' = @(0..10 | ForEach-Object { [string]$_ })
         '--revs' = @(1..10 | ForEach-Object { [string]$_ })
     }
-    $takesValue = @('--project','--destination','--drive','--disk','--retries','--count','--last-disk','--source','--baseline','--dmde-log','--conversion-workers','--gw-drive','--profile','--capture-storage','--processing-mode','--color','--sound','--revs','--capture-attempt','--policy','--profile-map','--language')
+    $takesValue = @('--project','--destination','--drive','--disk','--retries','--count','--last-disk','--source','--baseline','--dmde-log','--conversion-workers','--gw-drive','--profile','--capture-storage','--processing-mode','--color','--sound','--revs','--capture-attempt','--policy','--profile-map','--language','--lba','--sectors','--attempt')
 
     # Only literal AST text before the cursor; never evaluate a variable,
     # subexpression, command substitution, or any user-supplied argument.

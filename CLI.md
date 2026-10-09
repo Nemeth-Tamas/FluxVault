@@ -96,6 +96,7 @@ fluxvault disk show 7 --details
 fluxvault recovery plan
 fluxvault recovery queue
 fluxvault recovery compare 7
+fluxvault recovery sector 7 --lba 0
 fluxvault recovery backup 7
 fluxvault recovery composite 7
 fluxvault recovery fat 7
@@ -135,6 +136,12 @@ Use `--project C:\path\to\project` to select a project explicitly. Add `--json` 
 `disk show N` summarizes saved attempts. Add `--details` for their hashes, bad-sector LBAs, retry counts, and evidence paths; JSON includes those fields without an extra flag. Neither view accesses the floppy drive.
 
 `report export [--language hu|en]` refreshes audit and writes a complete versioned final bundle without tools/media or payload changes. JSON `workbook` now points to combined `FloppyFinalReport.xlsx`; `acquisition_workbook` retains the narrower Hungarian report. `final_report` includes directory/JSON/latest-pointer paths and attention counts. Scan/process also generate it and use stronger combined checks for attention. Export itself returns 0 when a warning report was successfully written. [Files and compatibility](FINAL_REPORTS.md).
+
+## Saved-sector inspection: optional advanced diagnostic
+
+From the project folder, `fv recovery sector 7 --lba 0` displays the first saved sector's hex/ASCII bytes, zero-based LBA, one-based CHS sector, map status, image SHA-256 and acquisition attempt. Add `--sectors 2` to inspect a small range (1–8), `--attempt 2` to choose a completed image attempt rather than the best recorded native attempt, or `--json` for structured output. This is an **image attempt**, not a raw `--capture-attempt`.
+
+No floppy, host tool or project writer is opened. Missing/conflicting placeholders and unknown maps are explicitly labeled, never treated as recovered bytes. Reconstructed attempts trace replay-verified donor/FAT-copy origins; flux capture origins are explicitly **recorded**, hash-bound provenance rather than a fresh independent raw-flux replay. Legacy images without native acquisition metadata are not supported by this diagnostic. Exit 0 means the selected range has readable saved evidence; 3 means that range is missing/unknown/derived; 2 means invalid input or inconsistent evidence. None certifies physical label identity, the rest of the disk or customer completeness. [Bounds and examples](SECTOR_INSPECTION.md).
 
 ## USB acquisition: optional advanced path
 

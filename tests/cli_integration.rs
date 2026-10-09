@@ -54,6 +54,95 @@ fn sound_validation_preserves_json_errors_and_help_never_touches_a_project() {
 }
 
 #[test]
+fn sector_cli_is_read_only_bounded_and_scope_checked() {
+    let root = std::env::temp_dir().join(format!(
+        "fv-sector-cli-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let project = fluxvault::project::ProjectState::create_without_session(root.clone()).unwrap();
+    let bytes = vec![b'X'; 2048];
+    let sha = format!("{:x}", Sha256::digest(&bytes));
+    let image = project.images_dir().join("001_attempt_001.img");
+    let log = project.logs_dir().join("001_attempt_001.log");
+    fs::write(&image, &bytes).unwrap();
+    fs::write(&log,format!("BEGIN | disk=1 | attempt=1\nGEOMETRY | cylinders=1 | heads=2 | sectors_per_track=2 | bytes_per_sector=512 | total_sectors=4 | total_bytes=2048\nEND | status=OK | bytes=2048 | sha256={sha}\n")).unwrap();
+    let meta = serde_json::json!({"disk_number":1,"attempt_number":1,"status":"OK","image_file":image,"log_file":log,
+        "geometry":{"cylinders":1,"heads":2,"sectors_per_track":2,"bytes_per_sector":512,"total_bytes":2048},
+        "bytes_written":2048,"total_sectors":4,"bad_sector_count":0,"bad_sectors":[],"sha256":sha});
+    fs::write(
+        project.images_dir().join("001_attempt_001.json"),
+        serde_json::to_vec(&meta).unwrap(),
+    )
+    .unwrap();
+    let control = fs::read(root.join("project.json")).unwrap();
+    let output = invoke(
+        &root,
+        &["recovery", "sector", "1", "--lba", "3", "--json"],
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["sectors"][0]["chs"]["head"], 1);
+    assert_eq!(value["sectors"][0]["rows"][0]["ascii"], "XXXXXXXXXXXXXXXX");
+    let human = invoke(
+        &root,
+        &["recovery", "sector", "1", "--lba", "0", "--attempt", "1"],
+        None,
+    );
+    assert!(human.status.success());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("LBA 0 / C0 H0 S1"));
+    for args in [
+        vec!["recovery", "sector", "1", "--json"],
+        vec!["recovery", "sector", "1", "--lba", "4", "--json"],
+        vec![
+            "recovery",
+            "sector",
+            "1",
+            "--lba",
+            "0",
+            "--sectors",
+            "9",
+            "--json",
+        ],
+        vec![
+            "recovery", "sector", "1", "--lba", "0", "--drive", "A:", "--json",
+        ],
+        vec!["status", "--lba", "0", "--json"],
+        vec![
+            "recovery",
+            "sector",
+            "1",
+            "--lba",
+            "0",
+            "--project",
+            "A:\\",
+            "--json",
+        ],
+        vec!["scan", "--attempt", "1", "--json"],
+    ] {
+        let result = invoke(&root, &args, None);
+        assert_eq!(result.status.code(), Some(2));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()["error"]["code"],
+            "operation_error"
+        );
+    }
+    assert_eq!(fs::read(image).unwrap(), bytes);
+    assert_eq!(fs::read(root.join("project.json")).unwrap(), control);
+    assert!(!root.join("Logs").join("external-tools.jsonl").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 #[ignore = "requires FLUXVAULT_TEST_7Z and FLUXVAULT_TEST_LIBREOFFICE; real saved-file tools, mock Greaseweazle only"]
 fn default_background_scan_runs_the_whole_cli_path_without_physical_hardware() {
     let root = std::env::temp_dir().join(format!(
