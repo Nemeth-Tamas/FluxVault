@@ -65,6 +65,166 @@ fn start(c: &mut Coordinator, station: Station, number: u32) -> Ticket {
 }
 
 #[test]
+fn usb_triage_is_sealed_durable_and_clean_results_never_enter_recovery_priority() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();
+    let usb = start(&mut c, Station::Usb, 1);
+    evidence(&p, 1, 1, Station::Usb, &[], 17);
+    c.complete(&usb, 1).unwrap();
+    let clean = c.status()["disks"]["1"]["usb_triage"].clone();
+    assert_eq!(clean["route"], "complete");
+    assert_eq!(clean["saved_generation"], usb.generation);
+    assert_eq!(
+        clean["image_sha256"],
+        c.status()["disks"]["1"]["usb"]["sha256"]
+    );
+    assert_eq!(c.status()["recommended_gw_disk"], Value::Null);
+    c.removed(&usb, true).unwrap();
+    let usb = start(&mut c, Station::Usb, 2);
+    evidence(&p, 2, 1, Station::Usb, &[1], 17);
+    c.complete(&usb, 1).unwrap();
+    assert_eq!(
+        c.status()["disks"]["2"]["usb_triage"]["route"],
+        "move_to_greaseweazle"
+    );
+    assert_eq!(
+        c.status()["recovery_priorities"][0]["availability"],
+        "held_in_usb"
+    );
+    let before = fs::read(p.root().join(JOURNAL)).unwrap();
+    assert_eq!(status(&p).unwrap()["recommended_gw_disk"], 2);
+    assert_eq!(fs::read(p.root().join(JOURNAL)).unwrap(), before);
+    assert!(c.claim(Station::Greaseweazle, 2).is_err());
+    c.removed(&usb, true).unwrap();
+    let ranked = c.status()["recovery_priorities"].clone();
+    drop(c);
+    let c = Coordinator::open(p.clone(), Some(3), false).unwrap();
+    assert_eq!(c.status()["recovery_priorities"], ranked);
+    assert_eq!(c.status()["disks"]["1"]["usb_triage"], clean);
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn queue_ranking_respects_custody_and_explicit_lower_rank_override() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(5), false).unwrap();
+    for (number, bad) in [(1, &[1, 2, 3][..]), (2, &[2][..])] {
+        let t = start(&mut c, Station::Usb, number);
+        evidence(&p, number, 1, Station::Usb, bad, 17);
+        c.complete(&t, 1).unwrap();
+        c.removed(&t, true).unwrap();
+    }
+    let held = start(&mut c, Station::Usb, 3);
+    evidence(&p, 3, 1, Station::Usb, &[0], 17);
+    c.complete(&held, 1).unwrap();
+    let state = c.status();
+    assert_eq!(state["usb_recovery_queue"], json!([1, 2])); // Existing API unchanged.
+    assert_eq!(state["recommended_gw_disk"], 2);
+    assert_eq!(
+        state["recovery_priorities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["disk"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![2, 1, 3]
+    );
+    let gw = start(&mut c, Station::Greaseweazle, 1); // Operator has this disk available.
+    assert_eq!(c.status()["recommended_gw_disk"], 2);
+    assert_eq!(
+        c.status()["recovery_priorities"].as_array().unwrap().len(),
+        2
+    );
+    c.failed(&gw, "synthetic interruption").unwrap();
+    assert!(
+        !c.status()["recovery_priorities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["disk"] == 1)
+    );
+    c.removed(&held, true).unwrap();
+    assert_eq!(c.status()["recommended_gw_disk"], 3); // Ready boot loss outranks other one-sector loss.
+    c.set_paused(true).unwrap();
+    assert!(c.claim(Station::Greaseweazle, 3).is_err());
+    drop(c);
+    let c = Coordinator::open(p.clone(), Some(5), false).unwrap();
+    assert_eq!(c.status()["recommended_gw_disk"], 3);
+    assert_eq!(c.status()["disks"]["1"]["phase"], "interrupted");
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn legacy_queue_age_is_unknown_and_malformed_triage_is_refused() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    let usb = start(&mut c, Station::Usb, 1);
+    evidence(&p, 1, 1, Station::Usb, &[1], 17);
+    c.complete(&usb, 1).unwrap();
+    c.removed(&usb, true).unwrap();
+    drop(c);
+    let path = p.root().join(JOURNAL);
+    let current = fs::read(&path).unwrap();
+    let parsed: Value = serde_json::from_slice(&current).unwrap();
+    for (key, value) in [
+        ("route", json!("complete")),
+        ("policy", json!("unknown")),
+        ("missing_sectors", json!(0)),
+        ("image_sha256", json!("0".repeat(64))),
+        ("total_sectors", json!(3)),
+        ("attempt", json!(2)),
+        ("saved_generation", json!(0)),
+        ("saved_generation", json!(999)),
+    ] {
+        let mut invalid = parsed.clone();
+        invalid["disks"]["1"]["usb_triage"][key] = value;
+        fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        let edited = fs::read(&path).unwrap();
+        assert!(status(&p).is_err(), "accepted {key}");
+        assert!(Coordinator::open(p.clone(), Some(2), false).is_err());
+        assert_eq!(fs::read(&path).unwrap(), edited);
+    }
+    let mut legacy = parsed;
+    legacy["disks"]["1"]
+        .as_object_mut()
+        .unwrap()
+        .remove("usb_triage");
+    fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let state = status(&p).unwrap();
+    assert_eq!(state["recommended_gw_disk"], 1);
+    assert_eq!(
+        state["recovery_priorities"][0]["waiting_generations"],
+        Value::Null
+    );
+    let c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    assert_eq!(
+        c.status()["recovery_priorities"],
+        state["recovery_priorities"]
+    );
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn tampered_source_receipt_prevents_offline_priority_reporting() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(1), false).unwrap();
+    let usb = start(&mut c, Station::Usb, 1);
+    evidence(&p, 1, 1, Station::Usb, &[1], 17);
+    c.complete(&usb, 1).unwrap();
+    c.removed(&usb, true).unwrap();
+    drop(c);
+    let path = p.images_dir().join("001_attempt_001.img");
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[0] ^= 1;
+    fs::write(&path, bytes).unwrap();
+    assert!(status(&p).is_err());
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
 fn durable_pause_blocks_new_authorization_but_allows_active_receipts_and_removal() {
     let p = project();
     let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();
@@ -411,11 +571,11 @@ fn modelled_136_disk_dual_cohort_reopens_without_duplicate_labels_or_lost_queue(
         }
     }
     assert!(c.next_fresh_disk().is_none());
-    let pending = c.status()["usb_recovery_queue"]
+    let pending = c.status()["recovery_priorities"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|n| n.as_u64().unwrap() as u32)
+        .map(|n| n["disk"].as_u64().unwrap() as u32)
         .collect::<Vec<_>>();
     assert_eq!(pending.len(), 14);
     for number in pending {

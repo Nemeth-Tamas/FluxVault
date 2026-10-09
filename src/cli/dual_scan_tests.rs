@@ -255,6 +255,52 @@ fn station_actions_distinguish_waiting_retry_transfer_and_shared_fresh_numbers()
 }
 
 #[test]
+fn ranked_actions_and_queue_inspection_are_advisory_and_keep_exact_labels() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(4), false).unwrap();
+    for (disk, bad) in [(1, &[1, 2, 3][..]), (2, &[1][..])] {
+        let t = begin(&mut c, Station::Usb, disk).unwrap();
+        evidence(&p, &t, 1, bad);
+        c.complete(&t, 1).unwrap();
+        c.removed(&t, true).unwrap();
+    }
+    let state = c.status();
+    let action = next_action(&state, Station::Greaseweazle, None);
+    assert!(action.starts_with("MOVE recommended USB partial 002"));
+    assert!(action.contains("g2") && action.contains("fresh 003"));
+    assert!(
+        next_action(&state, Station::Greaseweazle, Some((4, "saved")))
+            .contains("NEXT recommended USB partial 002")
+    );
+    let before = fs::read(p.root().join(".fluxvault-production.json")).unwrap();
+    for json_output in [false, true] {
+        let mut args = vec!["production".into(), "queue".into()];
+        if json_output {
+            args.push("--json".into());
+        }
+        let result = super::super::run(&args, p.root()).unwrap();
+        assert_eq!(result.exit_code, 0);
+        if json_output {
+            let result: Value = serde_json::from_str(&result.output).unwrap();
+            assert_eq!(result["recommended_gw_disk"], 2);
+            assert_eq!(result["physical_media_access"], false);
+        } else {
+            assert!(result.output.contains("1. Disk 002") && result.output.contains("2. Disk 001"));
+            assert!(result.output.contains("heuristic, not a yield guarantee"));
+        }
+    }
+    assert_eq!(
+        fs::read(p.root().join(".fluxvault-production.json")).unwrap(),
+        before
+    );
+    assert!(c.held(Station::Greaseweazle).is_none());
+    let t = begin(&mut c, Station::Greaseweazle, 1).unwrap(); // Explicit availability wins.
+    assert_eq!(t.disk, 1);
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
 fn pause_preserves_saved_custody_and_resume_itself_launches_no_reader() {
     let p = project();
     let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();

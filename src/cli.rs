@@ -76,6 +76,7 @@ Usage:
   fluxvault scan --double --plan [--last-disk N]
                                     Offline dual-station preview; no drives opened
   fluxvault production status       Inspect saved coordinator state offline
+  fluxvault production queue        Rank saved USB partials for GW; no physical read
   fluxvault production benchmark    Inspect durable dual-session timings offline
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
                                     Guided read-only USB loop; confirm each numbered label
@@ -716,12 +717,18 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 ))
             }
         }
-        Some("production") if positional == ["production", "status"] && destination.is_none() => {
+        Some("production")
+            if (positional == ["production", "status"]
+                || positional == ["production", "queue"])
+                && destination.is_none() =>
+        {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let state = crate::production::status(&project)?;
             if json_output {
                 Ok(state.to_string())
+            } else if positional[1] == "queue" {
+                Ok(dual_scan::saved_queue(&state))
             } else {
                 Ok(dual_scan::saved_status(&state))
             }

@@ -408,9 +408,13 @@ fn next_action(state: &Value, station: Station, held: Option<(u32, &str)>) -> St
             }
             "saved" => {
                 let followup = if paused {
-                    "RESUME required before another read"
+                    "RESUME required before another read".into()
+                } else if station == Station::Greaseweazle {
+                    recommended_transfer(state).map_or("or feed NEXT FRESH".into(), |n| {
+                        format!("NEXT recommended USB partial {n:03} (g{n})")
+                    })
                 } else {
-                    "or feed NEXT FRESH"
+                    "or feed NEXT FRESH".into()
                 };
                 let partial = station == Station::Usb
                     && state["usb_transfer_pending"]
@@ -429,16 +433,53 @@ fn next_action(state: &Value, station: Station, held: Option<(u32, &str)>) -> St
     }
     let fresh = state["next_fresh_disk"].as_u64();
     let transfer = (station == Station::Greaseweazle)
-        .then(|| state["usb_transfer_pending"].as_array()?.first()?.as_u64())
+        .then(|| recommended_transfer(state))
         .flatten();
     match (fresh, transfer) {
         (Some(n), Some(old)) => format!(
-            "INSERT fresh {n:03} in {name} ({prefix}{n}), or MOVE USB partial {old:03} to GW (g{old}); open tab"
+            "MOVE recommended USB partial {old:03} to GW (g{old}), or INSERT fresh {n:03} ({prefix}{n}); open tab"
         ),
         (Some(n), None) => format!("INSERT fresh {n:03} in {name}, open tab, then {prefix}{n}"),
         (None, Some(old)) => format!("MOVE USB partial {old:03} to GW, open tab, then g{old}"),
         (None, None) => "NO FRESH DISKS / station ready".into(),
     }
+}
+
+fn recommended_transfer(state: &Value) -> Option<u64> {
+    // Older synthetic/status clients may lack the additive ranking field.
+    state["recommended_gw_disk"]
+        .as_u64()
+        .or_else(|| state["usb_transfer_pending"].as_array()?.first()?.as_u64())
+}
+
+pub(super) fn saved_queue(state: &Value) -> String {
+    if state["initialized"] != true {
+        return "No dual recovery queue initialized. No physical media accessed.".into();
+    }
+    let mut lines = vec![format!(
+        "GW recovery priority (saved evidence; {}):",
+        state["recovery_priority_policy"]
+            .as_str()
+            .unwrap_or("legacy")
+    )];
+    if state["paused"] == true {
+        lines.push("FEEDING PAUSED; recommendations do not authorize a read.".into());
+    }
+    if let Some(queue) = state["recovery_priorities"].as_array() {
+        for (rank, r) in queue.iter().enumerate() {
+            let number = r["disk"].as_u64().unwrap_or(0);
+            lines.push(format!("{}. Disk {number:03}: {} missing / {} sectors; {}. g{number} confirms the exact transferred label.\n   {}",
+                rank + 1, r["missing_sectors"], r["total_sectors"],
+                if r["availability"] == "ready" { "set aside / removal confirmed" }
+                else { "still held in USB / explicit physical transfer required" },
+                r["reason"].as_str().unwrap_or("")));
+        }
+        if queue.is_empty() {
+            lines.push("No pending USB-to-GW transfers.".into());
+        }
+    }
+    lines.push("Priority is a heuristic, not a yield guarantee. Any available queued label can override the recommendation. No custody changed or physical media accessed.".into());
+    lines.join("\n")
 }
 
 fn held_in_state(state: &Value, station: Station) -> Option<(u32, &str)> {
@@ -665,6 +706,14 @@ fn feed(
                         result.and_then(|_| display(&session, output, color, draining))
                     }
                     Ok(Command::Read(station, disk)) => {
+                        let before = session.coordinator.status();
+                        let priority = before["recovery_priorities"]
+                            .as_array()
+                            .and_then(|q| {
+                                q.iter()
+                                    .find(|r| r["disk"].as_u64() == Some(u64::from(disk)))
+                            })
+                            .cloned();
                         match begin(&mut session.coordinator, station, disk) {
                             Err(e) => Err(e),
                             Ok(ticket) => {
@@ -673,7 +722,9 @@ fn feed(
                                     crate::dual_benchmark::record(
                                         log,
                                         "dual_read_started",
-                                        json!({"disk":ticket.disk,"station":station_name(ticket.station),"generation":ticket.generation,"work":ticket.work,"retry":ticket.retry}),
+                                        json!({"disk":ticket.disk,"station":station_name(ticket.station),"generation":ticket.generation,"work":ticket.work,"retry":ticket.retry,
+                                            "recommended_gw_disk":before["recommended_gw_disk"],
+                                            "selected_recovery_priority":priority}),
                                     )?;
                                 }
                                 let read = reader.clone();
@@ -758,7 +809,8 @@ fn feed(
                                 "dual_receipt_saved",
                                 json!({"disk":ticket.disk,"station":station_name(ticket.station),"generation":ticket.generation,
                                 "attempt":done.attempt,"image_sha256":a.sha256,"bad_sectors":a.bad_sectors.len(),"read_decode_ms":read_ms,
-                                "gw_physical_reads_reported":done.flux.as_ref().map(|f| f.physical_reads_this_run)}),
+                                "gw_physical_reads_reported":done.flux.as_ref().map(|f| f.physical_reads_this_run),
+                                "usb_triage":session.coordinator.status()["disks"][ticket.disk.to_string()]["usb_triage"]}),
                             )?;
                         }
                         if let Some(queue) = processing

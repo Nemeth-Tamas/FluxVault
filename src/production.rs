@@ -1,5 +1,6 @@
 //! First dual-station coordinator slice. No physical backend is launched here.
 //! One owner serializes durable transitions; station work runs outside its lock.
+pub use crate::production_priority::{Availability, Recommendation, UsbRoute, UsbTriage};
 use crate::{imaging, project::ProjectState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -73,6 +74,8 @@ struct Disk {
     usb: Option<Receipt>,
     gw: Option<Receipt>,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usb_triage: Option<UsbTriage>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -207,6 +210,26 @@ fn validate(j: &Journal) -> Result<(), String> {
                 {
                     return Err("Invalid production evidence receipt".into());
                 }
+            }
+        }
+        if let Some(triage) = &disk.usb_triage {
+            let usb = disk.usb.as_ref().ok_or("USB triage lacks its receipt")?;
+            if triage.saved_generation == 0
+                || triage.saved_generation > j.generation
+                || *triage
+                    != UsbTriage::new(
+                        usb.attempt,
+                        usb.sha256.clone(),
+                        usb.sectors,
+                        usb.bad.len(),
+                        triage.saved_generation,
+                    )
+                || (disk.phase == Phase::Saved
+                    && disk.ticket.as_ref().is_some_and(|t| {
+                        t.station == Station::Usb && t.generation != triage.saved_generation
+                    }))
+            {
+                return Err("USB triage disagrees with sealed receipt/policy/generation".into());
             }
         }
         let expected = if disk.gw.is_some() {
@@ -581,6 +604,7 @@ impl Coordinator {
             usb: None,
             gw: None,
             error: None,
+            usb_triage: None,
         });
         d.phase = Phase::Reserved;
         d.ticket = Some(ticket.clone());
@@ -696,7 +720,16 @@ impl Coordinator {
         }
         let d = Self::current(&mut j, ticket, Phase::Reading)?;
         match ticket.station {
-            Station::Usb => d.usb = Some(r),
+            Station::Usb => {
+                d.usb_triage = Some(UsbTriage::new(
+                    r.attempt,
+                    r.sha256.clone(),
+                    r.sectors,
+                    r.bad.len(),
+                    ticket.generation,
+                ));
+                d.usb = Some(r);
+            }
             Station::Greaseweazle => d.gw = Some(r),
         }
         d.phase = Phase::Saved;
@@ -752,6 +785,7 @@ impl TransferGuard {
 }
 
 fn status_value(j: &Journal) -> Value {
+    let ranked = recovery_priorities(j);
     let unclaimed = j.last.map(|last| {
         let occupied = j
             .occupied
@@ -774,6 +808,9 @@ fn status_value(j: &Journal) -> Value {
         })
         .count();
     json!({"schema":1,"paused":j.paused,"next_fresh_disk":next(j),"first":j.first,"last":j.last,
+        "recovery_priority_policy":crate::production_priority::POLICY,
+        "recovery_priorities":ranked,
+        "recommended_gw_disk":ranked.first().map(|r| r.disk),
         "remaining_unclaimed_fresh_labels":unclaimed,"pending_initial_reads":initial_pending,
         "usb_recovery_queue":j.disks.iter().filter(|(_, d)| d.phase==Phase::AwaitGw).map(|(n, _)| *n).collect::<Vec<_>>(),
         // A saved partial still held in USB is transferable by gNNN, but not
@@ -784,6 +821,38 @@ fn status_value(j: &Journal) -> Value {
                 && d.usb.as_ref().is_some_and(|r| !r.bad.is_empty())))
             .map(|(n, _)| *n).collect::<Vec<_>>(),
         "disks":j.disks,"live_dual_adapter_ready":true,"physical_media_access":false})
+}
+
+fn recovery_priorities(j: &Journal) -> Vec<Recommendation> {
+    let candidates = j
+        .disks
+        .iter()
+        .filter_map(|(disk, d)| {
+            let usb = d.usb.as_ref()?;
+            if usb.bad.is_empty() || d.gw.is_some() {
+                return None;
+            }
+            let availability = if d.phase == Phase::AwaitGw {
+                Availability::Ready
+            } else if d.phase == Phase::Saved
+                && d.ticket.as_ref().is_some_and(|t| t.station == Station::Usb)
+            {
+                Availability::HeldInUsb
+            } else {
+                return None;
+            };
+            Some(crate::production_priority::Candidate {
+                disk: *disk,
+                attempt: usb.attempt,
+                image_sha256: &usb.sha256,
+                total_sectors: usb.sectors,
+                bad: &usb.bad,
+                availability,
+                saved_generation: d.usb_triage.as_ref().map(|t| t.saved_generation),
+            })
+        })
+        .collect();
+    crate::production_priority::rank(candidates, j.generation)
 }
 
 /// Read-only inspection: no lock/control creation, backend probing or media read.

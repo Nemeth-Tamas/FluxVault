@@ -35,6 +35,7 @@ pub mod pipeline;
 pub mod process_supervision;
 pub mod processing;
 pub mod production;
+mod production_priority;
 pub mod project;
 mod project_work;
 pub mod recovery_backup;

@@ -145,6 +145,116 @@ impl Drop for Running {
     }
 }
 
+fn seed_usb_partial(project: &ProjectState, disk: u32, bad: &[u64]) {
+    use sha2::{Digest, Sha256};
+    let mut image = vec![0xe5; 2880 * 512];
+    for lba in bad {
+        image[*lba as usize * 512..(*lba as usize + 1) * 512].fill(0);
+    }
+    let sha = format!("{:x}", Sha256::digest(&image));
+    let stem = format!("{disk:03}_attempt_001");
+    fs::write(project.images_dir().join(format!("{stem}.img")), image).unwrap();
+    let log = project.logs_dir().join(format!("{stem}.log"));
+    let mut text = format!(
+        "BEGIN | disk={disk} | attempt=1 | source=windows-raw-sector\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track=18 | bytes_per_sector=512 | total_sectors=2880 | total_bytes=1474560\n"
+    );
+    for lba in bad {
+        text.push_str(&format!("BAD_SECTOR | LBA={lba}\n"));
+    }
+    text.push_str(&format!(
+        "END | status=PARTIAL | bytes=1474560 | sha256={sha}\n"
+    ));
+    fs::write(&log, text).unwrap();
+    fs::write(project.images_dir().join(format!("{stem}.json")), serde_json::to_vec(&json!({
+        "fluxvault_version":"fixture", "status":"PARTIAL", "disk_number":disk,"attempt_number":1,
+        "source_backend":"windows-raw-sector","source_device":"mock only","image_file":format!("{stem}.img"),"log_file":log,
+        "timestamp_unix_ms":1,"geometry":{"cylinders":80,"heads":2,"sectors_per_track":18,"bytes_per_sector":512,"total_bytes":1474560,"format_guess":"synthetic"},
+        "sector_retries":0,"total_sectors":2880,"bytes_written":1474560,"retry_recovered_sectors":0,"bad_sector_count":bad.len(),
+        "bad_sectors":bad.iter().map(|l|json!({"lba":l,"cylinder":l/36,"head":(l%36)/18,"sector":l%18+1})).collect::<Vec<_>>(),"sha256":sha
+    })).unwrap()).unwrap();
+}
+
+#[test]
+fn real_cli_reports_ranked_queue_and_audits_explicit_override_with_mock_gw() {
+    use fluxvault::production::{Coordinator, Station};
+    let f = Fixture::new();
+    let mut c = Coordinator::open(f.project.clone(), Some(3), false).unwrap();
+    for (disk, bad) in [(1, &[1, 2, 3][..]), (2, &[1][..])] {
+        let t = c.claim(Station::Usb, disk).unwrap();
+        c.confirm(&t, &disk.to_string(), true).unwrap();
+        seed_usb_partial(&f.project, disk, bad);
+        c.complete(&t, 1).unwrap();
+        c.removed(&t, true).unwrap();
+    }
+    drop(c);
+    let before = fs::read(f.project.root().join(".fluxvault-production.json")).unwrap();
+    let output = f
+        .command()
+        .args(["production", "queue", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let queue: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(queue["recommended_gw_disk"], 2);
+    assert_eq!(queue["physical_media_access"], false);
+    assert_eq!(
+        fs::read(f.project.root().join(".fluxvault-production.json")).unwrap(),
+        before
+    );
+    assert_eq!(
+        imaging::load_project_statistics(&f.project.images_dir())
+            .unwrap()
+            .total_attempts,
+        2
+    );
+    let mut run = f.start(true);
+    run.send("g1"); // Lower-ranked label is valid; no actual USB/hardware invocation.
+    f.wait(1, "saved");
+    run.send("QUIT");
+    let (code, value, console) = run.finish();
+    assert_eq!(code, 3, "{console}"); // Disk 002 is still queued.
+    assert_eq!(value["state"]["recommended_gw_disk"], 2);
+    assert_eq!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 2)
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut start_event = None;
+    for entry in fs::read_dir(f.project.logs_dir().join("DualBenchmark")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        for line in fs::read_to_string(path).unwrap().lines() {
+            let event: Value = serde_json::from_str(line).unwrap();
+            if event["kind"] == "dual_read_started" {
+                start_event = Some(event);
+            }
+        }
+    }
+    let event = start_event.expect("selection telemetry missing");
+    assert_eq!(event["data"]["disk"], 1);
+    assert_eq!(event["data"]["recommended_gw_disk"], 2);
+    assert_eq!(event["data"]["selected_recovery_priority"]["disk"], 1);
+    assert_eq!(
+        event["data"]["selected_recovery_priority"]["availability"],
+        "ready"
+    );
+    assert!(
+        event["data"]["selected_recovery_priority"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not recovery success")
+    );
+}
+
 #[test]
 fn dual_cli_mock_gw_publishes_once_packs_and_holds_usb_across_projects() {
     let f = Fixture::new();

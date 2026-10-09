@@ -99,6 +99,7 @@ Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count 
 | --- | --- |
 | Inspect attempts/LBAs/hashes | `fv disk show 59 --details` |
 | Background progress | `fv processing status` |
+| Next set-aside USB disk recommended for GW (dual scan) | `fv production queue` |
 | Process saved images through full chain | `fv process` |
 | Request 12 Office workers offline | `fv process --conversion-workers 12` |
 | Native partial-file recovery | `fv recovery extract 59` |

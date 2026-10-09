@@ -119,6 +119,31 @@ The live small-cohort result above validates concurrent hardware and one USB-to-
 
 USB-to-GW extraction attempt changes exposed source-path-only conversion reuse: 59 already hash-bound conversions were incorrectly flagged unbound. The fix matches exact source bytes, disk/relative delivery identity, output paths and conversion formats/filters across attempts; bounded historical fallback checks successful recorded output hashes. Changed/unbound output remains preserved/refused. Offline replay of this saved project now has **168/168 successful conversion jobs**, 21 verified disks / two genuine partials, and all **1,333 existing evidence/payload artifacts unchanged**. No reread is needed; the original DualScan report stays historical, refreshed processing/audit reports show the correction.
 
-## Later: a second USB station
+## Automatic USB triage and GW recovery priority (2026-10-09)
 
-One GW plus two independent USB drives is a reasonable extension, not supported by today's `--double` command. The coordinator currently has exactly `Usb`/`Greaseweazle` identities and one USB receipt per label. Generalize station IDs/configuration, per-device reservations and protection checks, shared-number claim/custody journals, interrupted resume, transfer routing and timing reports before adding a third reader. Preserve old two-station journals. Each USB partial must retain its own origin when moved to GW; all stations must share one project owner and downstream queue, not competing console scans. The additional drive may improve fresh-feed throughput, but GW recovery and conversion/storage can become bottlenecks, so benchmark rather than assuming proportional speed.
+No additional option or policy file is needed. New completed USB receipts record `usb-fast-pass-priority-v1`: zero missing sectors finishes USB acquisition; any missing sectors routes to GW without another USB pass. Read failures stay interrupted. A clean acquisition is not certification of every extracted file; severe/all-bad images are not declared beyond GW recovery merely because USB failed.
+
+When GW is ready, its blue ACTION line recommends a pending USB partial before offering another fresh label. You can still type any eligible `gN` if a different set-aside disk is easier to reach. Nothing reads automatically: check the physical label/open tab, insert it, then type its exact number. A recommendation never releases a disk still held in USB; `gN` explicitly confirms its physical transfer as before. Active/interrupted GW custody always takes precedence over another suggestion; PAUSE still blocks new reads.
+
+Inspect priorities from another terminal without a floppy or tool probe:
+
+```powershell
+fv production queue
+fv production queue --json
+```
+
+Removal-confirmed entries rank before still-held USB partials. Within each availability group, base scores are 500 for one/two missing sectors, 400 for 3–18, 250 for larger counts up to 10% of sectors, otherwise 100. Missing boot sector adds 50; each later ticket generation adds 10, capped at 640, allowing older severe cases to overtake newer easy ones. Ties favor longer known queue age then disk number. These are transparent scheduling heuristics, not predicted yield or sector-quality measurements. Age counts later claims, not minutes; older journals have unknown age and receive no invented bonus. No FAT-layout/file-value guess is made from a bad boot sector.
+
+The original numeric `usb_recovery_queue`/`usb_transfer_pending` fields retain their custody meaning/order. Additive `recovery_priorities`/`recommended_gw_disk` fields explain recommendation inputs, original image hash/attempt, severity, availability, age, score and limitations. New journals persist sealed `usb_triage`; legacy journals remain readable with unknown age. Dual timing logs retain the pre-selection recommendation/chosen priority and completed USB triage; an explicit lower-ranked selection is auditable. Edited images/maps/triage or unsafe controls are refused by the existing evidence checks.
+
+Routine coverage includes deterministic rank/age/boot/custody tests, reopen/tamper refusal, exact-label override, an actual CLI run using mock GW with no USB read, and the reopenable 136-label/14-transfer model now consuming ranked work. Recommendations operate on sealed in-memory maps during live display, not repeated image hashing on every heartbeat. Offline inspection revalidates receipts. This is not a new physical yield/throughput result.
+
+## Hardware scope: USB + one GW drive
+
+Corrected 2026-10-08: the proposed three-station USB + GW A/B extension is withdrawn. Keep the existing single-GW workflow and opt-in `--double` for one USB + one GW drive, with shared recovery transfers and background processing. A later optional `--trio` for two USB + one GW is under consideration, not implemented or the next priority; it would require independent USB station identities/reservations/receipts, compatible journals and a shared GW queue, not competing scans.
+
+Upstream's [drive-selection documentation](https://github.com/keirf/greaseweazle/wiki/Drive-Select) describes multiple drives on a shared cable, not simultaneous captures. The [firmware](https://github.com/keirf/greaseweazle-firmware/blob/master/src/floppy.c) tracks one selected `unit_nr`, calls `drive_deselect()` before selecting another drive, and has one flux-operation/capture state. This supports the conclusion that the existing board/firmware has no supported simultaneous A/B capture path; launching two host processes is not a workaround. Alternating drives is explicitly outside the requested expansion goal. Preserve the board-wide reservation.
+
+True concurrent GW acquisition would require independent capture hardware, such as another controller; that is an architectural alternative, not an approved purchase or implementation plan. Next-session priorities return to existing production automation, recovery and acceptance. The Samsung remains unqualified because of possible track misalignment; later use needs read-only checks of both heads and inner/outer tracks against trusted references.
+
+The soft target is **2026-10-15** for most core production functionality and practical validation; finishing polish can continue afterward. See `TODO.md` for the agreed priorities.
