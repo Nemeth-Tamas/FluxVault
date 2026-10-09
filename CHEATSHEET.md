@@ -123,6 +123,8 @@ Native generation 5 / Word-text engine 2 automatically adds evidenced lost-direc
 
 ### Settings and diagnostics
 
+`fv diagnose 59` inspects saved raw/packed captures and decode passes, replays final sector provenance and exports a short recovery note plus track/sector CSV and JSON. No floppy or host tool needed; exit `3` means attention/partial. [How to read it](FLUX_DIAGNOSTICS.md).
+
 USB-only: `fv scan --usb --count 20 --write-blocker-verified` (default A:, same protection checks; type the number). Two-drive **pilot**: `fv scan --double --write-blocker-verified --last-disk 10`, then `u7` / `g8` for USB/GW labels, `gOLD` for a queued USB partial, `u out` / `g out` after the last saved disks, `QUIT` to drain. Use a small new project first; dual rejects `--no-verify`. Ordinary scan stays GW-only. [Copyable 007–010 test](DUAL_SCAN.md).
 
 Dual-only break commands: `p` pauses new reads (current reads and files finish); `r` resumes confirmations, starting no read itself. The pause survives restart. Always wait for **SAVED** before removal, even while paused. `s` shows each station's next physical action and pending USB transfers.

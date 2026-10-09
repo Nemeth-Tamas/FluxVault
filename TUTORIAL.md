@@ -242,6 +242,8 @@ The ZIP is read, not modified. On **comparison**, `--include-deleted` changes sc
 
 ## Troubleshooting
 
+For a difficult **saved** disk, `fv diagnose 59` produces a short recovery note and detailed track/pass/sector data without reading it again. See [saved-flux diagnostics](FLUX_DIAGNOSTICS.md); this is optional investigation, not another required scan step.
+
 | Symptom | Next step |
 | --- | --- |
 | `fv` not recognized | Reopen PowerShell after installation, or use `& $fv` with the executable path. |

@@ -14,6 +14,7 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 | Set up; just need commands | [Cheat sheet](CHEATSHEET.md) |
 | Want optional settings and individual tools | [Advanced tutorial](TUTORIAL.md#advanced-optional-controls) and [CLI reference](CLI.md) |
 | Running a measured batch | [136-disk runbook](PILOT_136.md) or [small-test launcher](TOMORROW_TEST.md) |
+| Understand a difficult saved disk | [Saved-flux diagnostics](FLUX_DIAGNOSTICS.md): `fv diagnose 59` |
 | Want development status | [Progress](PROGRESS.md) and [TODO](TODO.md) |
 
 ## Beginner: the usual workflow

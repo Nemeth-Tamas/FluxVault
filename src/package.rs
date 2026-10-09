@@ -654,6 +654,12 @@ mod tests {
         fs::write(windows_metadata.join("IndexerVolumeGuid"), b"OS metadata").unwrap();
         fs::write(project.join("Reports").join("EvidenceAudit.csv"), b"audit").unwrap();
         fs::create_dir_all(project.join("Reports/ConversionHistory")).unwrap();
+        fs::create_dir_all(project.join("Reports/FluxDiagnostics")).unwrap();
+        fs::write(
+            project.join("Reports/FluxDiagnostics/001-test.json"),
+            b"internal diagnostics",
+        )
+        .unwrap();
         fs::write(
             project.join("Reports/ConversionHistory/ConversionState-test.json"),
             b"internal state",
@@ -733,6 +739,10 @@ mod tests {
                 .is_err()
         );
         assert!(zip.by_name("Reports/private-working-note.txt").is_err());
+        assert!(
+            zip.by_name("Reports/FluxDiagnostics/001-test.json")
+                .is_err()
+        );
         assert!(
             zip.by_name("Reports/ConversionHistory/ConversionState-test.json")
                 .is_err()

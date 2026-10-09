@@ -10,12 +10,19 @@ For your first run, use [the beginner tutorial](TUTORIAL.md). For daily commands
 - [USB acquisition: optional advanced path](#usb-acquisition-optional-advanced-path)
 - [Tools and expert Greaseweazle operations](#tools-and-expert-greaseweazle-operations)
 - [Native saved-file recovery](#native-file-recovery-from-damaged-saved-images)
+- [Saved-flux diagnostics](#saved-flux-diagnostics)
 
 Examples use PowerShell. `fv` and `fluxvault` are identical aliases. Physical acquisition examples need an identified protected floppy; saved-image processing never needs one inserted.
 
 ## Everyday short workflow
 
 The installer provides both `fluxvault.exe` and the identical short alias `fv.exe`. `fv init`, `fv status`, and `fv scan` work from the project folder. Plain `scan` uses Greaseweazle; explicit `scan --drive A:` (or USB protection/retry flags) retains the existing guarded USB workflow.
+
+## Saved-flux diagnostics
+
+`fv diagnose N` (also `fv greaseweazle diagnose N`) exports saved raw/packed SCP track/revolution measurements, per-track vendor-reported sector counts, pass improvements/losses/conflicts and independently replayed committed sector provenance. The human response prints recovery-note, CSV and JSON paths under `Reports/FluxDiagnostics`; `--json` returns paths/hash/counts/attention. No device or host tool is invoked, and no recovery/delivery choice changes. Code `3` indicates partial/standalone/diagnostic attention; committed hash/provenance mismatches are errors. Physical flags are rejected. [Interpretation, bounds and saved validation](FLUX_DIAGNOSTICS.md).
+
+## Everyday scan controls
 
 GW scans reuse saved defaults for omitted profile/map, selector, policy, endpoint, storage/processing mode and conversion workers. Explicit overrides remain subject to pending-job consistency checks. Fresh projects default to selector B, automatic IBM 720 KB/1.44 MB discovery, verified packed retention, background saved-file processing, the built-in policy, four workers and no endpoint. Numbered input asserts label/protection checks; individual capture/recover still require `--source-write-protected`. `004` or `4` confirms 004; `QUIT`/`Q` stops. Blank/wrong-number input refuses reads by default. Legacy `READ 004` is accepted. See [POLICIES.md](POLICIES.md).
 

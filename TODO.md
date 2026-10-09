@@ -361,14 +361,16 @@ The target setup has two different drives working simultaneously on different fl
 
 ## 12. “Mini electron microscope the shit out of it” flux recovery diagnostics
 
-- [ ] Track/head map for raw-flux capture quality.
+- [x] Track/head map for raw-flux capture quality. `fv diagnose N` exports capture availability and bounded per-revolution transition/pulse/index/RPM measurements from verified raw or packed SCP; measurements are not magnetic quality, alignment or CRC certification.
 - [ ] Per-track decoded sector summary: present, valid CRC, bad CRC, missing, duplicates/unusual IDs where available.
-- [ ] Compare multiple revolutions/passes through text/JSON diagnostics and exportable data.
+  - Implemented per-track vendor-reported good/unavailable/unobserved summaries. The saved host map combines bad CRC/missing; per-revolution CRC and duplicate/unusual IDs remain explicitly unknown, so the richer decoder requirement stays open.
+- [x] Compare multiple revolutions/passes through text/JSON diagnostics and exportable data. Export raw revolution measurements, profile-separated decode changes/conflicts and replayed final-sector CSV; targeted unobserved tracks never become false losses.
 - [ ] Report weak/problematic regions and which decode attempt recovered each sector.
-- [ ] Re-run decode from the same raw flux with alternate Greaseweazle profile/settings without touching the physical disk.
+  - Implemented exact missing/conflicting LBA/CHS and supporting capture/decode identities, including distinct raw-hash counts. Physical weak-bit/local timing classification remains open; raw pulse statistics alone are not proof.
+- [x] Re-run decode from the same raw flux with alternate supported Greaseweazle profile without touching the physical disk. Existing immutable offline `greaseweazle decode N --capture-attempt N --profile ...` is tested with separate profile diagnostic histories; arbitrary extra decoder-setting search remains outside this command.
 - [ ] Compare results from USB-sector reads versus Greaseweazle-derived sector images.
-- [ ] Composite/reconstruction tools must retain provenance and never masquerade reconstructed bytes as an untouched original capture.
-- [ ] Export a recovery note describing what was physical capture, decoded data, retry-recovered data, and reconstructed/composited data.
+- [x] Composite/reconstruction tools must retain provenance and never masquerade reconstructed bytes as an untouched original capture. Existing DERIVED handoff/provenance tests plus independent diagnostic final-sector/image replay, managed-path refusal and changed-provenance refusal enforce this distinction.
+- [x] Export a recovery note describing what was physical capture, decoded data, retry-recovered data, and reconstructed/composited data. Saved diagnostics list committed missing/conflicting LBAs, pass changes and evidence boundaries; derived/reconstructed bytes remain separately labelled, never new original observations. See `FLUX_DIAGNOSTICS.md`.
 
 ## 13. Legacy Office conversion pipeline
 

@@ -86,7 +86,7 @@ impl RecoveryPolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Stage {
     capture_attempt: u32,
     decode_attempt: Option<u32>,
@@ -997,6 +997,132 @@ pub(crate) fn verify_completed_result(
         return Err("Completed recovery output changed; disk numbering not advanced".to_owned());
     }
     Ok(())
+}
+
+/// Diagnostic replay binds the exact journal and compares the published sector
+/// provenance/image with a fresh aggregation, rather than trusting labels alone.
+pub(crate) fn diagnostic_binding(
+    project: &ProjectState,
+    disk: u32,
+) -> Result<Option<serde_json::Value>, String> {
+    let flux = flux_capture::project_flux_dir(project)?;
+    let path = flux.join("Recovery").join(format!("{disk:03}_job.json"));
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(info) if !info.file_type().is_file() || info.len() > 1024 * 1024 => {
+            return Err("Unsafe diagnostic recovery journal".into());
+        }
+        _ => {}
+    }
+    let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+    if canonical.parent().and_then(|p| p.parent()) != Some(flux.as_path()) {
+        return Err("Diagnostic recovery journal escapes Flux".into());
+    }
+    let bytes = fs::read(&canonical).map_err(|e| e.to_string())?;
+    let journal_hash = format!("{:x}", Sha256::digest(&bytes));
+    let job: Journal = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if job.schema_version != 1 || job.disk != disk {
+        return Err("Diagnostic journal identity mismatch".into());
+    }
+    job.policy.validate()?;
+    if job.stages.len() > job.policy.passes.len()
+        || job
+            .stages
+            .iter()
+            .map(|s| s.capture_attempt)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != job.stages.len()
+    {
+        return Err("Invalid/bounded diagnostic stage identities".into());
+    }
+    for stage in &job.stages {
+        stage.settings.validate()?;
+        if stage.capture_attempt == 0 || stage.decode_attempt == Some(0) {
+            return Err("Invalid diagnostic stage number".into());
+        }
+    }
+    let mut sectors = serde_json::Value::Null;
+    if let Some(result) = &job.result {
+        if result.disk != disk {
+            return Err("Diagnostic result identity mismatch".into());
+        }
+        for (path, parent) in [
+            (
+                &result.provenance,
+                flux.join(if result.format_exception.is_some() {
+                    "Formats"
+                } else {
+                    "Recovery"
+                }),
+            ),
+            (&result.image, project.images_dir()),
+        ] {
+            if path.as_os_str().is_empty() {
+                continue;
+            }
+            let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+            if canonical.parent()
+                != Some(parent.canonicalize().map_err(|e| e.to_string())?.as_path())
+            {
+                return Err("Diagnostic result points outside its managed directory".into());
+            }
+        }
+        if result.format_exception.is_none() {
+            let profile = GreaseweazleProfile::parse(&job.profile)?;
+            if fs::metadata(&result.image)
+                .map_err(|e| e.to_string())?
+                .len()
+                != profile.expected_sector_image_bytes()
+                || fs::metadata(&result.provenance)
+                    .map_err(|e| e.to_string())?
+                    .len()
+                    > 4 * 1024 * 1024
+            {
+                return Err("Diagnostic final artifact exceeds expected bounds".into());
+            }
+        }
+        verify_completed_result(project, result)?;
+        if result.format_exception.is_none() {
+            let evidence = aggregate(
+                project,
+                disk,
+                GreaseweazleProfile::parse(&job.profile)?,
+                &job.stages,
+            )?;
+            if evidence.missing != result.missing_lbas
+                || evidence.conflicts != result.conflicting_lbas
+                || format!("{:x}", Sha256::digest(&evidence.bytes)) != result.image_sha256
+            {
+                return Err("Published recovery image disagrees with replayed sectors".into());
+            }
+            let info = fs::symlink_metadata(&result.provenance).map_err(|e| e.to_string())?;
+            if !info.file_type().is_file() || info.len() > 4 * 1024 * 1024 {
+                return Err("Unsafe diagnostic provenance".into());
+            }
+            let published: serde_json::Value =
+                serde_json::from_slice(&fs::read(&result.provenance).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            sectors = serde_json::to_value(&evidence.sectors).map_err(|e| e.to_string())?;
+            if published["disk"] != disk
+                || published["profile"] != job.profile
+                || published["image_sha256"] != result.image_sha256
+                || published["sectors"] != sectors
+                || serde_json::from_value::<Vec<Stage>>(published["stages"].clone())
+                    .map_err(|e| e.to_string())?
+                    != job.stages
+            {
+                return Err("Published recovery provenance disagrees with replay".into());
+            }
+        }
+    }
+    if hash_path(&canonical)? != journal_hash {
+        return Err("Recovery journal changed during diagnostics".into());
+    }
+    Ok(Some(
+        json!({"journal":canonical,"journal_sha256":journal_hash,"profile":job.profile,"stages":job.stages,"result":job.result,"sectors":sectors}),
+    ))
 }
 fn verify_format_exception(
     project: &ProjectState,

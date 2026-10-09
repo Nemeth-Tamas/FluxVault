@@ -96,6 +96,7 @@ Usage:
   fluxvault greaseweazle identify N [--capture-attempt N]
                                     Identify supported IBM format from saved whole-disk flux offline
   fluxvault greaseweazle status N   Verify saved flux/decode evidence without hardware
+  fluxvault diagnose N             Export saved track/revolution/pass/sector diagnostics
   fluxvault greaseweazle compare N  Compare saved USB and flux sectors offline, read-only
   fluxvault greaseweazle consensus N
                                     Cross-check decodes from two raw captures offline
@@ -561,6 +562,13 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         && !write_blocker_verified
     {
         positional = vec!["greaseweazle".to_owned(), "scan".to_owned()];
+    }
+    if positional.len() == 2 && positional[0] == "diagnose" {
+        positional = vec![
+            "greaseweazle".into(),
+            "diagnose".into(),
+            positional[1].clone(),
+        ];
     }
     let gw_capture =
         positional.len() == 3 && positional[0] == "greaseweazle" && positional[1] == "capture";
@@ -1177,6 +1185,41 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 gw_profile,
                 json_output,
             );
+        }
+        Some("greaseweazle")
+            if positional.len() == 3 && positional[1] == "diagnose" && destination.is_none() =>
+        {
+            let disk = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or("diagnose requires a positive disk number")?;
+            let project = ProjectState::open_without_session(resolve_project_root(
+                cwd,
+                project_override.as_deref(),
+            )?)?;
+            let result = crate::flux_diagnostics::diagnose(&project, disk)?;
+            return Ok(CliResponse {
+                output: if json_output {
+                    serde_json::to_string(&result).map_err(|e| e.to_string())?
+                } else {
+                    format!(
+                        "Disk {disk:03}: {} captures / {} decodes inspected.\nReport: {}\nTrack/revolution CSV: {}\nCommitted-sector CSV: {}\nRecovery note: {}\nSaved evidence only; no hardware/tool calls or recovery/delivery changes.{}",
+                        result.captures,
+                        result.decodes,
+                        result.report.display(),
+                        result.tracks_csv.display(),
+                        result.sectors_csv.display(),
+                        result.note.display(),
+                        if result.attention {
+                            " Diagnostic attention/partial; see note."
+                        } else {
+                            ""
+                        }
+                    )
+                },
+                exit_code: if result.attention { 3 } else { 0 },
+            });
         }
         Some("greaseweazle")
             if positional.len() == 3 && positional[1] == "status" && destination.is_none() =>
