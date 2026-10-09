@@ -744,13 +744,26 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             if json_output {
                 Ok(state.to_string())
             } else {
+                let budget = &state["worker"]["resource_budget"];
+                let budget_text = if budget.is_object() {
+                    format!(
+                        "{} foreground / {} background / {} waiting; {} background CPU slots",
+                        budget["foreground_jobs"],
+                        budget["background_jobs"],
+                        budget["waiting_jobs"],
+                        budget["background_cpu_slots"]
+                    )
+                } else {
+                    "unavailable (older/no saved snapshot)".to_owned()
+                };
                 Ok(format!(
-                    "Background processing: {}\nOwner active: {} | stale recorded stage: {}\nPending/failed jobs: {} | attention jobs: {}\nDetails: {}\nNo physical media accessed.",
+                    "Background processing: {}\nOwner active: {} | stale recorded stage: {}\nPending/failed jobs: {} | attention jobs: {}\nRecorded resource budget: {}\nDetails: {}\nNo physical media accessed.",
                     state["worker"]["stage"].as_str().unwrap_or("unknown"),
                     state["owner_active"],
                     state["stale_worker_status"],
                     state["pending"],
                     state["attention"],
+                    budget_text,
                     project
                         .reports_dir()
                         .join("ProcessingStatus.json")

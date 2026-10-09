@@ -323,7 +323,7 @@ impl Queue {
             let worker_started = std::time::Instant::now();
             let mut attempted = std::collections::BTreeSet::new();
             let publish = |stage: &str, disks: &[u32], runs: usize| -> Result<(), String> {
-                let event = json!({"schema_version":1,"updated_unix_ms":crate::external_tools::current_unix_ms(),"worker_elapsed_ms":crate::benchmark::milliseconds(worker_started.elapsed()),"stage":stage,"active_disks":disks,"runs":runs,"requested_conversion_workers":requested_workers,"effective_conversion_workers":request.conversion_workers,"physical_media_access":false});
+                let event = json!({"schema_version":1,"updated_unix_ms":crate::external_tools::current_unix_ms(),"worker_elapsed_ms":crate::benchmark::milliseconds(worker_started.elapsed()),"stage":stage,"active_disks":disks,"runs":runs,"requested_conversion_workers":requested_workers,"effective_conversion_workers":request.conversion_workers,"resource_budget":crate::resource_budget::snapshot(),"physical_media_access":false});
                 save(&status_path, &event)?;
                 writeln!(events.lock().map_err(|e| e.to_string())?, "{event}")
                     .map_err(|e| e.to_string())
@@ -366,8 +366,9 @@ impl Queue {
                             }
                         }
                     }
-                    if receiver.recv().is_err() {
-                        break;
+                    match receiver.recv_timeout(std::time::Duration::from_secs(5)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                     continue;
                 }
@@ -471,7 +472,7 @@ impl Queue {
             }
             if let Err(e) = save(
                 &status_path,
-                &json!({"schema_version":1,"stage":"stopped","updated_unix_ms":crate::external_tools::current_unix_ms(),"outcome":outcome,"physical_media_access":false}),
+                &json!({"schema_version":1,"stage":"stopped","updated_unix_ms":crate::external_tools::current_unix_ms(),"outcome":outcome,"requested_conversion_workers":requested_workers,"effective_conversion_workers":request.conversion_workers,"resource_budget":crate::resource_budget::snapshot(),"physical_media_access":false}),
             ) {
                 outcome.errors.push(e);
             }
@@ -664,7 +665,7 @@ pub(crate) fn resume(project: &ProjectState, workers: usize) -> Result<Outcome, 
     );
     save(
         &project.reports_dir().join(STATUS),
-        &json!({"schema_version":1,"stage":"stopped","updated_unix_ms":crate::external_tools::current_unix_ms(),"outcome":outcome,"physical_media_access":false}),
+        &json!({"schema_version":1,"stage":"stopped","updated_unix_ms":crate::external_tools::current_unix_ms(),"outcome":outcome,"resource_budget":crate::resource_budget::snapshot(),"physical_media_access":false}),
     )?;
     if let Some(value) = &outcome.last_result {
         record_final(project, value)?;

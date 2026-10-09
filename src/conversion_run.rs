@@ -390,11 +390,11 @@ pub(crate) fn run_conversion_mode(
         "Régi Office fájlok átalakítása: {total} fájl, legfeljebb {} párhuzamos munkaszál...",
         request.workers
     ));
-    let rows = run_bounded(
+    let rows = run_bounded_events(
         &planning.jobs,
         request.workers,
         &order,
-        |job| {
+        |job, notice| {
             let started = Instant::now();
             let selected = selected_sources
                 .as_ref()
@@ -419,6 +419,7 @@ pub(crate) fn run_conversion_mode(
                             &job.modern_format.to_ascii_lowercase(),
                             &job.modern_filter,
                             previous.map(|row| &row.modern),
+                            &notice,
                         )
                     }),
                     retry_transient_failure(|| {
@@ -429,6 +430,7 @@ pub(crate) fn run_conversion_mode(
                             "pdf",
                             &job.pdf_filter,
                             previous.map(|row| &row.pdf),
+                            &notice,
                         )
                     }),
                 )
@@ -450,6 +452,7 @@ pub(crate) fn run_conversion_mode(
             }
         },
         |completed| send_progress(completed, total),
+        send_stage,
     )?;
 
     let summary_path = request
@@ -728,12 +731,36 @@ fn balanced_job_order(estimates: &[f64]) -> Vec<usize> {
     order
 }
 
+#[cfg(test)]
 fn run_bounded<T: Sync, R: Send>(
     items: &[T],
     workers: usize,
     order: &[usize],
     work: impl Fn(&T) -> R + Sync,
     on_complete: impl Fn(usize),
+) -> Result<Vec<R>, String> {
+    run_bounded_events(
+        items,
+        workers,
+        order,
+        |item, _| work(item),
+        on_complete,
+        |_| {},
+    )
+}
+
+enum WorkerEvent<R> {
+    Complete(usize, R),
+    Stage(String),
+}
+
+fn run_bounded_events<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    order: &[usize],
+    work: impl Fn(&T, &dyn Fn(&str)) -> R + Sync,
+    on_complete: impl Fn(usize),
+    on_stage: impl Fn(&str),
 ) -> Result<Vec<R>, String> {
     if !(1..=16).contains(&workers) {
         return Err("Conversion workers must be from 1 to 16".to_owned());
@@ -763,7 +790,13 @@ fn run_bounded<T: Sync, R: Send>(
                     let slot = next.fetch_add(1, Ordering::Relaxed);
                     let Some(&index) = order.get(slot) else { break };
                     let item = &items[index];
-                    if sender.send((index, work(item))).is_err() {
+                    let notice = |message: &str| {
+                        let _ = sender.send(WorkerEvent::Stage(message.to_owned()));
+                    };
+                    if sender
+                        .send(WorkerEvent::Complete(index, work(item, &notice)))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -771,10 +804,15 @@ fn run_bounded<T: Sync, R: Send>(
         }
         drop(sender);
         let mut completed = 0;
-        for (index, result) in receiver {
-            results[index] = Some(result);
-            completed += 1;
-            on_complete(completed);
+        for event in receiver {
+            match event {
+                WorkerEvent::Complete(index, result) => {
+                    results[index] = Some(result);
+                    completed += 1;
+                    on_complete(completed);
+                }
+                WorkerEvent::Stage(message) => on_stage(&message),
+            }
         }
     });
     results
@@ -792,6 +830,7 @@ fn convert_output(
     extension: &str,
     filter: &str,
     previous: Option<&OutputResult>,
+    stage: &impl Fn(&str),
 ) -> OutputResult {
     match validate_output(target, extension) {
         Ok(true) => return reuse_if_bound(previous, target),
@@ -805,7 +844,36 @@ fn convert_output(
         Ok(false) => {}
     }
 
-    let root = std::env::temp_dir().join(format!(
+    let source_bytes = match fs::metadata(&job.source_path) {
+        Ok(info) => info.len(),
+        Err(error) => return failure(format!("Cannot estimate conversion source: {error}")),
+    };
+    let reserve = source_bytes
+        .saturating_mul(4)
+        .saturating_add(64 * crate::resource_budget::MIB);
+    let temp = std::env::temp_dir();
+    // Reuse needs no admission. Wait before scratch creation and before the
+    // host-process timeout starts; resource pressure is not an Office timeout.
+    let _budget = match crate::resource_budget::background(
+        crate::resource_budget::Kind::Office,
+        (512 * crate::resource_budget::MIB).saturating_add(
+            source_bytes
+                .saturating_mul(4)
+                .min(512 * crate::resource_budget::MIB),
+        ),
+        &[
+            (
+                target.parent().unwrap_or(&request.planning.converted_root),
+                reserve,
+            ),
+            (&temp, reserve),
+        ],
+        stage,
+    ) {
+        Ok(permit) => permit,
+        Err(error) => return failure(error),
+    };
+    let root = temp.join(format!(
         "fluxvault-office-{}-{}-{}-{}",
         std::process::id(),
         unix_ms(),
@@ -841,10 +909,11 @@ fn convert_output(
             output_directory.display().to_string(),
             job.source_path.display().to_string(),
         ];
+        let executable = external_tools::libreoffice_console_host(&request.libreoffice_executable);
         let started_unix_ms = unix_ms();
         let started = Instant::now();
         let mut child = crate::process_supervision::spawn(
-            Command::new(&request.libreoffice_executable)
+            Command::new(&executable)
                 .args(&arguments)
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr)),
@@ -883,7 +952,7 @@ fn convert_output(
             .unwrap_or_default();
         let audit = CommandAudit {
             tool: "LibreOffice conversion".to_owned(),
-            executable: request.libreoffice_executable.clone(),
+            executable,
             arguments,
             started_unix_ms,
             duration_ms: started.elapsed().as_millis(),
@@ -1190,6 +1259,32 @@ fn unix_ms() -> u64 {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn worker_wait_notices_reach_controller_before_job_completion() {
+        let rendezvous = std::sync::Barrier::new(2);
+        let notices = std::cell::RefCell::new(Vec::new());
+        let result = run_bounded_events(
+            &[7],
+            1,
+            &[0],
+            |value, notice| {
+                notice("waiting for simulated RAM");
+                rendezvous.wait();
+                *value
+            },
+            |_| {},
+            |notice| {
+                // This callback intentionally is not Sync; status publication remains
+                // on the controller, not concurrently inside Office worker threads.
+                notices.borrow_mut().push(notice.to_owned());
+                rendezvous.wait();
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec![7]);
+        assert_eq!(*notices.borrow(), vec!["waiting for simulated RAM"]);
+    }
 
     #[test]
     fn summary_output_paths_resolve_equivalent_roots_and_refuse_escape() {

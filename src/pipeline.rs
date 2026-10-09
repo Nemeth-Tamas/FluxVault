@@ -154,6 +154,12 @@ fn run_pipeline_mode(
         ));
     }
     let project = &request.project;
+    let recovery_budget = crate::resource_budget::background(
+        crate::resource_budget::Kind::Recovery,
+        256 * crate::resource_budget::MIB,
+        &[(project.root(), 1024 * crate::resource_budget::MIB)],
+        stage,
+    )?;
     let snapshot = crate::project_work::snapshot(project.root())?;
     let raw_format_exceptions = crate::flux_recovery::format_exceptions(project)?.len();
     stage("1/5: Planning safe offline recovery from saved images...");
@@ -452,6 +458,7 @@ fn run_pipeline_mode(
         &|completed, total| stage(&format!("2/5: {completed}/{total} disks processed")),
     )?;
     drop(snapshot); // Long Office work must not block the next image publication.
+    drop(recovery_budget); // Never nest a pipeline permit with Office admission.
     stage("3/5: Converting eligible legacy Office files...");
     let conversion = conversion_run::run_conversion_mode(
         &ConversionRequest {
@@ -470,6 +477,12 @@ fn run_pipeline_mode(
         &|message| stage(&format!("3/5: {message}")),
         &|completed, total| stage(&format!("3/5: {completed}/{total} conversions processed")),
         incremental,
+    )?;
+    let _audit_budget = crate::resource_budget::background(
+        crate::resource_budget::Kind::Recovery,
+        256 * crate::resource_budget::MIB,
+        &[(project.root(), 64 * crate::resource_budget::MIB)],
+        stage,
     )?;
     let _snapshot = crate::project_work::snapshot(project.root())?;
     stage("4/5: Auditing source images and managed extracted files...");

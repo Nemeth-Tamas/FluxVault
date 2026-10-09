@@ -41,5 +41,6 @@ mod project_work;
 pub mod recovery_backup;
 pub mod recovery_plan;
 pub mod report;
+mod resource_budget;
 pub mod safety;
 pub mod sector_recovery;

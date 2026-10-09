@@ -55,7 +55,7 @@ Do not add your own files to these private directories. Added entries make the d
 - Eight cross-process rounds with two simultaneous readers, repeated packer refusal while either reader remains, identical final container/binding bytes and ownership release after a queue owner's process is killed.
 - Active-reader skip, corrupt-container enqueue refusal, changed/foreign/unknown scratch preservation, malformed ZIP bindings and existing package/decode regressions.
 
-These are process-crash and injected-I/O tests, not a power-loss/storage-controller durability certification. Shared CPU/RAM/I/O adaptive budgeting remains a separate TODO.
+These are process-crash and injected-I/O tests, not a power-loss/storage-controller durability certification. Packing now participates in [shared resource admission](BACKGROUND_PROCESSING.md#automatic-resource-admission): RAM/volume-space estimates, acquisition-first CPU admission and serialized background bulk I/O. Physical throughput and hard OS resource limiting are not implied.
 
 ## Saved-capture validation, 2026-10-07
 

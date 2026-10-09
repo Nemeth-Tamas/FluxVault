@@ -375,6 +375,18 @@ pub fn pack(
     attempt: u32,
     retire_raw: bool,
 ) -> Result<PackedCapture, String> {
+    let (raw, size, _) = flux_capture::raw_identity(project, disk, attempt)?;
+    // Admission precedes the exclusive capture-storage lock: a decoder must
+    // never wait on a packer which is itself waiting for background resources.
+    let _budget = crate::resource_budget::background(
+        crate::resource_budget::Kind::Packing,
+        64 * crate::resource_budget::MIB,
+        &[(
+            raw.parent().ok_or("Capture has no directory")?,
+            size.saturating_add(16 * crate::resource_budget::MIB),
+        )],
+        &|_| {},
+    )?;
     pack_inner(
         project,
         disk,

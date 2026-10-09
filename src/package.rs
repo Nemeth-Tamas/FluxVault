@@ -372,6 +372,12 @@ fn should_exclude(path: &Path) -> bool {
         || (name.ends_with(".zip") && !managed_capture_zip)
         || name.ends_with(".zip.sha256")
         || name == "external-tools.jsonl"
+        || (name == "processingevents.jsonl"
+            && path.parent().is_some_and(|parent| {
+                parent
+                    .file_name()
+                    .is_some_and(|part| part.eq_ignore_ascii_case("Logs"))
+            }))
 }
 
 #[cfg(windows)]
@@ -601,6 +607,11 @@ mod tests {
         fs::write(flux_recovery.join("001_attempt_001_provenance.json"), b"{}").unwrap();
         fs::create_dir_all(project.join("Logs/Benchmark")).unwrap();
         fs::write(
+            project.join("Logs/ProcessingEvents.jsonl"),
+            b"private resource timeline",
+        )
+        .unwrap();
+        fs::write(
             project.join("Logs/Benchmark/.fluxvault-benchmark-test.jsonl"),
             b"internal metrics",
         )
@@ -731,6 +742,7 @@ mod tests {
                 .is_err()
         );
         assert!(zip.by_name("Images/001.partial.img").is_err());
+        assert!(zip.by_name("Logs/ProcessingEvents.jsonl").is_err());
         assert!(zip.by_name("Flux/Recovery/001_job.json").is_err());
         assert!(zip.by_name("Flux/Recovery/001.lock").is_err());
         assert!(

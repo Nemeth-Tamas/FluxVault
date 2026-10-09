@@ -130,7 +130,7 @@ Dual-only break commands: `p` pauses new reads (current reads and files finish);
 Dual timing: `fv production benchmark` exports saved timing JSON/CSV offline. New scans collect this automatically and show a `PACE` line with a rough fresh-feed ETA after three fresh saves. Recovery transfers/file tail are extra; restart retains logs but resets the live sample. `fv benchmark report` is for single-GW sessions. [Details](DUAL_SCAN.md#pace-and-saved-timing-reports).
 
 - `fv tools check` checks host tools; `fv greaseweazle info` checks board readiness.
-- `fv scan --conversion-workers 4` saves a 1–16 worker request; background work caps it to leave two logical CPUs available.
+- `fv scan --conversion-workers 4` saves a 1–16 worker ceiling. Shared CPU/RAM/storage admission can reduce active jobs to leave room for reads. `fv processing status` shows recorded waits/budget; no extra policy is needed.
 - Fast/Normal/Recovery/Detective each get up to ten minutes of capture time. Clean/no-improvement stops finish earlier; stubborn disks can take roughly 40 minutes plus offline work.
 - `--project 'C:\full\project\path'` selects a project without changing folder.
 - `--json` gives machine-readable output; progress stays on stderr.

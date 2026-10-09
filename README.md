@@ -53,6 +53,8 @@ The validated local station is the **Mitsumi drive, straight ribbon, Greaseweazl
 
 New scans use supported IBM 720 KB/1.44 MB automatic identification, background processing, packed captures, four requested conversion workers and built-in recovery limits. **No policy file or format list is required.** Expert single-disk commands have different defaults; see [CLI reference](CLI.md).
 
+Background processing and capture packing automatically share CPU/RAM/storage admission so new reads take priority. No extra settings are needed. If processing waits, `fv processing status` shows its recorded stage and resource budget; [background processing](BACKGROUND_PROCESSING.md#automatic-resource-admission) explains pressure and safe resume.
+
 ## Read the result
 
 - **DONE / REMOVE / INSERT**: saved; swap when instructed.

@@ -283,6 +283,13 @@ fn run_imaging(
 
     let log_final_path = log_directory.join(format!("{stem}.log"));
 
+    let _budget = crate::resource_budget::foreground(&[
+        (
+            &output_directory,
+            expected_bytes.saturating_add(crate::resource_budget::MIB),
+        ),
+        (&log_directory, 4 * crate::resource_budget::MIB),
+    ])?;
     let mut source = File::open(&drive.device_path).map_err(|error| {
         format!(
             "Nem sikerult CSAK OLVASHATO modban megnyitni a(z) {} eszkozt: {error}",

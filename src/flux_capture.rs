@@ -840,6 +840,11 @@ fn capture_at_slot(
     }
     let flux_dir = project_flux_dir(project)?;
     let next = next_capture_attempt(&flux_dir, request.disk_number)?;
+    // Workstation capacity only; no source handle is opened by this preflight.
+    let _budget = crate::resource_budget::foreground(&[(
+        &flux_dir,
+        u64::from(request.revolutions).saturating_mul(64 * crate::resource_budget::MIB),
+    )])?;
     let attempt_number = reserved_attempt.unwrap_or(next);
     if attempt_number < next
         || next_capture_attempt_from(&flux_dir, request.disk_number, attempt_number)?
@@ -1007,6 +1012,15 @@ pub fn decode(
         .sha256
         .as_deref()
         .ok_or("Capture has no saved SHA-256")?;
+    // Includes potential packed-source materialization and decoded-image space.
+    // Foreground admission never waits for background CPU slots.
+    let _budget = crate::resource_budget::foreground(&[(
+        &flux_dir,
+        record
+            .bytes
+            .ok_or("Capture size missing")?
+            .saturating_add(16 * crate::resource_budget::MIB),
+    )])?;
     let source = crate::flux_archive::open_source(
         &logical_input,
         record.bytes.ok_or("Capture size missing")?,

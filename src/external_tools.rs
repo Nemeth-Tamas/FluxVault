@@ -449,6 +449,11 @@ pub(crate) fn check_tool(
 
         return ToolStatus::new(kind, ToolHealth::Missing, detail);
     };
+    let executable = if kind == ToolKind::LibreOffice {
+        libreoffice_console_host(&executable)
+    } else {
+        executable
+    };
 
     let arguments = kind
         .version_arguments()
@@ -508,6 +513,24 @@ pub(crate) fn check_tool(
         audit: Some(result.audit),
         audit_error: result.audit_error,
     }
+}
+
+/// Keep the chosen installation, but prefer its Windows console entry point.
+/// The GUI soffice.exe can allocate a version-message console of its own even
+/// when the supervised parent requested CREATE_NO_WINDOW. Never replace an
+/// arbitrary configured wrapper or switch to another installed Office version.
+pub(crate) fn libreoffice_console_host(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    if path
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("soffice.exe"))
+    {
+        let console = path.with_file_name("soffice.com");
+        if fs::symlink_metadata(&console).is_ok_and(|info| info.file_type().is_file()) {
+            return console;
+        }
+    }
+    path.to_path_buf()
 }
 
 fn candidate_paths(kind: ToolKind, configured: Option<&Path>) -> Vec<PathBuf> {
@@ -636,6 +659,25 @@ pub(crate) fn first_non_empty_line(value: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn office_console_preference_stays_in_the_selected_installation() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-office-entry-{}-{}",
+            std::process::id(),
+            current_unix_ms()
+        ));
+        fs::create_dir(&root).unwrap();
+        let gui = root.join("soffice.exe");
+        let console = root.join("soffice.com");
+        fs::write(&gui, b"fixture only").unwrap();
+        assert_eq!(libreoffice_console_host(&gui), gui);
+        fs::write(&console, b"fixture only").unwrap();
+        assert_eq!(libreoffice_console_host(&gui), console);
+        let wrapper = root.join("custom-office.exe");
+        assert_eq!(libreoffice_console_host(&wrapper), wrapper);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn older_command_audits_remain_readable_without_supervision_claims() {
         let audit: super::CommandAudit = serde_json::from_str(r#"{"tool":"old host","executable":"gw.exe","arguments":["info"],"started_unix_ms":1,"duration_ms":2,"success":true,"exit_code":0,"stdout":"old output","stderr":""}"#).unwrap();

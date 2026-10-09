@@ -115,7 +115,42 @@ fn default_background_scan_runs_the_whole_cli_path_without_physical_hardware() {
     assert_eq!(state["owner_active"], false);
     assert_eq!(state["pending"], 0);
     assert_eq!(state["attention"], 2);
+    let budget = &state["worker"]["resource_budget"];
+    assert_eq!(budget["foreground_jobs"], 0);
+    // A saved processing stop can precede the separate packing queue drain.
+    // These are recorded counts, not live counts in this inspection process.
+    assert!(budget["background_jobs"].as_u64().is_some());
+    assert!(budget["waiting_jobs"].as_u64().is_some());
+    assert!(budget["admissions"].as_u64().unwrap() > 0);
+    assert!(
+        budget["scope"]
+            .as_str()
+            .unwrap()
+            .contains("controller-process")
+    );
     assert!(project.join("Logs/ProcessingEvents.jsonl").is_file());
+    #[cfg(windows)]
+    {
+        let configured =
+            std::path::PathBuf::from(std::env::var("FLUXVAULT_TEST_LIBREOFFICE").unwrap());
+        let console = configured.with_file_name("soffice.com");
+        if configured
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("soffice.exe"))
+            && console.is_file()
+        {
+            let audit = fs::read_to_string(project.join("Logs/external-tools.jsonl")).unwrap();
+            let office = audit
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .filter(|row| row["tool"] == "LibreOffice")
+                .collect::<Vec<_>>();
+            assert!(!office.is_empty());
+            for row in office {
+                assert_eq!(row["executable"].as_str(), console.to_str());
+            }
+        }
+    }
     let journal: serde_json::Value =
         serde_json::from_slice(&fs::read(project.join(".fluxvault-gw-scan.json")).unwrap())
             .unwrap();
