@@ -2,6 +2,8 @@
 
 Plain `fv scan` stays **GW-only**. `--double` is opt-in; USB-only remains `fv scan --usb --write-blocker-verified`.
 
+For a **fresh full-chain batch**, `fv production start --double --write-blocker-verified --last-disk N` reuses this same scheduler/station commands and adds automatic finishing/verified archival ZIP at the checked endpoint. Pending USB-to-GW transfers prevent packaging. Resume: `fv production resume --write-blocker-verified`; offline finishing alone needs no assertion. Label typing stays exact; `--no-verify` is refused. Default output is a sibling delivery folder and partial/native attention survives packaging. [Guide](PRODUCTION_WORKFLOW.md). Existing `scan --double` behavior remains unchanged.
+
 ## First small test: customer 007–010
 
 Use a **new project**, not an existing pilot. The earlier GW cohort saved these four clean; 009 is 720 KB, the others 1.44 MB. Run the newly built executable directly to avoid an older installed `fv` copy:

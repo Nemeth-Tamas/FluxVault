@@ -2,6 +2,8 @@
 
 Keep the same project. Never reset its numbering, delete partial evidence or initialize it again to resume.
 
+For the new full-chain workflow, start with `fv production start --last-disk N` and continue with `fv production resume`. The same STOP/Ctrl+C/second-console stop controls span feeding through final ZIP verification. Endpoint/station/destination/worker options restore automatically; complete saved acquisitions resume finishing offline. `--no-verify`, sound/color and USB blocker assertions remain per invocation. Early QUIT does not archive an unfinished batch. [Production guide](PRODUCTION_WORKFLOW.md). The `start`/`scan` commands below retain their older acquisition/background behavior.
+
 ## Everyday commands
 
 ```powershell

@@ -30,6 +30,91 @@ const JOURNAL: &str = ".fluxvault-gw-scan.json";
 const LOCK: &str = ".fluxvault-gw-scan.lock";
 const MAX_NO_INDEX_RESEATS: usize = 2;
 
+/// Recheck the durable endpoint offline; a cursor/production receipt is not
+/// sufficient proof that every label has a completed, intact acquisition.
+pub(super) fn endpoint_outcome(
+    project: &ProjectState,
+    first: u32,
+    last: u32,
+) -> Result<Option<bool>, String> {
+    Ok(endpoint_results(project, first, last)?
+        .map(|results| results.iter().any(|r| r.status != "acquired")))
+}
+
+/// Only an entirely verified raw-only endpoint may bypass image processing.
+pub(super) fn raw_only_endpoint(
+    project: &ProjectState,
+    first: u32,
+    last: u32,
+) -> Result<serde_json::Value, String> {
+    let results = endpoint_results(project, first, last)?
+        .ok_or("Raw-only production endpoint is incomplete")?;
+    if results.iter().any(|r| r.format_exception.is_none()) {
+        return Err(
+            "Raw-only archive requires a verified format-exception receipt for every label".into(),
+        );
+    }
+    Ok(json!({"schema":1,"first":first,"last":last,"disks":results,
+        "status":"raw_evidence_only","sector_images":0,"extracted_files":0,"converted_files":0,
+        "physical_media_access":false,"customer_delivery_certified":false,
+        "warning":"No supported sector decode was established. Raw captures are preserved for later offline decoding; this does not prove files are unrecoverable."}))
+}
+
+fn endpoint_results(
+    project: &ProjectState,
+    first: u32,
+    last: u32,
+) -> Result<Option<Vec<RecoveryResult>>, String> {
+    if first == 0 || last < first || u64::from(last) - u64::from(first) >= 4096 {
+        return Err("Invalid bounded production range".into());
+    }
+    let path = project.root().join(JOURNAL);
+    regular_or_missing(&path)?;
+    if !path.try_exists().map_err(|e| e.to_string())? {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    File::open(&path)
+        .map_err(|e| e.to_string())?
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("Oversized production scan journal".into());
+    }
+    let journal: Journal = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let ids: BTreeSet<_> = journal.completed.iter().map(|r| r.disk).collect();
+    if journal.schema_version != 1
+        || ids.contains(&0)
+        || ids.len() != journal.completed.len()
+        || journal.last_disk != Some(last)
+    {
+        return Err("Production scan endpoint/journal identity differs".into());
+    }
+    if journal.pending.is_some() || (first..=last).any(|n| !ids.contains(&n)) {
+        return Ok(None);
+    }
+    for result in &journal.completed {
+        flux_recovery::verify_completed_result(project, result)?;
+    }
+    let mut after = Vec::new();
+    File::open(&path)
+        .map_err(|e| e.to_string())?
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_end(&mut after)
+        .map_err(|e| e.to_string())?;
+    if after != bytes {
+        return Err("Scan journal changed during endpoint verification".into());
+    }
+    Ok(Some(
+        journal
+            .completed
+            .into_iter()
+            .filter(|r| r.disk >= first && r.disk <= last)
+            .collect(),
+    ))
+}
+
 pub(super) struct ScanOptions {
     pub profile: GreaseweazleProfile,
     pub automatic_format: bool,

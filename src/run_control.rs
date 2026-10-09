@@ -3,6 +3,7 @@ use crate::{cancellation, project::ProjectState};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    cell::RefCell,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -16,6 +17,9 @@ use std::{
 const CONTROL: &str = ".fluxvault-run-control.json";
 const LOCK: &str = ".fluxvault-run-control.lock";
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    static INHERITED_SESSION: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -135,7 +139,8 @@ pub fn stop(project: &ProjectState) -> Result<Value, String> {
     )
 }
 pub(crate) struct Session {
-    _owner: File,
+    _owner: Option<File>,
+    root: PathBuf,
     _scope: cancellation::Scope,
     wake: Option<mpsc::Sender<()>>,
     worker: Option<thread::JoinHandle<()>>,
@@ -143,6 +148,18 @@ pub(crate) struct Session {
 impl Session {
     pub(crate) fn start(project: &ProjectState, operation: &str) -> Result<Self, String> {
         let root = root(project)?;
+        if let Some(parent) = INHERITED_SESSION.with(|slot| slot.borrow().clone()) {
+            if parent != root {
+                return Err("Inherited stop controller belongs to another project".into());
+            }
+            return Ok(Self {
+                _owner: None,
+                root,
+                _scope: cancellation::enter(cancellation::current()),
+                wake: None,
+                worker: None,
+            });
+        }
         regular(&root.join(LOCK))?;
         let owner = OpenOptions::new()
             .create(true)
@@ -181,6 +198,7 @@ impl Session {
         let token = cancellation::current();
         let scope = cancellation::enter(token.clone());
         let (wake, rx) = mpsc::channel();
+        let controller_root = root.clone();
         let worker = thread::spawn(move || {
             loop {
                 if token.requested() {
@@ -199,11 +217,27 @@ impl Session {
             }
         });
         Ok(Self {
-            _owner: owner,
+            _owner: Some(owner),
+            root: controller_root,
             _scope: scope,
             wake: Some(wake),
             worker: Some(worker),
         })
+    }
+
+    /// Keep one generation/stop watcher across all synchronous production phases.
+    pub(crate) fn with_children<T>(&self, work: impl FnOnce() -> T) -> T {
+        let previous = INHERITED_SESSION.with(|slot| slot.replace(Some(self.root.clone())));
+        struct Restore(Option<PathBuf>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                INHERITED_SESSION.with(|slot| {
+                    slot.replace(self.0.take());
+                });
+            }
+        }
+        let _restore = Restore(previous);
+        work()
     }
 }
 impl Drop for Session {
@@ -212,6 +246,42 @@ impl Drop for Session {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod parent_tests {
+    use super::*;
+    #[test]
+    fn inherited_children_keep_generation_and_stop_request_scoped_to_the_parent() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-parent-control-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        let _scope = cancellation::enter(cancellation::Token::default());
+        let parent = Session::start(&project, "production_start").unwrap();
+        let before = fs::read(root.join(CONTROL)).unwrap();
+        parent.with_children(|| {
+            let child = Session::start(&project, "scan").unwrap();
+            assert_eq!(fs::read(root.join(CONTROL)).unwrap(), before);
+            drop(child);
+            assert!(status(&project).unwrap()["active"] == true);
+            stop(&project).unwrap();
+            let until = std::time::Instant::now() + Duration::from_secs(2);
+            while !cancellation::requested() && std::time::Instant::now() < until {
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(cancellation::requested());
+        });
+        assert_eq!(fs::read(root.join(CONTROL)).unwrap(), before);
+        drop(parent);
+        assert_eq!(status(&project).unwrap()["active"], false);
+        fs::remove_dir_all(root).unwrap();
     }
 }
 /// Live stdin is read on a detached reader so stop also interrupts a swap prompt.

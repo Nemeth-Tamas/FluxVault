@@ -322,6 +322,14 @@ fn is_customer_report(name: &str, latest_workbook: Option<&str>) -> bool {
         "recoveryexceptions.txt",
     ];
     EXACT.contains(&normalized.as_str())
+        || normalized
+            .strip_prefix("rawonlyendpoint-")
+            .and_then(|s| s.strip_suffix(".json"))
+            .is_some_and(|s| {
+                !s.is_empty()
+                    && s.len() <= 100
+                    && s.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+            })
         || (normalized.starts_with("recoveryselection-") && normalized.ends_with(".json"))
         || (normalized.starts_with("deliverycleanup-") && normalized.ends_with(".json"))
         || (normalized.starts_with("offlinederived-") && normalized.ends_with(".json"))
@@ -895,6 +903,11 @@ mod tests {
     }
     #[test]
     fn customer_reports_include_native_recovery_exceptions_not_internal_markers() {
+        assert!(is_customer_report("RawOnlyEndpoint-123-45-0.json", None));
+        assert!(!is_customer_report(
+            "RawOnlyEndpoint-private-note.json",
+            None
+        ));
         assert!(is_customer_report("RecoveryExceptions.txt", None));
         assert!(is_customer_report("RecoverySelection-001-abc.json", None));
         assert!(is_customer_report("DeliveryCleanup-abc.json", None));

@@ -24,7 +24,7 @@ $fluxVaultCompleter = {
         'processing' = @('status','resume')
         'storage' = @('benchmark','pack','resume')
         'benchmark' = @('report','compare')
-        'production' = @('status','queue','benchmark')
+        'production' = @('start','resume','status','queue','benchmark')
         'finalize' = @('status','resume')
         'package' = @('build')
         'run' = @('status')
@@ -41,9 +41,12 @@ $fluxVaultCompleter = {
         }
     }
     $scan = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--sound','--usb','--double','--plan','--drive','--retries','--write-blocker-verified')
+    $production = @('--last-disk','--destination','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--no-verify','--color','--sound','--double')
     $options = @{
         'scan' = $scan
         'start' = $scan
+        'production start' = $production
+        'production resume' = @('--no-verify','--color','--sound','--write-blocker-verified')
         'greaseweazle scan' = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--sound')
         'disk show' = @('--details')
         'drive probe' = @('--drive')
@@ -110,6 +113,9 @@ $fluxVaultCompleter = {
         $context = $positionals -join ' '
     }
     $prefix = ([string]$wordToComplete).Trim([char[]](39,34))
+    if ($context -eq 'production start' -and $flags -contains '--double') {
+        $options[$context] = @('--drive','--gw-drive','--last-disk','--destination','--write-blocker-verified','--conversion-workers','--color','--sound')
+    }
     if ($context -in @('scan','start')) {
         if ($flags -contains '--double') {
             $options[$context] = @('--drive','--gw-drive','--last-disk','--write-blocker-verified','--conversion-workers','--acquisition-only','--color','--sound','--plan')

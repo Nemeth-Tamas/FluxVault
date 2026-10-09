@@ -10,6 +10,7 @@ mod flux_scan;
 mod media_reservation;
 mod office;
 mod process;
+mod production_flow;
 mod read_progress;
 mod recovery;
 mod scan;
@@ -82,6 +83,9 @@ Usage:
   fluxvault scan --double --plan [--last-disk N]
                                     Offline dual-station preview; no drives opened
   fluxvault production status       Inspect saved coordinator state offline
+  fluxvault production start --last-disk N [--double --write-blocker-verified]
+                                    One owned scan-to-archive run; partial evidence stays labeled
+  fluxvault production resume       Resume saved production settings/finishing
   fluxvault production queue        Rank saved USB partials for GW; no physical read
   fluxvault production benchmark    Inspect durable dual-session timings offline
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
@@ -556,6 +560,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         index += 1;
     }
 
+    if positional == ["production", "start"] || positional == ["production", "resume"] {
+        return production_flow::run(args, cwd);
+    }
     let sector_inspector =
         positional.len() == 3 && positional[0] == "recovery" && positional[1] == "sector";
     if sector_inspector {
@@ -905,13 +912,41 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
-            let state = crate::production::status(&project)?;
+            let mut state = crate::production::status(&project)?;
+            if positional[1] == "status" {
+                state["workflow"] = production_flow::status(&project)?;
+            }
             if json_output {
                 Ok(state.to_string())
             } else if positional[1] == "queue" {
                 Ok(dual_scan::saved_queue(&state))
-            } else {
+            } else if state["workflow"]["record"].is_null() {
                 Ok(dual_scan::saved_status(&state))
+            } else {
+                let workflow = &state["workflow"];
+                let saved = &workflow["record"];
+                Ok(format!(
+                    "{}Production: {}..{} / {} ({})\nArchive folder: {}\nRecorded state, not fresh evidence verification. Continue: fv production resume{}",
+                    if state["initialized"] == false {
+                        String::new()
+                    } else {
+                        format!("{}\n", dual_scan::saved_status(&state))
+                    },
+                    saved["first"],
+                    saved["last"],
+                    saved["phase"].as_str().unwrap_or("unknown"),
+                    if workflow["active"] == true {
+                        "active"
+                    } else {
+                        "inactive"
+                    },
+                    saved["destination"].as_str().unwrap_or(""),
+                    if saved["dual"] == true {
+                        " --write-blocker-verified (for physical USB reads)"
+                    } else {
+                        ""
+                    },
+                ))
             }
         }
         Some("processing")

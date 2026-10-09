@@ -1,10 +1,40 @@
 //! Separate long-running workstation ownership from short image/publication snapshots.
 //! Physical reads never hold the snapshot gate; Office conversion releases it too.
 use std::{
+    cell::RefCell,
     fs::{self, File, OpenOptions},
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+thread_local! {
+    static INHERITED_OWNER: RefCell<Option<(PathBuf, File)>> = const { RefCell::new(None) };
+}
+
+/// Explicitly lend an already-held production owner to synchronous child
+/// workflows. Background queues receive their own cloned handle in the usual
+/// way; unrelated threads/processes and other projects never inherit it.
+pub(crate) fn with_owner<T>(
+    root: &Path,
+    owner: &File,
+    work: impl FnOnce() -> T,
+) -> Result<T, String> {
+    crate::safety::workstation_path(root)?;
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    crate::safety::workstation_path(&root)?;
+    let inherited = (root, owner.try_clone().map_err(|e| e.to_string())?);
+    let previous = INHERITED_OWNER.with(|slot| slot.replace(Some(inherited)));
+    struct Restore(Option<(PathBuf, File)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            INHERITED_OWNER.with(|slot| {
+                slot.replace(self.0.take());
+            });
+        }
+    }
+    let _restore = Restore(previous);
+    Ok(work())
+}
 
 fn open(root: &Path, name: &str) -> Result<File, String> {
     refuse_floppy(root)?;
@@ -44,6 +74,20 @@ fn refuse_floppy(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn reserve(root: &Path) -> Result<File, String> {
+    crate::safety::workstation_path(root)?;
+    let canonical = root.canonicalize().map_err(|e| e.to_string())?;
+    crate::safety::workstation_path(&canonical)?;
+    if let Some(inherited) = INHERITED_OWNER.with(|slot| {
+        slot.borrow().as_ref().map(|(held, owner)| {
+            if held != &canonical {
+                Err("Inherited production owner belongs to another project".into())
+            } else {
+                owner.try_clone().map_err(|e| e.to_string())
+            }
+        })
+    }) {
+        return inherited;
+    }
     let file = open(root, ".fluxvault-processing.lock")?;
     file.try_lock().map_err(|_| "This project already has a processing owner. Let the scan finish, or stop it before changing extraction/conversion/reports. `processing status` remains available.".to_owned())?;
     Ok(file)
@@ -95,6 +139,36 @@ pub(crate) fn snapshot(root: &Path) -> Result<File, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inherited_owner_stays_exclusive_across_child_drop_and_never_leaks_to_threads() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-parent-owner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let parent = reserve(&root).unwrap();
+        with_owner(&root, &parent, || {
+            let child = reserve(&root).unwrap();
+            assert!(active(&root).unwrap());
+            drop(child);
+            let foreign = root.clone();
+            assert!(
+                std::thread::spawn(move || reserve(&foreign).is_err())
+                    .join()
+                    .unwrap()
+            );
+            assert!(active(&root).unwrap());
+        })
+        .unwrap();
+        assert!(reserve(&root).is_err());
+        drop(parent);
+        assert!(!active(&root).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn floppy_work_locks_are_refused_before_any_file_access() {
         for root in ["A:", "B:\\customer", "\\\\?\\A:\\", "\\\\.\\B:"] {

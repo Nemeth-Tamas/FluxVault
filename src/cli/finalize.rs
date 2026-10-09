@@ -13,6 +13,89 @@ use serde_json::{Value, json};
 use state::{Options, Phase, Record};
 use std::path::{Path, PathBuf};
 
+/// Production-only raw-evidence archival. Ordinary finalize still requires
+/// images; this path verifies every label's format-exception receipt first.
+pub(super) fn raw_endpoint(
+    project: &ProjectState,
+    first: u32,
+    last: u32,
+    destination: PathBuf,
+    workers: usize,
+) -> Result<CliResponse, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    let _owner = crate::project_work::reserve(project.root())?;
+    crate::processing::validate_workspace(project)?;
+    if imaging::load_project_statistics(&project.images_dir())?.disk_count != 0 {
+        return Err("Raw-only endpoint cannot bypass saved-image processing".into());
+    }
+    let summary = super::flux_scan::raw_only_endpoint(project, first, last)?;
+    let root = project.root().canonicalize().map_err(|e| e.to_string())?;
+    let destination = state::destination(project.root(), &root, destination)?;
+    let _control = crate::run_control::Session::start(project, "finalize")?;
+    let mut record = Record::new(
+        project,
+        Options {
+            destination: destination.clone(),
+            workers,
+            allow_attention: true,
+        },
+    )?;
+    record.save(project)?;
+    let run = record.run.clone();
+    let outcome = finish_with(
+        project,
+        &mut record,
+        true,
+        || {
+            crate::cancellation::check()?;
+            let report = project
+                .reports_dir()
+                .join(format!("RawOnlyEndpoint-{run}.json"));
+            let bytes = serde_json::to_vec_pretty(&summary).map_err(|e| e.to_string())?;
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&report)
+                .map_err(|e| e.to_string())?;
+            file.write_all(&bytes)
+                .and_then(|_| file.sync_all())
+                .map_err(|e| e.to_string())?;
+            Ok(CliResponse {exit_code:3, output:json!({"status":"raw_evidence_only", "report":report,
+            "report_sha256":format!("{:x}",Sha256::digest(&bytes)),"sector_images":0,"extracted_files":0,"converted_files":0,
+            "attention":true,"customer_delivery_certified":false}).to_string()})
+        },
+        || archive(project, destination),
+    );
+    if let Err(error) = &outcome {
+        record.phase = if crate::cancellation::requested() || crate::cancellation::stopped(error) {
+            Phase::Interrupted
+        } else {
+            Phase::Failed
+        };
+        record.error = Some(error.chars().take(4096).collect());
+        if let Err(e) = record.save(project) {
+            eprintln!("Raw-only finalization receipt could not be saved: {e}");
+        }
+    }
+    outcome
+}
+
+fn archive(project: &ProjectState, destination: PathBuf) -> Result<Value, String> {
+    let result = package::build_package(
+        &PackageRequest {
+            project_root: project.root().to_path_buf(),
+            destination,
+            project_name: project.name().to_owned(),
+        },
+        &|message| eprintln!("{message}"),
+    )?;
+    Ok(
+        json!({"zip":result.zip_path,"sha256_file":result.sha256_path,"sha256":result.sha256,
+        "files":result.file_count,"bytes":result.total_bytes,"customer_delivery_certified":false}),
+    )
+}
+
 pub(super) fn run(
     cwd: &Path,
     project_root: PathBuf,
@@ -144,20 +227,7 @@ fn finish_owned(
                 })?;
             Ok(process::response(&result, &project.reports_dir(), true))
         },
-        || {
-            let result = package::build_package(
-                &PackageRequest {
-                    project_root: project.root().to_path_buf(),
-                    destination,
-                    project_name: project.name().to_owned(),
-                },
-                &|message| eprintln!("{message}"),
-            )?;
-            Ok(
-                json!({"zip":result.zip_path,"sha256_file":result.sha256_path,"sha256":result.sha256,
-            "files":result.file_count,"bytes":result.total_bytes,"customer_delivery_certified":false}),
-            )
-        },
+        || archive(project, destination),
     )
 }
 

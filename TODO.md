@@ -6,7 +6,7 @@ For operating the current build, start with [README](README.md), [the beginner/a
 >
 > **Primary rule:** Source floppy media is read-only. FluxVault may write images, logs, extracted files, reports, and packages to the workstation, but it must never intentionally write to a customer floppy.
 >
-> **Product target:** FluxVault is an automated archival appliance, not a collection of expert-only recovery tools. Except for physically inserting, removing, or moving a floppy between drives, the normal operator workflow should require no recovery decisions, no manual DMDE work, no hand-edited spreadsheets, no manual extraction, and no manual report/package assembly. The intended production loop is: **run `fluxvault production start` in the project folder -> insert floppy -> confirm the swap cue -> repeat**. This production command is planned, not implemented yet.
+> **Product target:** FluxVault is an automated archival appliance, not a collection of expert-only recovery tools. Except for physically inserting, removing, or moving a floppy between drives, the normal operator workflow should require no recovery decisions, no manual DMDE work, no hand-edited spreadsheets, no manual extraction, and no manual report/package assembly. The production loop is now implemented: **`fluxvault production start --last-disk N` -> insert/confirm/swap -> automatic finishing and verified archival ZIP**. `production resume` restores saved options; partial/raw-only results retain attention, not customer-certification. Single-GW is default, USB + GW is opt-in. [Production guide](PRODUCTION_WORKFLOW.md). Additional formats, broader damaged-document reconstruction and measured full-collection acceptance remain separate targets.
 >
 > **Throughput target:** With one USB floppy drive and one Greaseweazle-connected drive operating concurrently on different disks, a 136-disk mixed-condition job—including automatic verification, escalation, extraction, conversion, audit, and ordinary recovery passes—should be achievable within one operator afternoon (target: no more than roughly 6 hours of attended wall-clock time, excluding genuinely pathological media that must continue unattended or be reported as unrecoverable).
 
@@ -44,14 +44,14 @@ For operating the current build, start with [README](README.md), [the beginner/a
 
 ### Automation-first operator contract
 
-- [ ] The default CLI workflow must be a guided production queue, not a chain of expert-only commands.
-- [ ] The operator's only routine responsibilities are placing/removing disks, moving a disk from USB to Greaseweazle when prompted, and optionally entering a physical label or note.
+- [x] The default documented CLI workflow is a guided production queue, not a chain of expert-only commands. `production start` owns feeding through checked archival packaging; old expert `scan` stays compatible.
+- [x] The operator's only routine responsibilities are placing/removing disks, moving a disk from USB to Greaseweazle when prompted, and optionally entering a physical label or note. Supported production jobs run bounded recovery/file processing/reports/packaging automatically; fatal hardware/integrity exceptions still require attention, not invented success.
 - [ ] FluxVault automatically chooses retries, read direction, composite inputs, extraction strategy, recovery escalation, conversion, audit, and packaging policy from recorded evidence.
-- [ ] Expert subcommands/flags remain available, but normal jobs must not require understanding sectors, FAT, DMDE, flux, profiles, hashes, or conversion filters.
+- [x] Expert subcommands/flags remain available, but normal supported production jobs do not require understanding sectors, FAT, DMDE, flux, profiles, hashes, or conversion filters. A fresh range endpoint and physical confirmations suffice; saved options resume automatically.
 - [ ] Every automatic decision records its evidence, confidence, limits, and provenance so automation never hides guessing or fabricates recovered data.
 - [ ] A disk may finish as **verified**, **partially recovered**, or **unrecoverable within policy**; the program must not block the entire batch waiting for manual repair.
 - [ ] All stages are resumable after application restart or workstation failure without repeating completed evidence-preserving work.
-- [ ] No CLI prompt should ask the operator to make a technical choice the program can derive safely.
+- [x] No normal production prompt asks for a technical choice the program can derive safely. Default format/policy/worker/packing/recovery choices remain automatic; physical identity, protection and reseating are unavoidable operator actions. Expert overrides remain optional.
 
 ## 1. Safety invariants — must exist before real media testing
 
@@ -94,7 +94,7 @@ For operating the current build, start with [README](README.md), [the beginner/a
 - [x] Add explicit testing convenience `scan --no-verify`: Enter confirms the displayed disk, with a prominent warning at every custody prompt. Skip label typing only, never source read-only access, evidence/hash verification, numbering/resume safeguards or per-disk confirmation. Record mode in telemetry; do not persist the shortcut into future scans. EOF never starts a read, wrong explicit numbers remain refused, and default blank-input refusal is retained.
 - [x] `greaseweazle preview` preserves the former safe-command mock/preview without touching hardware.
 - [x] `greaseweazle info` exposes the audited read-only device/firmware query through the CLI; live V4.1/firmware 1.6/Mitsumi-B operation validated on 2026-10-05.
-- [ ] Make the default command path much shorter: one production command runs the full safe chain with plain-language status and next physical action.
+- [x] Make the default command path much shorter: one production command runs the full safe chain with plain-language status and next physical action. `production start --last-disk N` / `production resume` span scan, recovery, processing, audit and verified archival ZIP under one owner/controller; unfinished labels/transfers prevent packaging.
 - [ ] Print concise station-specific prompts: “Insert floppy #NNN in USB”, “Move floppy #NNN to Greaseweazle”, or “Archive floppy #NNN and insert #NNN+1”.
 - [ ] Add safe pause/resume/cancel semantics and a persisted job queue; a terminal closing must not silently lose completed evidence.
 - [ ] `status` should show both stations, queued escalation, throughput, estimated time, current operation, and the next physical action.
@@ -185,13 +185,13 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
   - [x] FAT listing failure;
   - [x] extraction failure;
   - [x] apparently readable image with zero recovered files when operator review is warranted.
-- [ ] Automatically run extraction immediately after an eligible acquisition or newly derived preferred image; no separate Files-page action in production mode.
+- [x] Automatically run extraction after an eligible acquisition or newly derived preferred image; no separate action in production mode. Coalesced background jobs plus final reconciliation use the existing replay-verified offline recovery handoff. Immediate means scheduled automatically, not that CPU work blocks the next physical read.
   - [x] Single-disk `greaseweazle recover N` dispatches the existing project-wide extraction/conversion/audit/workbook chain by default; partial images still follow conservative extraction eligibility rules.
   - [x] The retired GUI queued image-only extraction after each clean USB acquisition; the CLI retains `extract disk N`/`extract all`, but automatic nonblocking post-scan extraction remains a production-scheduler task.
   - [x] Add a one-button offline project pass that batches eligible extraction, conversion, evidence audit, and a Hungarian workbook without touching physical media.
 - [ ] Automatically re-run extraction and file inventory whenever a better composite, decoded flux image, or reconstructed filesystem becomes preferred.
 - [ ] Replace “operator review required” as the normal next step with a bounded automatic recovery plan; operator review is the final exception state only.
-- [ ] Treat existing manual recovery folders/DMDE imports as legacy compatibility inputs, not as the intended future recovery workflow.
+- [x] Treat existing manual recovery folders/DMDE imports as legacy compatibility inputs, not as the intended recovery workflow. Production uses native automatic recovery/extraction, retains operator folders and supports guarded legacy import; this is not a claim of equal DMDE yield on all damaged media.
 
 ## 8. Automated recovery engine — pre-Greaseweazle
 
@@ -323,7 +323,7 @@ The pilot holds 26 immutable SCP captures (20 initial plus six targeted rereads)
 
 Greaseweazle-only production is also a first-class mode; no USB scan is required. Build its guided disk-swap loop first around the single-disk recovery service, then add concurrent USB/GW scheduling. The working Mitsumi stays connected; alternate-drive comparison is an optional service action, not routine operator work.
 
-- [ ] Add a guided Greaseweazle-only batch loop with automatic numbering, custody confirmation, concise swap cues, resume, and background downstream work.
+- [x] Add a guided Greaseweazle-only batch loop with automatic numbering, custody confirmation, concise swap cues, resume, and background downstream work. Existing scan/live gates now join the production endpoint/archival tail; numbered or explicit Enter-only confirmation stays required. Full 136-disk physical acceptance remains open below.
   - [x] `greaseweazle scan --gw-drive B --source-write-protected [--count N]` prompts `READ NNN`/`QUIT`, runs bounded per-disk recovery, preserves partial results and advances durable project numbering only after verified publication.
   - [x] Persist pending custody/result and history; reconcile interrupted numbering exactly once without another physical read, reject mismatched settings/identities/cursor or changed evidence, and hold project/device reservations.
   - [x] Automatically run extraction/conversion/audit/workbook once after feeding ends; report tail failures without losing acquisitions. `--acquisition-only` skips the tail.
@@ -377,7 +377,7 @@ The target setup has two different drives working simultaneously on different fl
 - [ ] Add a production acceptance benchmark for the 136-disk reference job: complete ordinary dual-drive acquisition/recovery and downstream processing within a target six-hour operator session.
   - [x] Persist bounded, synced dual-session events before reader launch and after verified receipt publication; record pauses, explicit removals, failures and feed/full completion. Automatically export immutable JSON/receipt CSV and provide offline `production benchmark`. Replay checks project/session/ticket/hash/map seals, deduplicates labels/receipts, measures reader union/overlap and leaves interrupted total durations unknown. Tests cover concurrent mocked transfer, actual CLI kill/reopen, malformed/truncated/tampered records and customer-package exclusion. Saved pilot inspection preserves all 179 source artifacts; mock-only release smoke passes. Older runs retain timing gaps; the physical 136-disk benchmark remains open.
 - [ ] Record operator touches per disk and target the theoretical minimum: initial insertion/removal plus one Greaseweazle transfer only for escalated disks.
-- [ ] Provide an unattended tail mode so flux re-decodes, extraction, conversion, audit, and packaging can continue after the operator finishes feeding physical disks.
+- [x] Provide an unattended supported-workflow tail: saved-capture decoding is reconciled by scan/recovery, then production automatically finishes extraction/conversion/audit/verified packaging without media. Interrupted finishing rechecks saved evidence and resumes offline. Raw-only unsupported formats archive explicit zero-file-yield attention reports; broader alternate-profile decoder searches remain open.
 
 ## 12. “Mini electron microscope the shit out of it” flux recovery diagnostics
 
@@ -474,7 +474,7 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 - [ ] Optional “keep staging folder” setting.
 - [x] One **Finalize project** action automatically refreshes recovery/extraction/conversion/audit state, builds the package, verifies it, and reports only unresolved exceptions. `finalize` now keeps one owner/control generation throughout, records bounded durable phases, supports offline `status`/`resume`, and offers explicit `--allow-attention` archival packaging (still exit 3, never customer certification). Default clean-only behavior and fatal integrity refusal stay unchanged. Automatically starting at the scan endpoint remains the separate production-policy item below. See FINALIZATION.md.
   - [x] Add CLI `finalize --destination PATH` for existing images: run the shared processing pipeline, stop packaging when attention remains, and build/verify an archival ZIP only after a clean run. Automatic production policy remains open.
-- [ ] Optional production policy automatically builds the final package when the last physical disk and all background queues are complete.
+- [x] Optional production policy automatically builds the final package when the last physical disk and all background queues are complete. Choosing `production start` opts into archival partial-results-with-attention policy; journal/receipt hashes, full range and pending USB transfers are checked before finishing. Ordinary `scan` and strict-default `finalize` are unchanged.
 
 ## 16. Current dataset regression targets
 
@@ -601,7 +601,7 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
   - [x] Cross-process LibreOffice integration test proves hash-bound reuse, tampered-output refusal, persisted issue loading, and retry after restart using only a disposable RTF.
   - [x] Cross-process GW recovery test seeds saved raw evidence, publishes a compatible image, then reuses the completed result with the mock board absent and no new read commands.
   - [x] Add interrupted-acquisition resume integration scenarios without requiring physical media: forced termination and cooperative typed/separate-console STOP during actual single/dual CLI mock captures and single decode; retained Windows handles confirm host/descendant exit, partial evidence and pending labels survive, one image/custody identity resumes and completed flux decodes offline without another raw read. Prompt stop needs no EOF; stale requests cannot stop new generations. Mock Office cancellation retains isolated partial output and resumes saved issues. Unrelated processes remain alive. Broader cutpoints/physical acceptance remain separate.
-- [ ] `fluxvault production start` runs the shared two-drive scheduler and prints concise USB/GW swap instructions while all technical decisions remain automatic.
+- [x] `fluxvault production start` runs the shared scheduler and prints concise swap instructions while supported technical decisions remain automatic. Single-GW default; `--double --write-blocker-verified` reuses USB + GW and exact uN/gN custody. `production resume` restores options; one owner/stop generation spans feeding through verified ZIP. Mock dual end-to-end and USB-transfer endpoint guards pass; broader live acceptance remains open.
 - [x] `fluxvault audit` and `fluxvault package build --destination PATH` use the evidence-audit and verified-package services without application-wide project state.
 - [x] `fluxvault process` runs the existing-image extraction -> Office conversion -> evidence audit -> workbook pipeline with no physical drive access; progress goes to stderr and `--json` output to stdout.
 

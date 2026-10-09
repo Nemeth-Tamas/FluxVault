@@ -30,12 +30,14 @@ Choose a **fresh folder name**. Do not initialize an existing archive to resume 
 ```powershell
 fv init 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
 Set-Location 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
-fv scan --last-disk 20 --no-verify
+fv production start --last-disk 20 --no-verify
 ```
 
 Check the label and open write-protect hole, insert the displayed disk, then press Enter. Omit `--no-verify` to type its number instead (`001` or `1`). `QUIT` stops at a waiting prompt. Never remove a disk while reading.
 
 No policy/format file is needed. New scans identify supported 720 KB/1.44 MB formats, recover within limits, process saved files in the background and pack captures.
+
+Production also builds a verified ZIP automatically at the checked endpoint, under sibling `My-New-Batch-Delivery`. Partial/raw-only results stay attention, not customer-certified. Early QUIT never archives an unfinished batch. [Guide](PRODUCTION_WORKFLOW.md).
 
 Optional audible swap/error reminders: add `--sound on`, for example `fv scan --last-disk 136 --no-verify --sound on`. Off by default and not remembered on restart. USB/GW tones differ; clean/partial/error patterns differ. Audio is best-effort and interactive-only: always follow the written saved/swap cue, not a sound alone. [Details](CLI.md#optional-scan-sound-cues).
 
@@ -44,7 +46,7 @@ Optional audible swap/error reminders: add `--sound on`, for example `fv scan --
 ```powershell
 Set-Location 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
 fv status
-fv scan --last-disk 20 --no-verify
+fv production resume --no-verify
 ```
 
 Insert the **displayed next/pending disk**, not necessarily 001. Repeat original settings/endpoint; do not run `init` or reset numbering. `--no-verify` skips label typing only and must be supplied each session.
@@ -58,11 +60,13 @@ Type `STOP` during a scan, or use Windows Ctrl+C. `QUIT` instead finishes reads 
 fv stop --project 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
 fv run status --project 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
 
-# Resume from the SAME project; start = scan:
-fv start --last-disk 20 --no-verify
+# Resume the SAME production project (saved range/options):
+fv production resume --no-verify
 ```
 
 Keep disks seated until **STOPPED** and drive activity has stopped. Never reinitialize/reset to resume. [Full guide](STOP_RESUME.md).
+
+Old/expert `scan` batches keep their original behavior; repeat that command. Its alias `start` is not the same as the full-chain `production start`/`resume`.
 
 ### After scanning
 

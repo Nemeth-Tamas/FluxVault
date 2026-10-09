@@ -32,6 +32,8 @@ Before committing to the full collection, also exercise a damaged disk in a sepa
 
 ## 2. Run the collection in a fresh pilot project
 
+For a new complete-chain test, prefer `production start --last-disk 136` in the fresh folder below; it restores options with `production resume` and automatically finishes to a verified, attention-labeled archive. Optional USB + GW: `production start --double --write-blocker-verified --last-disk 136`, with exact uN/gN labels. [Runbook](PRODUCTION_WORKFLOW.md). The older `scan` procedure below remains compatible and does not auto-package. Retain the earlier label-drifted partial batch separately; do not relabel/adopt it into the new benchmark.
+
 After the short hardware checks pass:
 
 ```powershell

@@ -56,6 +56,33 @@ READING THIS FILE ON WINDOWS
 
 REFERENCE
 
+PRODUCTION WORKFLOW
+    fv production start --last-disk 136
+    fv production resume
+    fv production status
+    fv production start --double --write-blocker-verified --last-disk 136
+
+    Fresh project: feed the read-only scanner; recovery/file processing run
+    automatically. At the checked endpoint, finishing creates a verified ZIP
+    in sibling PROJECT-Delivery. No policy file needed for standard IBM formats.
+    Physical disk/label actions are the routine operator responsibilities.
+
+    QUIT drains but never packages an unfinished batch. STOP/Ctrl+C or another
+    console's fv stop cancels. Wait for STOPPED and drive idle before removal.
+    production resume restores endpoint/stations/workers/destination. Finished
+    acquisitions resume finishing offline, without another physical read.
+    Add --no-verify, --sound on or --color again each session if wanted.
+    Dual requires exact uN/gN labels and --write-blocker-verified for USB reads.
+    --no-verify is single-GW only; no evidence verification is disabled.
+
+    Production explicitly archives partial results with attention (exit 3),
+    never customer-certification. Entirely unsupported raw-only batches retain
+    captures and a RawOnlyEndpoint report, reporting zero decoded/file yield.
+    Fatal integrity/tool failures refuse publication. Default finalize still
+    blocks attention. Repeating completed start returns a historical receipt,
+    not fresh validation. Old scan/start batches keep their original behavior;
+    use a fresh project for production. Full guide: PRODUCTION_WORKFLOW.md.
+
 Optional PowerShell 7 command/flag completion: fluxvault completions
     powershell prints the static trusted script. Enable it in one line
     (SHELL_COMPLETION.md); no project or media access, no automatic profile

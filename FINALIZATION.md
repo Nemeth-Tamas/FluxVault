@@ -2,6 +2,8 @@
 
 Scanning already processes saved files in the background. **Finalization** refreshes recovery, extraction, conversion, the final audit/workbook, and then builds and verifies an immutable archival ZIP. It uses workstation files only.
 
+Starting a fresh batch with `fv production start --last-disk N` now calls this finishing chain automatically at its checked endpoint, with explicit partial-results archival policy. `production resume` continues its saved options and offline tail; default output is sibling `<project-folder>-Delivery`. Ordinary `finalize` below keeps strict default attention blocking. Entirely raw-only production endpoints use a separate verified-capture/zero-file-yield attention archive, not a bypass for ordinary image finalization. [Production guide](PRODUCTION_WORKFLOW.md).
+
 ## Beginner: finish a clean batch
 
 From your existing project folder:

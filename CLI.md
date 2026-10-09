@@ -18,6 +18,8 @@ Examples use PowerShell. `fv` and `fluxvault` are identical aliases. Physical ac
 
 ## Everyday short workflow
 
+For a **fresh full-chain batch**, use `fv production start --last-disk N`. One owned/stoppable workflow joins the scanner to finishing and verified ZIP creation at the replay-checked endpoint. `production resume` restores saved options; output defaults to sibling `<project-folder>-Delivery`. Production explicitly archives partial/raw-only results with attention reports, never customer-certification; early quit/pending transfers do not package. `production status` adds a bounded historical workflow receipt to existing coordinator fields. Single-GW is default; `--double --write-blocker-verified` selects USB + GW. Label shortcut/sound/color/blocker assertions remain per invocation. [Commands and limits](PRODUCTION_WORKFLOW.md).
+
 The installer provides both `fluxvault.exe` and the identical short alias `fv.exe`. `fv init`, `fv status`, and `fv scan` work from the project folder. Plain `scan` uses Greaseweazle; explicit `scan --drive A:` (or USB protection/retry flags) retains the existing guarded USB workflow.
 
 ## Saved-flux diagnostics

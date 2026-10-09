@@ -66,7 +66,7 @@ The current straight ribbon uses **selector B**, already the new-scan default. T
 For 001 through 020:
 
 ```powershell
-fv scan --last-disk 20
+fv production start --last-disk 20
 ```
 
 At each prompt:
@@ -77,12 +77,12 @@ At each prompt:
 4. Wait. Do not remove it while reading/retrying.
 5. Follow **SAVED / REMOVE / INSERT**, then repeat.
 
-The loading bar shows activity/reported tracks, not recovered-sector percentage. Recovery, conversion, reports and packing are automatic. You do not pick stages or make policy files.
+The loading bar shows activity/reported tracks, not recovered-sector percentage. Recovery, conversion, reports and packing are automatic. After all labels are saved, remove the disks when instructed: offline finishing builds a verified ZIP in sibling `My-New-Batch-Delivery`. Partial results retain attention (exit 3), never all-files-recovered certification. You do not pick stages or make policy files. [Production guide](PRODUCTION_WORKFLOW.md).
 
 For Enter-only confirmations:
 
 ```powershell
-fv scan --last-disk 20 --no-verify
+fv production start --last-disk 20 --no-verify
 ```
 
 Check the physical label/protection, then press Enter after each swap. `--no-verify` skips **only typing the label**; hashes/evidence checks stay on. Add it each session; it is not saved.
@@ -119,10 +119,10 @@ Reopen PowerShell, enter the **same project**, repeat the scan command:
 ```powershell
 Set-Location 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
 fv status
-fv scan --last-disk 20 --no-verify
+fv production resume --no-verify
 ```
 
-Insert the **number displayed now**, not necessarily 001. Saved numbering/evidence is reconciled automatically. `--last-disk 20` stays the endpoint, not twenty more reads. Keep pending-job settings unchanged. Never reset the cursor or edit internal JSON files to work around an error.
+Insert the **number displayed now**, not necessarily 001. Endpoint/settings are restored; complete saved acquisitions resume finishing offline. Keep pending-job settings unchanged. Never reset the cursor or edit journals to work around an error. Older `scan` batches still resume with `scan`; automatic packaging is not silently added.
 
 A completed recovery is checked/reused, not reread. Use a **new project** for a genuinely fresh repeat-read benchmark; [the launcher](TOMORROW_TEST.md) does this for you.
 
@@ -169,6 +169,8 @@ The full report is automatic after processing. Refresh/open its location with `f
 Keep the entire project. `.bin` fragments are not complete documents; carved names are reconstructed. Obsolete unchanged program-owned original mirrors may move into recoverable `Recovery/DeliveryQuarantine`; edited/untracked copies and earlier forensic generations remain preserved. Reports explain uncertainty and moves.
 
 ## Beginner: prepare delivery
+
+`production start` already creates a checked archival ZIP after the saved endpoint. You do not need the manual finishing steps below for that normal workflow; use them for older `scan` batches, a fresh saved-image snapshot, or explicit strict finishing. Attention archives remain partial evidence, not complete-file certification.
 
 After scanning/draining, inspect the queue and issues, then:
 

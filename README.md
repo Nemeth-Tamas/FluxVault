@@ -29,16 +29,18 @@ These examples use **PowerShell**, with `fv` already installed. Choose a **new f
 ```powershell
 fv init 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
 Set-Location 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
-fv scan --last-disk 20
+fv production start --last-disk 20
 ```
 
 At each prompt, insert the displayed disk with its write-protect hole open, check its label, and type its number, such as `001`. No `READ` prefix is necessary. `QUIT` stops feeding and lets saved-file work finish.
 
 Need to cancel an active read? Type `STOP`, use Windows Ctrl+C, or run `fv stop --project 'C:\full\project\path'` in another console. Wait for **STOPPED** and drive activity to stop before moving disks. Resume the same command/project; `fv start` is an alias for `fv scan`. [Details](STOP_RESUME.md). Exit `130` means operator cancellation.
 
-For less typing, use `fv scan --last-disk 20 --no-verify` and press **Enter only after swapping and checking the label/protection**. This skips label typing, not evidence verification.
+For less typing, add `--no-verify` and press **Enter only after swapping and checking the label/protection**. This skips label typing, not evidence verification.
 
-Resume from the **same project** with the same scan command. `--last-disk 20` means stop at disk 020, not read twenty more disks. Completed recovery is reused, not automatically reread.
+Resume from the **same project** with `fv production resume` (add `--no-verify`/`--sound on` again if wanted). The saved endpoint remains 020, not twenty more reads. Finishing and ZIP creation are automatic at the checked endpoint; partial results stay attention, never customer-certified. Output defaults to sibling `My-New-Batch-Delivery`. [Production guide](PRODUCTION_WORKFLOW.md).
+
+Existing `scan`/`start` retain their original behavior. Continue old batches with their original command; use a fresh project for the complete production path.
 
 After scanning:
 
