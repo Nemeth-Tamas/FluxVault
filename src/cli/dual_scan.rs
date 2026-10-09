@@ -304,9 +304,13 @@ enum Command {
     Pause,
     Resume,
     Quit,
+    Stop,
 }
 fn command(text: &str) -> Result<Command, String> {
     let text = text.trim().to_ascii_uppercase();
+    if text == "STOP" {
+        return Ok(Command::Stop);
+    }
     if matches!(text.as_str(), "QUIT" | "Q") {
         return Ok(Command::Quit);
     }
@@ -633,10 +637,14 @@ fn feed(
     display(&session, output, color, draining)?;
     let mut refresh = Instant::now();
     loop {
+        if crate::cancellation::requested() && !draining {
+            draining = true;
+            writeln!(output,"STOPPING / keep disks seated until STOPPED; active hosts are being cancelled; pending evidence retained").map_err(|e|e.to_string())?;
+        }
         if draining && session.workers.is_empty() {
             break;
         }
-        let event = match receiver.recv_timeout(Duration::from_secs(5)) {
+        let event = match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(event) => event,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !session.workers.is_empty() {
@@ -660,6 +668,12 @@ fn feed(
             }
             Event::Input(Some(line)) if !draining => {
                 let result = match command(&line) {
+                    Ok(Command::Stop) => {
+                        crate::cancellation::current().request();
+                        draining = true;
+                        writeln!(output,"STOPPING / keep disks seated until STOPPED. Cancelling active work; resume with the same command and labels.").map_err(|e|e.to_string())?;
+                        Ok(())
+                    }
                     Ok(Command::Quit) => {
                         draining = true;
                         writeln!(output, "QUIT: finishing active bounded reads and saved-file work; do not remove a READING disk.").map_err(|e| e.to_string())?;
@@ -732,7 +746,7 @@ fn feed(
                                 let closing = session.closing.clone();
                                 let owner = session.coordinator.owner();
                                 let t = ticket.clone();
-                                let worker = thread::spawn(move || {
+                                let worker = crate::cancellation::spawn(move || {
                                     let _owner = owner;
                                     let result = std::panic::catch_unwind(
                                         std::panic::AssertUnwindSafe(|| {
@@ -863,7 +877,7 @@ fn feed(
                                 log,
                                 "dual_read_failed",
                                 json!({"disk":ticket.disk,"station":station_name(ticket.station),"generation":ticket.generation,
-                                "read_decode_ms":read_ms,"error":error.chars().take(2000).collect::<String>()}),
+                                "read_decode_ms":read_ms,"cancelled":crate::cancellation::requested(),"error":error.chars().take(2000).collect::<String>()}),
                             )?;
                         }
                         terminal::banner(
@@ -871,19 +885,30 @@ fn feed(
                             color,
                             Cue::Error,
                             &format!(
-                                "{} {:03} NEEDS ATTENTION",
+                                "{} {:03} {}",
                                 station_name(ticket.station),
-                                ticket.disk
-                            ),
-                            &format!(
-                                "{error}\nPhysical read stopped. Reseat/check SAME disk, then type {}{} to retry, or QUIT. Other station remains usable.",
-                                if ticket.station == Station::Usb {
-                                    "u"
+                                ticket.disk,
+                                if crate::cancellation::requested() {
+                                    "READ CANCELLED"
                                 } else {
-                                    "g"
-                                },
-                                ticket.disk
+                                    "NEEDS ATTENTION"
+                                }
                             ),
+                            &if crate::cancellation::requested() {
+                                format!(
+                                    "{error}\nSession stopping. Keep disks seated until the final STOPPED cue and drive activity has stopped. Pending labels remain resumable."
+                                )
+                            } else {
+                                format!(
+                                    "{error}\nPhysical read stopped. Reseat/check SAME disk, then type {}{} to retry, or QUIT. Other station remains usable.",
+                                    if ticket.station == Station::Usb {
+                                        "u"
+                                    } else {
+                                        "g"
+                                    },
+                                    ticket.disk
+                                )
+                            },
                         )?;
                         errors.push(error);
                     }
@@ -926,13 +951,14 @@ fn feed(
         )?;
     }
     Ok(
-        json!({"completed_this_session":completed,"feeding_elapsed_ms":crate::benchmark::milliseconds(feeding_started.elapsed()),"measurements":measurements,"state":session.coordinator.status(),"errors":errors,"source_media_access":"read_only"}),
+        json!({"completed_this_session":completed,"feeding_elapsed_ms":crate::benchmark::milliseconds(feeding_started.elapsed()),"measurements":measurements,"state":session.coordinator.status(),"errors":errors,"source_media_access":"read_only","stopped":crate::cancellation::requested()}),
     )
 }
 
 pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse, String> {
     let run_started = Instant::now();
     crate::processing::validate_workspace(&project)?;
+    let _control = crate::run_control::Session::start(&project, "dual_scan")?;
     let selected = settings(&project, &options)?;
     let coordinator = Coordinator::open(project.clone(), selected.last, false)?;
     let mut telemetry = crate::benchmark::Session::start_dual(
@@ -988,6 +1014,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
     let packing = crate::flux_archive::Queue::start(&project)?;
     let (tx, receiver) = mpsc::sync_channel(64);
     let input_tx = tx.clone();
+    let input_stop = crate::cancellation::current();
     thread::spawn(move || {
         let stdin = io::stdin();
         let mut input = stdin.lock();
@@ -1004,10 +1031,15 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
                     break;
                 }
                 Ok(_) => {
-                    if input_tx
-                        .send(Event::Input(Some(String::from_utf8_lossy(&bytes).into())))
-                        .is_err()
-                    {
+                    let line = String::from_utf8_lossy(&bytes).into_owned();
+                    if line.trim().eq_ignore_ascii_case("STOP") {
+                        // Bypass the feed event pump: STOP must also reach active
+                        // workers after QUIT or while draining the file tail.
+                        input_stop.request();
+                        let _ = input_tx.try_send(Event::Input(Some(line)));
+                        break;
+                    }
+                    if input_tx.send(Event::Input(Some(line))).is_err() {
                         break;
                     }
                 }
@@ -1037,7 +1069,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
         Cue::Action,
         "DUAL READ-ONLY PILOT / EXACT LABELS REQUIRED",
         &format!(
-            "USB {} / GW {}. Type u1 for USB 001, g2 for GW 002. Each command asserts the label and OPEN protection tab; replacing a SAVED disk asserts its removal. gNNN transfers a saved USB partial. STATUS / u out / g out / PAUSE / RESUME / QUIT. QUIT drains reads; never move a READING disk.",
+            "USB {} / GW {}. Type u1 for USB 001, g2 for GW 002. Each command asserts the label and OPEN protection tab; replacing a SAVED disk asserts its removal. gNNN transfers a saved USB partial. STATUS / u out / g out / PAUSE / RESUME / QUIT / STOP. QUIT drains; STOP cancels. Wait for STOPPED and drive idle before moving disks.",
             selected.usb, selected.gw
         ),
     )?;
@@ -1067,7 +1099,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
     let mut value = result?;
     value["background_processing"] = json!(outcome);
     value["capture_storage_errors"] = json!(storage_errors);
-    if let Some(request) = request {
+    if let Some(request) = request.filter(|_| !crate::cancellation::requested()) {
         match crate::pipeline::run_pipeline_incremental(&request, &|s| eprintln!("[FILES] {s}")) {
             Ok(final_result) => {
                 let summary = crate::processing::summary(&final_result);

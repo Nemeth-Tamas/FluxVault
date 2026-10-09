@@ -206,6 +206,7 @@ impl Governor {
         let mut pressured_since = None;
         let mut notice = None;
         loop {
+            crate::cancellation::check()?;
             let (host, storage) = probe()?;
             let request = Request {
                 kind,

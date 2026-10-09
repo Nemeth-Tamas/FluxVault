@@ -396,7 +396,9 @@ pub fn report(project: &ProjectState) -> Result<BenchmarkReport, String> {
                     );
                 }
                 "recovery_failed" => {
-                    result.recovery_errors += 1;
+                    if data["cancelled"] != true {
+                        result.recovery_errors += 1;
+                    }
                     result.failed_recovery_seconds += number(data, "elapsed_ms")? as f64 / 1000.0;
                     result
                         .recorded_failures

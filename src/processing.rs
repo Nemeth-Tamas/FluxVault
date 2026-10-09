@@ -316,7 +316,7 @@ impl Queue {
         let cancelled = cancel.clone();
         let tasks = directory.clone();
         let worker_owner = Arc::clone(&owner);
-        let worker = thread::spawn(move || {
+        let worker = crate::cancellation::spawn(move || {
             let _owner = worker_owner;
             let status_path = request.project.reports_dir().join(STATUS);
             let mut outcome = Outcome::default();
@@ -329,7 +329,7 @@ impl Queue {
                     .map_err(|e| e.to_string())
             };
             loop {
-                if cancelled.load(Ordering::Acquire) {
+                if cancelled.load(Ordering::Acquire) || crate::cancellation::requested() {
                     break;
                 }
                 let pending = match jobs(&tasks) {

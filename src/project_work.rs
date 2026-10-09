@@ -75,6 +75,7 @@ pub(crate) fn snapshot(root: &Path) -> Result<File, String> {
     let file = open(root, ".fluxvault-artifacts.lock")?;
     let started = Instant::now();
     loop {
+        crate::cancellation::check()?;
         match file.try_lock() {
             Ok(()) => return Ok(file),
             Err(std::fs::TryLockError::WouldBlock)

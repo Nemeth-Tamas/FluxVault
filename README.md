@@ -15,6 +15,8 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 | Want optional settings and individual tools | [Advanced tutorial](TUTORIAL.md#advanced-optional-controls) and [CLI reference](CLI.md) |
 | Running a measured batch | [136-disk runbook](PILOT_136.md) or [small-test launcher](TOMORROW_TEST.md) |
 | Understand a difficult saved disk | [Saved-flux diagnostics](FLUX_DIAGNOSTICS.md): `fv diagnose 59` |
+| Stop active work and continue later | [Stop/resume](STOP_RESUME.md): `STOP`, `fv stop`, `fv start` |
+| Check benchmark readiness | [Single-GW gates](SINGLE_GW_READINESS.md) |
 | Want development status | [Progress](PROGRESS.md) and [TODO](TODO.md) |
 
 ## Beginner: the usual workflow
@@ -28,6 +30,8 @@ fv scan --last-disk 20
 ```
 
 At each prompt, insert the displayed disk with its write-protect hole open, check its label, and type its number, such as `001`. No `READ` prefix is necessary. `QUIT` stops feeding and lets saved-file work finish.
+
+Need to cancel an active read? Type `STOP`, use Windows Ctrl+C, or run `fv stop --project 'C:\full\project\path'` in another console. Wait for **STOPPED** and drive activity to stop before moving disks. Resume the same command/project; `fv start` is an alias for `fv scan`. [Details](STOP_RESUME.md). Exit `130` means operator cancellation.
 
 For less typing, use `fv scan --last-disk 20 --no-verify` and press **Enter only after swapping and checking the label/protection**. This skips label typing, not evidence verification.
 

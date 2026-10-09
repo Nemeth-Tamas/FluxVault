@@ -197,6 +197,7 @@ impl Drop for WinHandle {
 unsafe impl Send for WinHandle {}
 
 pub(crate) fn spawn(command: &mut Command) -> std::io::Result<ManagedChild> {
+    crate::cancellation::check().map_err(std::io::Error::other)?;
     ensure().map_err(std::io::Error::other)?;
     #[cfg(windows)]
     {
@@ -232,15 +233,31 @@ pub(crate) fn output(command: &mut Command) -> std::io::Result<Output> {
         let mut bytes = vec![];
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let status = child.wait()?; // closes the operation job BEFORE joining pipes
+    let status = (|| {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                break Ok(status);
+            }
+            if crate::cancellation::requested() {
+                child.terminate_tree().map_err(std::io::Error::other)?;
+                break child.wait();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    })();
+    // Close the operation job before joining BOTH pipes, even on wait/kill
+    // failure. Do not leave detached readers behind when reporting STOPPED.
+    drop(child);
+    let stdout = out
+        .join()
+        .map_err(|_| std::io::Error::other("stdout reader panicked"));
+    let stderr = err
+        .join()
+        .map_err(|_| std::io::Error::other("stderr reader panicked"));
     Ok(Output {
-        status,
-        stdout: out
-            .join()
-            .map_err(|_| std::io::Error::other("stdout reader panicked"))??,
-        stderr: err
-            .join()
-            .map_err(|_| std::io::Error::other("stderr reader panicked"))??,
+        status: status?,
+        stdout: stdout??,
+        stderr: stderr??,
     })
 }
 

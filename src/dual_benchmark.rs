@@ -290,7 +290,9 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                     }
                     intervals.push((start, time, s.clone()));
                     if e.kind == "dual_read_failed" {
-                        failures += 1;
+                        if e.data["cancelled"] != true {
+                            failures += 1;
+                        }
                     } else {
                         let attempt = u32::try_from(number(&e.data, "attempt")?)
                             .map_err(|e| e.to_string())?;

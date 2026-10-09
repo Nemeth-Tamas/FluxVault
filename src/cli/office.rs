@@ -126,6 +126,7 @@ pub(super) fn run(
         (None, None)
     };
     let settings = external_tools::load_settings()?;
+    let _control = crate::run_control::Session::start(project, "conversion")?;
     let audit_path = project.logs_dir().join("external-tools.jsonl");
     let executable = external_tools::find_ready_tool(
         ToolKind::LibreOffice,

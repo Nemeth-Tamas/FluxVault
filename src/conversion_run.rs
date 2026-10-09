@@ -258,7 +258,7 @@ impl JobResult {
 
 pub fn spawn_conversion(request: ConversionRequest) -> Receiver<ConversionEvent> {
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
+    crate::cancellation::spawn(move || {
         let result = run_conversion(
             &request,
             &|stage| {
@@ -694,7 +694,7 @@ fn reuse_if_bound(previous: Option<&OutputResult>, target: &Path) -> OutputResul
 
 fn retry_transient_failure(mut attempt: impl FnMut() -> OutputResult) -> OutputResult {
     let first = attempt();
-    if !first.retryable {
+    if !first.retryable || crate::cancellation::requested() {
         return first;
     }
     thread::sleep(CONVERSION_RETRY_DELAY);
@@ -785,7 +785,9 @@ fn run_bounded_events<T: Sync, R: Send>(
             let sender = sender.clone();
             let next = &next;
             let work = &work;
+            let stop_token = crate::cancellation::current();
             scope.spawn(move || {
+                let _stop_scope = crate::cancellation::enter(stop_token);
                 loop {
                     let slot = next.fetch_add(1, Ordering::Relaxed);
                     let Some(&index) = order.get(slot) else { break };
@@ -924,8 +926,11 @@ fn convert_output(
         let exit_status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
-                Ok(None) if started.elapsed() >= Duration::from_secs(request.timeout_seconds) => {
-                    timed_out = true;
+                Ok(None)
+                    if started.elapsed() >= Duration::from_secs(request.timeout_seconds)
+                        || crate::cancellation::requested() =>
+                {
+                    timed_out = !crate::cancellation::requested();
                     termination_issue = child.terminate_tree().err();
                     break child.wait().map_err(|error| {
                         format!("LibreOffice timeout utáni wait hiba: {error}")
@@ -956,7 +961,7 @@ fn convert_output(
             arguments,
             started_unix_ms,
             duration_ms: started.elapsed().as_millis(),
-            success: exit_status.success() && !timed_out,
+            success: exit_status.success() && !timed_out && !crate::cancellation::requested(),
             exit_code: exit_status.code(),
             stdout: stdout_text.clone(),
             stderr: match &termination_issue {
@@ -969,6 +974,7 @@ fn convert_output(
             controller_supervision: crate::process_supervision::audit_mode(),
         };
         external_tools::append_audit(&request.command_audit_path, &audit)?;
+        crate::cancellation::check()?;
         if timed_out {
             return Ok(OutputResult {
                 state: OutputState::Timeout,
@@ -1025,10 +1031,19 @@ fn convert_output(
             output_sha256: Some(output_sha256),
         })
     })();
-    let _ = fs::remove_dir_all(&root);
+    if !crate::cancellation::requested() {
+        let _ = fs::remove_dir_all(&root);
+    }
     match result {
         Ok(result) => result,
-        Err(error) => failure(error),
+        Err(error) => failure(if crate::cancellation::requested() {
+            format!(
+                "{error}; temporary conversion evidence retained at {}",
+                root.display()
+            )
+        } else {
+            error
+        }),
     }
 }
 

@@ -5,7 +5,6 @@ use std::{
     fs,
     path::PathBuf,
     sync::mpsc::{self, Receiver},
-    thread,
 };
 
 use serde::Serialize;
@@ -113,7 +112,7 @@ fn publish_recovery(
 
 pub fn spawn_pipeline(request: PipelineRequest) -> Receiver<PipelineEvent> {
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
+    crate::cancellation::spawn(move || {
         let result = run_pipeline(&request, &|stage| {
             let _ = sender.send(PipelineEvent::Stage(stage.to_owned()));
         });
@@ -126,6 +125,7 @@ pub(crate) fn run_pipeline(
     request: &PipelineRequest,
     stage: &impl Fn(&str),
 ) -> Result<PipelineResult, String> {
+    crate::cancellation::check()?;
     run_pipeline_mode(request, stage, false)
 }
 
@@ -141,6 +141,7 @@ fn run_pipeline_mode(
     stage: &impl Fn(&str),
     incremental: bool,
 ) -> Result<PipelineResult, String> {
+    crate::cancellation::check()?;
     if !request.seven_zip_executable.is_file() {
         return Err(format!(
             "7-Zip is unavailable: {}",
@@ -171,6 +172,7 @@ fn run_pipeline_mode(
     let mut decisions = Vec::new();
     let mut publications = PublicationCounts::default();
     for plan in recovery_plan::plan_project(&project.images_dir())? {
+        crate::cancellation::check()?;
         if plan.action == RecoveryAction::CompareAndComposite {
             let attempts =
                 imaging::load_attempts_for_disk(&project.images_dir(), plan.disk_number)?;

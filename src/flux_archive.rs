@@ -189,6 +189,7 @@ fn hash(
     let mut count = 0;
     let mut buffer = [0u8; 64 * 1024];
     loop {
+        crate::cancellation::check()?;
         let n = input.read(&mut buffer).map_err(|e| e.to_string())?;
         if n == 0 {
             break;
@@ -591,7 +592,7 @@ impl Queue {
         let ending = finish.clone();
         let root = project.root().to_owned();
         let jobs = directory.clone();
-        let worker = thread::spawn(move || {
+        let worker = crate::cancellation::spawn(move || {
             let _owner = owner;
             let mut errors = Vec::new();
             let mut attempted = std::collections::BTreeSet::new();
@@ -603,6 +604,9 @@ impl Queue {
             // completed. Only captures named by valid scratch ownership are hashed.
             errors.extend(cleanup_project_scratch(&project));
             loop {
+                if crate::cancellation::requested() {
+                    break;
+                }
                 // Acquire the producer's finished flag before enumerating jobs:
                 // finish must not miss a last task published after an earlier
                 // directory snapshot. Otherwise notifications drive the next loop.
@@ -1130,6 +1134,36 @@ mod tests {
         fs::write(&raw, &bytes).unwrap();
         fs::write(flux.join("001_attempt_001.json"),serde_json::to_vec(&serde_json::json!({"schema_version":1,"disk_number":1,"attempt_number":1,"profile":"ibm.1440","drive":"B","revolutions":2,"status":"complete","flux_file":"001_attempt_001.scp","bytes":bytes.len(),"sha256":file_hash(&raw).unwrap(),"command":[],"detail":null})).unwrap()).unwrap();
         (project, directory, bytes)
+    }
+    #[test]
+    fn stopped_packer_preserves_raw_and_restarts_verified_retirement() {
+        let (project, root, bytes) = fixture();
+        let (raw, size, hash) = flux_capture::raw_identity(&project, 1, 1).unwrap();
+        let token = crate::cancellation::Token::default();
+        let scope = crate::cancellation::enter(token.clone());
+        let mut stop = |stage: &str| -> Result<(), String> {
+            if stage == "zip-written" {
+                token.request();
+            }
+            Ok(())
+        };
+        let mut hooks = TestHooks {
+            checkpoint: Some(&mut stop),
+            fail_after: None,
+            binding_fail_after: None,
+        };
+        let error = pack_inner(&project, 1, 1, true, &mut hooks).unwrap_err();
+        assert!(crate::cancellation::stopped(&error), "{error}");
+        assert_eq!(fs::read(&raw).unwrap(), bytes);
+        assert!(!packed_path(&raw).exists());
+        drop(scope);
+        pack(&project, 1, 1, true).unwrap();
+        verify(&raw, size, &hash).unwrap();
+        assert!(!raw.exists());
+        let restored = open_source(&raw, size, &hash).unwrap();
+        assert_eq!(fs::read(&restored.path).unwrap(), bytes);
+        drop(restored);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn verified_retirement_materialization_locks_and_export_preserve_original_identity() {

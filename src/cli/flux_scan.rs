@@ -256,6 +256,7 @@ pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefau
 
 pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<CliResponse, String> {
     options.validate()?;
+    let _control = crate::run_control::Session::start(&project, "scan")?;
     crate::flux_capture::project_flux_dir(&project)?;
     let reservation = GreaseweazleReservation::acquire()?;
     let settings = crate::external_tools::load_settings()?;
@@ -310,7 +311,6 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
             "BACKGROUND PROCESSING ON: saved-file work continues between swaps. Worker details: `fv processing status`; swap banners stay unobscured."
         );
     }
-    let stdin = io::stdin();
     let mut stderr = io::stderr();
     let mut queue = if options.packed_captures
         && project
@@ -326,7 +326,7 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
     let response = run_with_io(
         &mut project,
         &options,
-        stdin.lock(),
+        crate::run_control::Input::stdin(),
         &mut stderr,
         |project, disk| {
             let response = flux::recover_reserved(
@@ -582,6 +582,7 @@ where
     let mut no_index_reseats = 0usize;
     let mut reseat_error: Option<String> = None;
     loop {
+        crate::cancellation::check()?;
         if options.count.is_some_and(|limit| results.len() >= limit) {
             break;
         }
@@ -661,13 +662,13 @@ where
             if options.no_verify {
                 writeln!(
                     output,
-                    "Press Enter after inserting {disk:03}, or type QUIT:"
+                    "Press Enter after inserting {disk:03}, QUIT to drain, or STOP to cancel:"
                 )
                 .map_err(|e| e.to_string())?;
             } else {
                 writeln!(
                     output,
-                    "Type {disk:03} to confirm and read it, or QUIT: [format {}]",
+                    "Type {disk:03} to confirm and read it, QUIT to drain, or STOP to cancel: [format {}]",
                     options.format_label(disk)?
                 )
                 .map_err(|e| e.to_string())?;
@@ -733,6 +734,7 @@ where
                     telemetry.record(
                         "recovery_failed",
                         json!({"disk":disk,"phase":"acquisition",
+                        "cancelled":crate::cancellation::requested(),
                         "elapsed_ms":benchmark::milliseconds(started.elapsed()),"error":error,
                         "reseat_retry_available":retryable,"reseat_retries_used":no_index_reseats}),
                     )?;
@@ -747,8 +749,17 @@ where
                         output,
                         options.color,
                         Cue::Error,
-                        &format!("READ FAILED {disk:03} / NUMBER NOT ADVANCED"),
-                        if crate::flux_capture::is_no_index_capture_failure(&error) {
+                        &format!(
+                            "{} {disk:03} / NUMBER NOT ADVANCED",
+                            if crate::cancellation::requested() {
+                                "READ CANCELLED"
+                            } else {
+                                "READ FAILED"
+                            }
+                        ),
+                        if crate::cancellation::requested() {
+                            "Stop requested. Keep the disk seated until the final STOPPED cue and drive activity has stopped. Pending label and partial evidence retained."
+                        } else if crate::flux_capture::is_no_index_capture_failure(&error) {
                             "No Index persisted after two confirmed reseat retries. Evidence retained; check disk seating/drive/power before manually resuming this same project. No next-disk read started."
                         } else {
                             "Evidence retained. No automatic next-disk read; inspect the error before retrying."

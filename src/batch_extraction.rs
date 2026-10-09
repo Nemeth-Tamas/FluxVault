@@ -291,6 +291,7 @@ pub(crate) fn run_batch_extraction(
     let mut zero_file_disks = 0usize;
 
     for (index, disk) in statistics.disks.iter().enumerate() {
+        crate::cancellation::check()?;
         let disk_number = disk.disk_number;
         send_stage(&format!(
             "Lemez {disk_number:03} feldolgozása ({}/{total_disks})...",

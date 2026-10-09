@@ -26,7 +26,7 @@ pub(super) fn run(
     count: Option<usize>,
     write_blocker_verified: bool,
 ) -> Result<CliResponse, String> {
-    let stdin = io::stdin();
+    let _control = crate::run_control::Session::start(project, "usb_scan")?;
     let mut stderr = io::stderr().lock();
     run_with_io(
         project,
@@ -36,7 +36,7 @@ pub(super) fn run(
             count,
             write_blocker_verified,
         },
-        stdin.lock(),
+        crate::run_control::Input::stdin(),
         &mut stderr,
         |project, disk| acquire::run(project, false, drive, Some(disk), retries, true),
     )
@@ -63,6 +63,7 @@ fn run_with_io<
     let mut scanned = 0usize;
     let mut partial = 0usize;
     loop {
+        crate::cancellation::check()?;
         if config.count.is_some_and(|limit| scanned >= limit) {
             break;
         }
@@ -70,7 +71,7 @@ fn run_with_io<
         let next = disk.checked_add(1).ok_or("Disk number overflow")?;
         writeln!(
             output,
-            "Insert floppy {disk:03} in USB {drive} with its write-protect tab set. Type {disk:03} to confirm its label (legacy READ also accepted), or QUIT to stop:"
+            "Insert floppy {disk:03} in USB {drive} with its write-protect tab set. Type {disk:03} to confirm its label (legacy READ also accepted), QUIT to drain, or STOP to cancel:"
         )
         .map_err(|error| format!("Cannot display scan prompt: {error}"))?;
         output

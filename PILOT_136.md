@@ -6,6 +6,8 @@
 
 **Goal:** read the numbered customer collection on the working Mitsumi/Greaseweazle station, preserve evidence, run the saved-file processing chain, and collect a useful performance/recovery baseline. This is a controlled single-station pilot, not a promise that every damaged disk will yield every file or that the six-hour dual-drive target has been met.
 
+[Pre-benchmark software gates now pass](SINGLE_GW_READINESS.md), including the live 2026-10-09 WinWord stop/resume check. Type `STOP` to cancel or `QUIT` to drain; resume the same project/command. Wait for STOPPED and physical idle before moving disks. [Stop/resume guide](STOP_RESUME.md).
+
 ## 1. Start with a small hardware smoke test
 
 For the shortest next-session path, use [TOMORROW_TEST.md](TOMORROW_TEST.md): its launcher creates an isolated project, runs 009 or 058, and gathers a pasteable summary and baseline comparison. The manual steps below remain available.

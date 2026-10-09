@@ -6,7 +6,6 @@ use std::{
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     sync::mpsc::{self, Receiver},
-    thread,
 };
 
 use chrono::{DateTime, Local, Utc};
@@ -61,7 +60,7 @@ struct ManifestRow {
 
 pub fn spawn_package(request: PackageRequest) -> Receiver<PackageEvent> {
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
+    crate::cancellation::spawn(move || {
         let result = build_package(&request, &|stage| {
             let _ = sender.send(PackageEvent::Stage(stage.to_owned()));
         });
@@ -74,6 +73,7 @@ pub(crate) fn build_package(
     request: &PackageRequest,
     stage: &impl Fn(&str),
 ) -> Result<PackageResult, String> {
+    crate::cancellation::check()?;
     let project = request.project_root.canonicalize().map_err(|error| {
         format!(
             "Project directory cannot be resolved {}: {error}",
@@ -162,6 +162,7 @@ pub(crate) fn build_package(
     };
 
     let sha256 = hash_file(&partial_path)?;
+    crate::cancellation::check()?;
     fs::rename(&partial_path, &zip_path).map_err(|error| {
         format!(
             "Verified ZIP could not be promoted to {}: {error}",
@@ -406,6 +407,7 @@ fn write_and_verify(
         .compression_level(Some(6));
     let mut rows = Vec::with_capacity(files.len());
     for (index, item) in files.iter().enumerate() {
+        crate::cancellation::check()?;
         stage(&format!(
             "Packaging file {} of {}: {}",
             index + 1,
@@ -427,6 +429,7 @@ fn write_and_verify(
         let mut bytes = 0_u64;
         let mut buffer = [0_u8; 64 * 1024];
         loop {
+            crate::cancellation::check()?;
             let count = source
                 .read(&mut buffer)
                 .map_err(|error| error.to_string())?;
@@ -580,6 +583,59 @@ fn hash_file(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_during_package_write_preserves_partial_and_never_promotes_it() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-package-stop-{}-{}",
+            std::process::id(),
+            crate::external_tools::current_unix_ms()
+        ));
+        let project =
+            crate::project::ProjectState::create_without_session(root.join("project")).unwrap();
+        let destination = root.join("delivery");
+        fs::create_dir(&destination).unwrap();
+        let source = project.root().join("Extracted/001/data.bin");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        let bytes = vec![0x45; 128 * 1024];
+        fs::write(&source, &bytes).unwrap();
+        let token = crate::cancellation::Token::default();
+        let scope = crate::cancellation::enter(token.clone());
+        let request = PackageRequest {
+            project_root: project.root().to_owned(),
+            destination: destination.clone(),
+            project_name: "stop-test".into(),
+        };
+        let error = build_package(&request, &|stage| {
+            if stage.starts_with("Packaging file") {
+                token.request();
+            }
+        })
+        .unwrap_err();
+        assert!(crate::cancellation::stopped(&error), "{error}");
+        let files = fs::read_dir(&destination)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 1);
+        assert!(
+            files[0]
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".partial.zip")
+        );
+        let partial = fs::read(&files[0]).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        drop(scope);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let result = build_package(&request, &|_| {}).unwrap();
+        assert!(result.zip_path.is_file());
+        assert!(result.sha256_path.is_file());
+        assert_eq!(fs::read(&files[0]).unwrap(), partial);
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn creates_verified_package_without_internal_files() {

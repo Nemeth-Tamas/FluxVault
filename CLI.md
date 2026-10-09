@@ -24,6 +24,8 @@ The installer provides both `fluxvault.exe` and the identical short alias `fv.ex
 
 ## Everyday scan controls
 
+`fv start` aliases `fv scan`, with identical options/resume. Scan `STOP` cancels; `QUIT` drains. Windows Ctrl+C requests cooperative cancellation; second-console `fv stop [--project PATH]` requests it too. `fv run status [--project PATH] [--json]` probes the owner offline. Wait for **STOPPED** and drive activity to cease before moving disks. Cancellation exits `130`. [Command scopes, JSON/exit contract and restart](STOP_RESUME.md).
+
 GW scans reuse saved defaults for omitted profile/map, selector, policy, endpoint, storage/processing mode and conversion workers. Explicit overrides remain subject to pending-job consistency checks. Fresh projects default to selector B, automatic IBM 720 KB/1.44 MB discovery, verified packed retention, background saved-file processing, the built-in policy, four workers and no endpoint. Numbered input asserts label/protection checks; individual capture/recover still require `--source-write-protected`. `004` or `4` confirms 004; `QUIT`/`Q` stops. Blank/wrong-number input refuses reads by default. Legacy `READ 004` is accepted. See [POLICIES.md](POLICIES.md).
 
 ```powershell

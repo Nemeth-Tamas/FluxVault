@@ -228,6 +228,7 @@ impl GreaseweazleCommand {
     fn new_checked(arguments: Vec<String>) -> Result<Self, String> {
         let command = Self { arguments };
         command.validate_safe()?;
+        crate::cancellation::check()?;
         Ok(command)
     }
 
@@ -797,8 +798,8 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
                 Ok(Some(status)) => {
                     break Some(status);
                 }
-                Ok(None) if started.elapsed() >= timeout => {
-                    timed_out = true;
+                Ok(None) if started.elapsed() >= timeout || crate::cancellation::requested() => {
+                    timed_out = !crate::cancellation::requested();
                     termination_issue = child.terminate_tree().err();
                     break child.wait().ok();
                 }
@@ -822,6 +823,9 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
 
         let stdout_text = stdout_handle.join().unwrap_or_default();
         let mut stderr_text = stderr_handle.join().unwrap_or_default();
+        if crate::cancellation::requested() {
+            stderr_text.push_str(crate::cancellation::MESSAGE);
+        }
 
         if timed_out {
             let msg = format!(
@@ -846,8 +850,11 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
                 GreaseweazleProgressEvent::Error(_)
             )
         });
-        let success =
-            exit_status.as_ref().is_some_and(|s| s.success()) && !timed_out && !reported_failure;
+        let success = exit_status.as_ref().is_some_and(|s| s.success())
+            && !timed_out
+            && !reported_failure
+            && !crate::cancellation::requested()
+            && termination_issue.is_none();
         let exit_code = exit_status.and_then(|s| s.code());
 
         let stdout_trimmed = stdout_text.trim().to_owned();

@@ -598,6 +598,7 @@ fn recover_impl(
     let mut previous = profile.expected_sector_image_bytes() as usize / 512;
     let mut reason = "pass_limit";
     for (index, pass) in policy.passes.iter().enumerate() {
+        crate::cancellation::check()?;
         if index < j.stages.len() && j.stages[index].decode_attempt.is_some() {
             let remaining = unfinished(&aggregate(project, disk, profile, &j.stages[..=index])?);
             no_improvement = if index > 0 && remaining >= previous {

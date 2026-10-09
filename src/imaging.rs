@@ -4,7 +4,6 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
-    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -192,7 +191,7 @@ pub(crate) fn start_imaging_publication(
 ) -> Receiver<ImagingEvent> {
     let (sender, receiver) = mpsc::channel();
 
-    thread::spawn(move || {
+    crate::cancellation::spawn(move || {
         if let Err(error) = run_imaging(
             drive,
             geometry,
@@ -373,6 +372,7 @@ fn run_imaging(
     let mut retry_recovered = 0usize;
 
     for track_index in 0..total_tracks {
+        crate::cancellation::check()?;
         let track_lba = track_index
             .checked_mul(sectors_per_track)
             .ok_or_else(|| "LBA tulcsordulas.".to_owned())?;
@@ -397,6 +397,7 @@ fn run_imaging(
                     .map_err(|error| format!("Lemezkep irasi hiba: {error}"))?;
 
                 for sector_index in 0..sectors_per_track {
+                    crate::cancellation::check()?;
                     let lba = track_lba + sector_index;
 
                     sender
@@ -417,6 +418,7 @@ fn run_imaging(
                 }
             }
             Err(track_error) => {
+                crate::cancellation::check()?;
                 record_attempt_log(
                     sender,
                     &mut human_log,
@@ -426,6 +428,7 @@ fn run_imaging(
                 );
 
                 for sector_index in 0..sectors_per_track {
+                    crate::cancellation::check()?;
                     let lba = track_lba + sector_index;
 
                     let sector_offset = (lba as u64)
@@ -498,6 +501,7 @@ fn run_imaging(
         );
 
         for lba in retry_lbas {
+            crate::cancellation::check()?;
             let sector_offset = (lba as u64)
                 .checked_mul(geometry.bytes_per_sector as u64)
                 .ok_or_else(|| "Retry szektor offset tulcsordulas.".to_owned())?;
@@ -637,6 +641,7 @@ fn run_imaging(
     } else {
         "PARTIAL"
     };
+    crate::cancellation::check()?;
 
     record_attempt_log(
         sender,

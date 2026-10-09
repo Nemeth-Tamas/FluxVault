@@ -69,6 +69,10 @@ Usage:
                                     Read-only image; requires independently verified hardware
   fluxvault scan [--last-disk N] [--no-verify] [--conversion-workers N]
                                     Guided Greaseweazle scan; reuses saved project settings
+  fluxvault start [scan options]    Same as scan; resumes the same project
+  fluxvault stop [--project PATH]   Request safe stop from a second console; wait for STOPPED
+  fluxvault run status [--project PATH]
+                                    Inspect active controllable work without reading a drive
   fluxvault scan --usb [--drive A:] --write-blocker-verified
                                     USB-only shortcut; numbered labels or legacy READ
   fluxvault scan --double --write-blocker-verified [--last-disk N]
@@ -185,7 +189,9 @@ Options:
   --acquisition-only               Skip downstream processing after recovery
   --no-verify                      GW scan: Enter confirms displayed disk; skips label typing ONLY
   --color auto|always|never         GW scan cues (default auto; respects NO_COLOR)
-Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error"#;
+During scanning: QUIT drains; STOP cancels active work. Windows Ctrl+C requests safe stop.
+Keep disks seated until STOPPED and drive activity has stopped. Resume the same command/project.
+Exit codes: 0 complete, 3 attention/partial, 2 invalid input or operation error, 130 operator stop"#;
 
 #[derive(Debug)]
 pub(crate) struct CliResponse {
@@ -200,30 +206,69 @@ pub fn run_from_env() -> i32 {
         return 0;
     }
     let json_output = args.iter().any(|argument| argument == "--json");
+    let stop_token = crate::cancellation::current();
+    if let Err(error) = crate::cancellation::install_console(stop_token.clone()) {
+        eprintln!("FluxVault: {error}");
+        return 2;
+    }
+    let _stop_scope = crate::cancellation::enter(stop_token.clone());
     match run(
         &args,
         &env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     ) {
         Ok(response) => {
             println!("{}", response.output);
-            response.exit_code
+            if stop_token.requested() {
+                eprintln!(
+                    "STOPPED / host workers have returned. Wait for drive activity to stop before removing disks; resume the same project and reconfirm pending labels."
+                );
+            }
+            if stop_token.requested() {
+                130
+            } else {
+                response.exit_code
+            }
         }
         Err(message) => {
+            let message = if stop_token.requested() {
+                crate::cancellation::MESSAGE.to_owned()
+            } else {
+                message
+            };
+            if stop_token.requested() {
+                eprintln!(
+                    "STOPPED / host workers have returned. Wait for drive activity to stop before removing disks; resume the same project and reconfirm pending labels."
+                );
+            }
             if json_output {
                 println!("{}", json_error(&message));
             } else {
                 eprintln!("FluxVault: {message}");
             }
-            2
+            if crate::cancellation::stopped(&message) {
+                130
+            } else {
+                2
+            }
         }
     }
 }
 
 fn json_error(message: &str) -> String {
-    json!({"error": {"code": "operation_error", "message": message}}).to_string()
+    json!({"error": {"code": if crate::cancellation::stopped(message) {"operation_cancelled"} else {"operation_error"}, "message": message}}).to_string()
 }
 
 pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
+    // Help must never become an init path (or trigger tools/media access).
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        return Ok(CliResponse {
+            output: HELP.to_owned(),
+            exit_code: 0,
+        });
+    }
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
     let mut destination: Option<PathBuf> = None;
@@ -440,7 +485,6 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 }
                 conversion_workers = Some(workers);
             }
-            "--help" | "-h" => positional.push("help".to_owned()),
             value if value.starts_with('-') => {
                 return Err(format!("Unknown option: {value}. Run fluxvault --help"));
             }
@@ -451,6 +495,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
 
     if details && !(positional.len() == 3 && positional[0] == "disk" && positional[1] == "show") {
         return Err("--details is only valid with disk show N".to_owned());
+    }
+    if positional.first().is_some_and(|s| s == "start") {
+        positional[0] = "scan".into();
     }
     if (usb_only || double || dual_plan) && positional != ["scan"] {
         return Err("--usb, --double and --plan are only valid with plain scan".into());
@@ -786,6 +833,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 cwd,
                 project_override.as_deref(),
             )?)?;
+            let _control = crate::run_control::Session::start(&project, "processing_resume")?;
             let outcome = crate::processing::resume(
                 &project,
                 conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
@@ -813,12 +861,23 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            let _control = crate::run_control::Session::start(&project, "storage_resume")?;
             eprintln!("Resuming durable lossless storage tasks; no board or floppy access...");
             let errors = crate::flux_archive::Queue::start(&project)?.finish();
+            let stopped = crate::cancellation::requested();
             return Ok(CliResponse {
-                exit_code: if errors.is_empty() { 0 } else { 3 },
+                exit_code: if stopped {
+                    130
+                } else if errors.is_empty() {
+                    0
+                } else {
+                    3
+                },
                 output: if json_output {
-                    json!({"errors":errors,"physical_media_access":false}).to_string()
+                    json!({"errors":errors,"stopped":stopped,"physical_media_access":false})
+                        .to_string()
+                } else if stopped {
+                    "Capture storage stopped; unfinished tasks and evidence retained. Resume with fv storage resume.".to_owned()
                 } else if errors.is_empty() {
                     "Capture storage queue complete; byte-identical originals preserved in verified containers.".to_owned()
                 } else {
@@ -1316,6 +1375,39 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 scan_count,
                 write_blocker_verified,
             );
+        }
+        Some("stop") if positional.len() == 1 && destination.is_none() => {
+            let project = ProjectState::open_without_session(resolve_project_root(
+                cwd,
+                project_override.as_deref(),
+            )?)?;
+            let result = crate::run_control::stop(&project)?;
+            return Ok(CliResponse {
+                exit_code: 0,
+                output: if json_output {
+                    result.to_string()
+                } else {
+                    "STOP requested. Wait for the original console to confirm stopped before moving any disk. Resume with the same scan command; pending labels still need confirmation.".into()
+                },
+            });
+        }
+        Some("run") if positional == ["run", "status"] && destination.is_none() => {
+            let project = ProjectState::open_without_session(resolve_project_root(
+                cwd,
+                project_override.as_deref(),
+            )?)?;
+            let result = crate::run_control::status(&project)?;
+            return Ok(CliResponse {
+                exit_code: 0,
+                output: if json_output {
+                    result.to_string()
+                } else {
+                    format!(
+                        "Controllable operation active: {}. Saved record: {}. No hardware accessed.",
+                        result["active"], result["record"]
+                    )
+                },
+            });
         }
         Some("status") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
@@ -2079,6 +2171,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("process") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            let _control = crate::run_control::Session::start(&project, "process")?;
             let reports_directory = project.reports_dir();
             let settings = external_tools::load_settings()?;
             let command_audit_path = project.logs_dir().join("external-tools.jsonl");
@@ -2173,6 +2266,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("package") if positional.len() == 2 && positional[1] == "build" => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            let _control = crate::run_control::Session::start(&project, "package")?;
             let destination = destination.ok_or("package build requires --destination PATH")?;
             let destination = if destination.is_absolute() {
                 destination
@@ -2485,6 +2579,38 @@ mod tests {
     #[test]
     fn rejects_unknown_commands_without_starting_another_interface() {
         assert!(run(&["acquire".to_owned()], Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn command_help_never_creates_a_project_or_starts_work() {
+        let error: serde_json::Value = serde_json::from_str(&json_error(
+            "Host reported an error in customer file [FV_STOPPED].doc",
+        ))
+        .unwrap();
+        assert_eq!(error["error"]["code"], "operation_error");
+        let error: serde_json::Value =
+            serde_json::from_str(&json_error(crate::cancellation::MESSAGE)).unwrap();
+        assert_eq!(error["error"]["code"], "operation_cancelled");
+        let root = env::temp_dir().join(format!(
+            "fluxvault-help-{}-{}",
+            std::process::id(),
+            crate::external_tools::current_unix_ms()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        for args in [
+            vec!["init", "--help"],
+            vec!["init", "unexpected-project", "-h"],
+            vec!["scan", "--double", "--help"],
+            vec!["start", "-h"],
+            vec!["stop", "--help"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let result = run(&args, &root).unwrap();
+            assert_eq!(result.exit_code, 0);
+            assert_eq!(result.output, HELP);
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

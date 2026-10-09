@@ -1,4 +1,67 @@
 use super::*;
+
+#[test]
+fn stop_cancels_both_active_mock_stations_without_receipts_and_reopens_same_labels() {
+    let p = project();
+    let c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    let token = crate::cancellation::Token::default();
+    let worker_token = token.clone();
+    let reader: Reader = Arc::new(move |_, _, _| {
+        let start = Instant::now();
+        while !crate::cancellation::requested() {
+            assert!(start.elapsed() < Duration::from_secs(10));
+            thread::sleep(Duration::from_millis(5));
+        }
+        Err(crate::cancellation::MESSAGE.into())
+    });
+    let (tx, rx) = mpsc::sync_channel(64);
+    let producer = tx.clone();
+    let worker = thread::spawn(move || {
+        let _scope = crate::cancellation::enter(worker_token);
+        feed(
+            session(c),
+            rx,
+            producer,
+            reader,
+            None,
+            None,
+            &mut vec![],
+            false,
+            None,
+        )
+        .unwrap()
+    });
+    for command in ["u1", "g2"] {
+        tx.send(Event::Input(Some(command.into()))).unwrap();
+    }
+    wait_phase(&p, 1, "reading");
+    wait_phase(&p, 2, "reading");
+    tx.send(Event::Input(Some("STOP".into()))).unwrap();
+    let result = worker.join().unwrap();
+    assert_eq!(result["stopped"], true);
+    assert!(token.requested());
+    assert_eq!(result["completed_this_session"], 0);
+    for disk in ["1", "2"] {
+        assert_eq!(result["state"]["disks"][disk]["phase"], "interrupted");
+    }
+    assert!(
+        imaging::load_project_statistics(&p.images_dir())
+            .unwrap()
+            .disks
+            .is_empty()
+    );
+    let mut reopened = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    assert!(begin(&mut reopened, Station::Usb, 2).is_err());
+    assert!(begin(&mut reopened, Station::Greaseweazle, 1).is_err());
+    for (station, disk) in [(Station::Usb, 1), (Station::Greaseweazle, 2)] {
+        let ticket = begin(&mut reopened, station, disk).unwrap();
+        evidence(&p, &ticket, 1, &[]);
+        reopened.complete(&ticket, 1).unwrap();
+        reopened.removed(&ticket, true).unwrap();
+    }
+    drop(reopened);
+    fs::remove_dir_all(p.root()).unwrap();
+}
 use sha2::{Digest, Sha256};
 
 #[test]

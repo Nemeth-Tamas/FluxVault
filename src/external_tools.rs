@@ -281,7 +281,7 @@ pub fn run_audited_command_with_version(
             arguments: arguments.to_vec(),
             started_unix_ms,
             duration_ms,
-            success: output.status.success(),
+            success: output.status.success() && !crate::cancellation::requested(),
             exit_code: output.status.code(),
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
@@ -347,8 +347,10 @@ pub fn run_audited_probe(
             let status = loop {
                 match child.try_wait() {
                     Ok(Some(status)) => break Some(status),
-                    Ok(None) if started.elapsed() >= timeout => {
-                        timed_out = true;
+                    Ok(None)
+                        if started.elapsed() >= timeout || crate::cancellation::requested() =>
+                    {
+                        timed_out = !crate::cancellation::requested();
                         issue = child.terminate_tree().err();
                         break child.wait().ok();
                     }
@@ -370,12 +372,16 @@ pub fn run_audited_probe(
                 stderr.push_str(&format!("\nProbe timed out after {}s", timeout.as_secs()));
             }
             let wait_or_termination_failed = issue.is_some();
+            if crate::cancellation::requested() {
+                stderr.push_str(crate::cancellation::MESSAGE);
+            }
             if let Some(issue) = issue {
                 stderr.push_str(&format!("\nProcess termination issue: {issue}"));
             }
             (
                 status.as_ref().is_some_and(|status| status.success())
                     && !timed_out
+                    && !crate::cancellation::requested()
                     && !wait_or_termination_failed,
                 status.and_then(|status| status.code()),
                 stdout,

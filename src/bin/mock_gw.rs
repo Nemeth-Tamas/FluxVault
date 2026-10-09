@@ -17,6 +17,50 @@ fn main() {
         return;
     }
 
+    if args.first().is_some_and(|arg| arg == "--version") {
+        println!("mock_gw 1.23");
+        return;
+    }
+    // Disposable Office-runner lifecycle fixture; never opens hardware.
+    if args.first().is_some_and(|arg| arg == "--headless") {
+        use std::io::Write;
+        let out = PathBuf::from(&args[args.iter().position(|s| s == "--outdir").unwrap() + 1]);
+        let format = &args[args.iter().position(|s| s == "--convert-to").unwrap() + 1];
+        let extension = format.split(':').next().unwrap();
+        let source = std::path::Path::new(args.last().unwrap());
+        let target = out.join(format!(
+            "{}.{}",
+            source.file_stem().unwrap().to_string_lossy(),
+            extension
+        ));
+        if env::var_os("MOCK_GW_OFFICE_TREE").is_some() {
+            mock_tree(Some(&target));
+        }
+        if extension == "pdf" {
+            fs::write(
+                target,
+                b"%PDF-1.7\nmock fixture, not a real conversion\n%%EOF\n",
+            )
+            .unwrap();
+        } else {
+            let mut archive = zip::ZipWriter::new(fs::File::create(target).unwrap());
+            for (name, bytes) in [
+                ("[Content_Types].xml", b"<Types/>".as_slice()),
+                (
+                    "word/document.xml",
+                    b"<document>mock conversion fixture</document>".as_slice(),
+                ),
+            ] {
+                archive
+                    .start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                archive.write_all(bytes).unwrap();
+            }
+            archive.finish().unwrap();
+        }
+        return;
+    }
+
     if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!("mock_gw: Mock Greaseweazle host tool for FluxVault testing");
         println!("Supported commands: info, read, convert");

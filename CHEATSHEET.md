@@ -39,6 +39,21 @@ fv scan --last-disk 20 --no-verify
 
 Insert the **displayed next/pending disk**, not necessarily 001. Repeat original settings/endpoint; do not run `init` or reset numbering. `--no-verify` skips label typing only and must be supplied each session.
 
+### Stop now; continue later
+
+Type `STOP` during a scan, or use Windows Ctrl+C. `QUIT` instead finishes reads and drains saved work.
+
+```powershell
+# Second console, while the first is busy:
+fv stop --project 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
+fv run status --project 'C:\Users\User\Desktop\FluxVault-Test\My-New-Batch'
+
+# Resume from the SAME project; start = scan:
+fv start --last-disk 20 --no-verify
+```
+
+Keep disks seated until **STOPPED** and drive activity has stopped. Never reinitialize/reset to resume. [Full guide](STOP_RESUME.md).
+
 ### After scanning
 
 ```powershell
@@ -78,7 +93,7 @@ Destination must exist outside the project. Finalize blocks automatic packaging 
 | Red **FAILED** | Keep the same number/project; inspect error. |
 | **BATCH FINISHED / REMOVE** | Remove last disk; no further insertion. |
 
-Exit codes: **0** completed · **3** attention/partial · **2** input/operation error. Red partial-saved is not failed. The bar shows activity/reported track visits, not recovered-sector yield.
+Exit codes: **0** completed · **3** attention/partial · **2** input/operation error · **130** operator stop. Red partial-saved is not failed. The bar shows activity/reported track visits, not recovered-sector yield.
 
 ## Advanced: optional shortcuts
 
