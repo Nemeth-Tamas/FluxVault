@@ -216,7 +216,7 @@ fn parse_entry(raw: Vec<u8>, id: u32, offset: usize, major: u16) -> Result<Optio
     }
     let n = u16at(&raw, 64) as usize;
     if !(2..=64).contains(&n)
-        || n % 2 != 0
+        || !n.is_multiple_of(2)
         || raw[n - 2..n] != [0, 0]
         || ![1, 2, 5].contains(&raw[66])
         || raw[67] > 1

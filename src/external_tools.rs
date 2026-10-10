@@ -138,7 +138,7 @@ impl ToolSettings {
 
 #[derive(Debug)]
 pub enum ToolCheckEvent {
-    Status(ToolStatus),
+    Status(Box<ToolStatus>),
     Finished,
 }
 
@@ -208,7 +208,10 @@ pub fn spawn_checks(settings: ToolSettings, audit_path: PathBuf) -> Receiver<Too
         for kind in ToolKind::ALL {
             let status = check_tool(kind, settings.path(kind), &audit_path);
 
-            if sender.send(ToolCheckEvent::Status(status)).is_err() {
+            if sender
+                .send(ToolCheckEvent::Status(Box::new(status)))
+                .is_err()
+            {
                 return;
             }
         }

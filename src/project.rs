@@ -1,7 +1,8 @@
 use std::{
+    collections::BTreeMap,
     fs,
     fs::OpenOptions,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 const PROJECT_FILE_NAME: &str = "project.json";
 const PROJECT_SCHEMA_VERSION: u32 = 1;
+const MAX_METADATA_BYTES: u64 = 64 * 1024;
 
 const PROJECT_DIRECTORIES: &[&str] = &[
     "Images",
@@ -28,6 +30,10 @@ struct ProjectMetadata {
     created_unix_ms: u64,
     updated_unix_ms: u64,
     current_disk_number: u32,
+    // Preserve optional/older producer extensions when numbering advances.
+    // Unknown schema versions are still refused, never silently migrated.
+    #[serde(flatten)]
+    extensions: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +44,24 @@ pub struct ProjectState {
 
 impl ProjectState {
     pub fn create_without_session(root: PathBuf) -> Result<Self, String> {
+        let root = if root.is_absolute() {
+            root
+        } else {
+            std::env::current_dir()
+                .map_err(|e| e.to_string())?
+                .join(root)
+        };
+        crate::safety::workstation_path(&root)?;
+        // Check the nearest existing parent before creating anything: a junction
+        // into source media must not receive even an empty project directory.
+        let mut ancestor = root.as_path();
+        while !ancestor.exists() {
+            ancestor = ancestor
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .ok_or("Cannot resolve project destination parent")?;
+        }
+        crate::safety::workstation_path(&ancestor.canonicalize().map_err(|e| e.to_string())?)?;
         fs::create_dir_all(&root).map_err(|error| {
             format!(
                 "Nem sikerült létrehozni a projektmappát {}: {error}",
@@ -82,6 +106,7 @@ impl ProjectState {
                 created_unix_ms: now,
                 updated_unix_ms: now,
                 current_disk_number: 1,
+                extensions: BTreeMap::new(),
             },
         };
 
@@ -91,16 +116,24 @@ impl ProjectState {
 
     /// Open a project without changing any application-wide state.
     pub fn open_without_session(root: PathBuf) -> Result<Self, String> {
+        crate::safety::workstation_path(&root)?;
+        crate::safety::workstation_path(&root.canonicalize().map_err(|e| e.to_string())?)?;
         let project_file = root.join(PROJECT_FILE_NAME);
+        regular_metadata(&project_file)?;
+        let mut json = Vec::new();
+        fs::File::open(&project_file)
+            .and_then(|f| f.take(MAX_METADATA_BYTES + 1).read_to_end(&mut json))
+            .map_err(|error| {
+                format!(
+                    "Nem sikerült megnyitni a projektfájlt {}: {error}",
+                    project_file.display()
+                )
+            })?;
+        if json.len() as u64 > MAX_METADATA_BYTES {
+            return Err("Project metadata exceeds 64 KiB".into());
+        }
 
-        let json = fs::read_to_string(&project_file).map_err(|error| {
-            format!(
-                "Nem sikerült megnyitni a projektfájlt {}: {error}",
-                project_file.display()
-            )
-        })?;
-
-        let mut metadata: ProjectMetadata = serde_json::from_str(&json).map_err(|error| {
+        let mut metadata: ProjectMetadata = serde_json::from_slice(&json).map_err(|error| {
             format!(
                 "Hibás FluxVault projektfájl {}: {error}",
                 project_file.display()
@@ -120,15 +153,20 @@ impl ProjectState {
     }
 
     fn save_metadata(&mut self) -> Result<(), String> {
+        crate::safety::workstation_path(&self.root)?;
+        crate::safety::workstation_path(&self.root.canonicalize().map_err(|e| e.to_string())?)?;
         self.metadata.updated_unix_ms = current_unix_ms()?;
 
         let json = serde_json::to_string_pretty(&self.metadata)
             .map_err(|error| format!("Projekt JSON generálási hiba: {error}"))?;
+        if json.len() as u64 > MAX_METADATA_BYTES {
+            return Err("Project metadata exceeds 64 KiB".into());
+        }
 
         let project_file = self.root.join(PROJECT_FILE_NAME);
 
-        if fs::symlink_metadata(&project_file).is_ok_and(|m| !m.file_type().is_file()) {
-            return Err("Project metadata must be a regular file".to_owned());
+        if project_file.try_exists().map_err(|e| e.to_string())? {
+            regular_metadata(&project_file)?;
         }
         // A crash must not leave a truncated project.json while scan numbering advances.
         let temporary = self.root.join(format!(
@@ -212,6 +250,21 @@ impl ProjectState {
     }
 }
 
+fn regular_metadata(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_METADATA_BYTES {
+        return Err("Project metadata must be a bounded regular file".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("Project metadata must not be a reparse point".into());
+        }
+    }
+    Ok(())
+}
+
 fn current_unix_ms() -> Result<u64, String> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -233,6 +286,49 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn old_metadata_extensions_survive_numbering_without_read_only_rewrites() {
+        let root = temporary_root();
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(project.project_file()).unwrap()).unwrap();
+        value["operator_settings"] = serde_json::json!({"operator":"archive team","notes":"keep"});
+        value["tools"] =
+            serde_json::json!({"seven_zip":{"path":"saved path","version":"historical"}});
+        value["current_disk_number"] = serde_json::json!(0);
+        let bytes = serde_json::to_vec(&value).unwrap();
+        fs::write(project.project_file(), &bytes).unwrap();
+        let mut old = ProjectState::open_without_session(root.clone()).unwrap();
+        assert_eq!(old.current_disk_number(), 1);
+        assert_eq!(fs::read(old.project_file()).unwrap(), bytes);
+        old.set_current_disk_number_without_session(53).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(old.project_file()).unwrap()).unwrap();
+        assert_eq!(saved["operator_settings"], value["operator_settings"]);
+        assert_eq!(saved["tools"], value["tools"]);
+        assert_eq!(saved["created_unix_ms"], value["created_unix_ms"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_oversized_and_future_schemas_are_refused_without_changing_them() {
+        let root = temporary_root();
+        let project = ProjectState::create_without_session(root.clone()).unwrap();
+        let mut future: serde_json::Value =
+            serde_json::from_slice(&fs::read(project.project_file()).unwrap()).unwrap();
+        future["schema_version"] = serde_json::json!(2);
+        for bytes in [
+            b"{".to_vec(),
+            serde_json::to_vec(&future).unwrap(),
+            vec![b' '; MAX_METADATA_BYTES as usize + 1],
+        ] {
+            fs::write(project.project_file(), &bytes).unwrap();
+            assert!(ProjectState::open_without_session(root.clone()).is_err());
+            assert_eq!(fs::read(project.project_file()).unwrap(), bytes);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

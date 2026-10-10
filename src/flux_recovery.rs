@@ -369,6 +369,8 @@ pub fn recover_auto(
 }
 
 /// Dual-station acceptance runs before publication, including reused results.
+pub type AcceptanceCheck<'a> = dyn Fn(&[u8], &[u64]) -> Result<(), String> + 'a;
+
 pub fn recover_auto_checked(
     project: &ProjectState,
     disk: u32,
@@ -376,7 +378,7 @@ pub fn recover_auto_checked(
     policy: RecoveryPolicy,
     backend: &mut impl GreaseweazleBackend,
     progress: &impl Fn(&str),
-    accept: &dyn Fn(&[u8], &[u64]) -> Result<(), String>,
+    accept: &AcceptanceCheck<'_>,
 ) -> Result<RecoveryResult, String> {
     recover_impl(
         project,
@@ -391,6 +393,9 @@ pub fn recover_auto_checked(
     )
 }
 
+// Keep the public capture variants' explicit safety/policy inputs visible at
+// their shared implementation boundary; do not collapse them into optional flags.
+#[allow(clippy::too_many_arguments)]
 fn recover_impl(
     project: &ProjectState,
     disk: u32,
@@ -400,7 +405,7 @@ fn recover_impl(
     policy: RecoveryPolicy,
     backend: &mut impl GreaseweazleBackend,
     progress: &impl Fn(&str),
-    accept: &dyn Fn(&[u8], &[u64]) -> Result<(), String>,
+    accept: &AcceptanceCheck<'_>,
 ) -> Result<RecoveryResult, String> {
     policy.validate()?;
     if disk == 0 || !matches!(drive, 'A' | 'B') {

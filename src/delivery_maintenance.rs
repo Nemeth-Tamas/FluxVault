@@ -270,7 +270,7 @@ impl Maintenance {
         mut current: Vec<Mirror>,
         mut protected: BTreeSet<String>,
     ) -> Result<ResultSummary, String> {
-        current.sort_by(|a, b| key(&a.path).cmp(&key(&b.path)));
+        current.sort_by_key(|a| key(&a.path));
         let ledger = Ledger {
             schema_version: 1,
             files: current,

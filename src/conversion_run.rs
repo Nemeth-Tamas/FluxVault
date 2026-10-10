@@ -215,12 +215,29 @@ pub(crate) fn load_snapshot(
     project_root: &Path,
 ) -> Result<ConversionResult, String> {
     let path = snapshot_path(reports_directory);
-    let bytes = fs::read(&path).map_err(|error| {
-        format!(
-            "No saved conversion state {}: {error}; run conversion run first",
-            path.display()
-        )
-    })?;
+    let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() > 32 * 1024 * 1024 {
+        return Err("Saved conversion state must be a bounded regular file".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("Saved conversion state is a reparse point".into());
+        }
+    }
+    let mut bytes = Vec::new();
+    File::open(&path)
+        .and_then(|f| f.take(32 * 1024 * 1024 + 1).read_to_end(&mut bytes))
+        .map_err(|error| {
+            format!(
+                "No saved conversion state {}: {error}; run conversion run first",
+                path.display()
+            )
+        })?;
+    if bytes.len() > 32 * 1024 * 1024 {
+        return Err("Saved conversion state exceeds 32 MiB".into());
+    }
     let snapshot: ConversionSnapshot = serde_json::from_slice(&bytes)
         .map_err(|error| format!("Invalid saved conversion state {}: {error}", path.display()))?;
     if snapshot.schema_version != 1

@@ -145,11 +145,13 @@ pub(crate) fn ensure_first_backup(
     }
 }
 
+type BackupArtifacts = (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>);
+
 fn build_temporary_backup(
     request: &RecoveryBackupRequest,
     temporary_directory: &Path,
     send_stage: &impl Fn(&str),
-) -> Result<(Option<PathBuf>, Option<PathBuf>, Option<PathBuf>), String> {
+) -> Result<BackupArtifacts, String> {
     send_stage("Forráskép hash-elése és másolása az első recovery backupba...");
     let image_sha256 = sha256_file(&request.image_path)?;
     let image_name = request

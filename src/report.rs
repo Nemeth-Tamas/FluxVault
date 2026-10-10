@@ -124,7 +124,7 @@ fn build_hungarian_workbook(
         worksheet.write_string_with_format(
             3,
             1,
-            &Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             &value_format,
         )?;
 
@@ -265,7 +265,7 @@ fn build_hungarian_workbook(
             worksheet.write_string_with_format(
                 row,
                 9,
-                &format_timestamp(disk.latest_timestamp_unix_ms),
+                format_timestamp(disk.latest_timestamp_unix_ms),
                 &value_format,
             )?;
         }
@@ -350,7 +350,7 @@ fn build_hungarian_workbook(
             worksheet.write_string_with_format(
                 row,
                 6,
-                &format_timestamp(attempt.timestamp_unix_ms),
+                format_timestamp(attempt.timestamp_unix_ms),
                 &value_format,
             )?;
 
@@ -361,7 +361,7 @@ fn build_hungarian_workbook(
             worksheet.write_string_with_format(
                 row,
                 9,
-                &attempt.metadata_path.display().to_string(),
+                attempt.metadata_path.display().to_string(),
                 &value_format,
             )?;
         }

@@ -6,6 +6,8 @@ FluxVault is a Windows-first command-line floppy archiving and recovery tool. Th
 
 There is no GUI. Both `fv` and `fluxvault` run the same program.
 
+Developing FluxVault? `pwsh -NoProfile -File .\scripts\check.ps1` is the fail-fast format/build/strict-lint/routine-test gate. It does not scan hardware, install tools or modify user PATH. Environment-dependent acceptance tests remain explicit opt-ins.
+
 ## Start here
 
 | Your experience | Open this |
@@ -52,6 +54,8 @@ fv conversion issues
 ```
 
 The [tutorial](TUTORIAL.md) covers setup, damaged disks, interruptions and delivery step by step.
+
+`fv status` now combines recorded stations, transfers, background work and rough fresh-feed pace. `fv disk show N --details` shows saved recovery/extraction/conversion/audit state, and `fv disk note N "TEXT"` saves an optional note without changing acquisition identity. Historical reports are labelled as such; the original console's current swap cue remains authoritative. [Inspection and notes](CLI.md#see-what-is-happening-without-interrupting-it).
 
 ## What you need
 

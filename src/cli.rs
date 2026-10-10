@@ -9,6 +9,7 @@ mod flux;
 mod flux_scan;
 mod media_reservation;
 mod office;
+mod operations_status;
 mod process;
 mod production_flow;
 mod read_progress;
@@ -64,7 +65,8 @@ Usage:
                                     Preserve a script archive in a fresh project; no re-imaging
   fluxvault disk list [--project PATH]
   fluxvault disk show N [--details] [--project PATH]
-                                    Inspect saved disk attempts and evidence paths
+                                    Inspect attempts, notes and saved recovery/processing lifecycle
+  fluxvault disk note N "TEXT"       Save an optional note (empty text clears; history retained)
   fluxvault disk select N [--project PATH]
   fluxvault disk next [--project PATH]
                                     Select the current/next disk number (no drive access)
@@ -1639,16 +1641,17 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let project = ProjectState::open_without_session(root)?;
             let stats = imaging::load_project_statistics(&project.images_dir())?;
             let processing = crate::processing::status(&project)?;
+            let operations = operations_status::inspect(&project, &processing)?;
             let raw_exceptions = crate::flux_recovery::format_exceptions(&project)?;
-            let mut next_actions = if processing["owner_active"] == true {
-                vec![
-                    "Saved-file processing is active. Follow the scan's swap prompt; use `fv processing status` for details.",
-                ]
-            } else {
-                status_next_actions(stats.disk_count, stats.partial_disks)
-            };
+            let mut next_actions = operations_status::next_actions(&operations);
+            if next_actions.is_empty() {
+                next_actions = status_next_actions(stats.disk_count, stats.partial_disks)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
+            }
             if !raw_exceptions.is_empty() {
-                next_actions.push("Raw-only format exceptions are preserved without supported sector images; inspect `recovery queue` and Flux/Formats reports.");
+                next_actions.push("Raw-only format exceptions are preserved without supported sector images; inspect `recovery queue` and Flux/Formats reports.".into());
             }
             needs_attention = stats.partial_disks > 0 || !raw_exceptions.is_empty();
             if json_output {
@@ -1663,12 +1666,13 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     "best_known_bad_sectors": stats.best_known_bad_sectors,
                     "next_actions": next_actions,
                     "background_processing":processing,
+                    "operations":operations,
                     "raw_format_exceptions":raw_exceptions,
                 })
                 .to_string())
             } else {
                 Ok(format!(
-                    "{} ({})\nCurrent disk: {:03}\nImage disks: {} ({} OK, {} partial) | raw-only exceptions: {}\nAttempts: {}\nBest known bad sectors: {}\nBackground: {} | owner active: {} | pending/failed: {}\nNext actions:\n{}",
+                    "{} ({})\nCurrent disk: {:03}\nImage disks: {} ({} OK, {} partial) | raw-only exceptions: {}\nAttempts: {}\nBest known bad sectors: {}\nBackground: {} | owner active: {} | pending/failed: {}\n{}\nNext actions:\n{}",
                     project.name(),
                     project.root().display(),
                     project.current_disk_number(),
@@ -1681,6 +1685,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     processing["worker"]["stage"].as_str().unwrap_or("unknown"),
                     processing["owner_active"],
                     processing["pending"],
+                    operations_status::human(&operations),
                     next_actions
                         .iter()
                         .map(|action| format!("  - {action}"))
@@ -1709,6 +1714,23 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     project.images_dir().display(),
                     project.logs_dir().display(),
                     project.reports_dir().display()
+                ))
+            }
+        }
+        Some("disk")
+            if destination.is_none() && positional.len() == 4 && positional[1] == "note" =>
+        {
+            let number = positional[2]
+                .parse::<u32>()
+                .map_err(|_| "disk note requires a positive disk number")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let note = crate::disk_record::set_note(&project, number, &positional[3])?;
+            if json_output {
+                Ok(json!({"disk":number,"note":note,"physical_media_access":false}).to_string())
+            } else {
+                Ok(format!(
+                    "Disk {number:03} note saved; acquisition labels/evidence unchanged."
                 ))
             }
         }
@@ -1790,8 +1812,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             if attempts.is_empty() {
                 return Err(format!("No image attempts found for disk {disk_number:03}"));
             }
+            let lifecycle = crate::disk_record::inspect(&project, disk_number, &attempts)?;
             if json_output {
-                Ok(json!({"project": project.root(), "disk": disk_number, "attempts": attempts.iter().map(|attempt| json!({
+                Ok(json!({"project": project.root(), "disk": disk_number, "lifecycle":lifecycle, "attempts": attempts.iter().map(|attempt| json!({
                     "number": attempt.attempt_number, "status": attempt.status,
                     "image": attempt.image_file, "sha256": attempt.sha256,
                     "metadata": attempt.metadata_path, "log": attempt.log_file,
@@ -1802,7 +1825,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 })).collect::<Vec<_>>()}).to_string())
             } else {
                 Ok(format!(
-                    "Disk {disk_number:03}\n{}",
+                    "Disk {disk_number:03}\n{}\n{}",
                     attempts
                         .iter()
                         .map(|attempt| {
@@ -1828,7 +1851,8 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                             }
                         })
                         .collect::<Vec<_>>()
-                        .join("\n")
+                        .join("\n"),
+                    crate::disk_record::human(&lifecycle),
                 ))
             }
         }

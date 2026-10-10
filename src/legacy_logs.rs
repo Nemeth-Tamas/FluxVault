@@ -244,10 +244,10 @@ fn primary_log_score(path: &Path, disk_number: u32) -> Option<u8> {
 fn strip_timestamp(line: &str) -> &str {
     let trimmed = line.trim();
 
-    if trimmed.starts_with('[') {
-        if let Some(end) = trimmed.find("] ") {
-            return &trimmed[end + 2..];
-        }
+    if trimmed.starts_with('[')
+        && let Some(end) = trimmed.find("] ")
+    {
+        return &trimmed[end + 2..];
     }
 
     let mut parts = trimmed.split_whitespace();
@@ -258,10 +258,9 @@ fn strip_timestamp(line: &str) -> &str {
         && date.as_bytes().get(4) == Some(&b'-')
         && date.as_bytes().get(7) == Some(&b'-')
         && time.contains(':')
+        && let Some(time_start) = trimmed.find(time)
     {
-        if let Some(time_start) = trimmed.find(time) {
-            return trimmed[time_start + time.len()..].trim_start();
-        }
+        return trimmed[time_start + time.len()..].trim_start();
     }
 
     trimmed

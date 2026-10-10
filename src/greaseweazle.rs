@@ -458,62 +458,60 @@ pub fn parse_progress_line(line: &str) -> GreaseweazleProgressEvent {
     {
         return GreaseweazleProgressEvent::Error(trimmed.to_owned());
     }
-    if let Some(rest) = trimmed.strip_prefix('T') {
-        if let Some((chs, detail)) = rest.split_once(':') {
-            if let Some((cyl_str, head_str)) = chs.split_once('.') {
-                if let (Ok(cyl), Ok(head)) = (
-                    cyl_str.trim().parse::<u32>(),
-                    head_str.trim().parse::<u32>(),
-                ) {
-                    let detail = detail.trim().to_owned();
-                    let mode = detail
-                        .split_once('(')
-                        .map(|(m, _)| m.trim().to_owned())
-                        .unwrap_or_else(|| detail.clone());
-                    return GreaseweazleProgressEvent::Track {
-                        cylinder: cyl,
-                        head,
-                        mode,
-                        detail,
-                    };
-                }
-            }
-        }
+    if let Some(rest) = trimmed.strip_prefix('T')
+        && let Some((chs, detail)) = rest.split_once(':')
+        && let Some((cyl_str, head_str)) = chs.split_once('.')
+        && let (Ok(cyl), Ok(head)) = (
+            cyl_str.trim().parse::<u32>(),
+            head_str.trim().parse::<u32>(),
+        )
+    {
+        let detail = detail.trim().to_owned();
+        let mode = detail
+            .split_once('(')
+            .map(|(m, _)| m.trim().to_owned())
+            .unwrap_or_else(|| detail.clone());
+        return GreaseweazleProgressEvent::Track {
+            cylinder: cyl,
+            head,
+            mode,
+            detail,
+        };
     }
     if let Some(rest) = trimmed.strip_prefix("Reading ") {
         let mut parts = rest.split_whitespace();
-        if let Some(ch) = parts.next() {
-            if let Some((c, h)) = ch.split_once(':') {
-                let cylinders = c.strip_prefix("c=").unwrap_or(c).to_owned();
-                let heads = h.strip_prefix("h=").unwrap_or(h).to_owned();
-                let revolutions = parts
-                    .find_map(|p| p.strip_prefix("revs="))
-                    .and_then(|r| r.parse::<u32>().ok());
-                return GreaseweazleProgressEvent::ReadingRange {
-                    cylinders,
-                    heads,
-                    revolutions,
-                };
-            }
-        }
-    }
-    if let Some(rest) = trimmed.strip_prefix("Converting ") {
-        if let Some((src, dst)) = rest.split_once(" -> ") {
-            return GreaseweazleProgressEvent::Converting {
-                source: src.trim().to_owned(),
-                destination: dst.trim().to_owned(),
+        if let Some(ch) = parts.next()
+            && let Some((c, h)) = ch.split_once(':')
+        {
+            let cylinders = c.strip_prefix("c=").unwrap_or(c).to_owned();
+            let heads = h.strip_prefix("h=").unwrap_or(h).to_owned();
+            let revolutions = parts
+                .find_map(|p| p.strip_prefix("revs="))
+                .and_then(|r| r.parse::<u32>().ok());
+            return GreaseweazleProgressEvent::ReadingRange {
+                cylinders,
+                heads,
+                revolutions,
             };
         }
     }
-    if let Some(rest) = trimmed.strip_prefix("Found ") {
-        if let Some((found_str, total_rest)) = rest.split_once(" sectors of ") {
-            let total_str = total_rest.split_whitespace().next().unwrap_or(total_rest);
-            if let (Ok(found), Ok(total)) = (
-                found_str.trim().parse::<usize>(),
-                total_str.trim().parse::<usize>(),
-            ) {
-                return GreaseweazleProgressEvent::Summary { found, total };
-            }
+    if let Some(rest) = trimmed.strip_prefix("Converting ")
+        && let Some((src, dst)) = rest.split_once(" -> ")
+    {
+        return GreaseweazleProgressEvent::Converting {
+            source: src.trim().to_owned(),
+            destination: dst.trim().to_owned(),
+        };
+    }
+    if let Some(rest) = trimmed.strip_prefix("Found ")
+        && let Some((found_str, total_rest)) = rest.split_once(" sectors of ")
+    {
+        let total_str = total_rest.split_whitespace().next().unwrap_or(total_rest);
+        if let (Ok(found), Ok(total)) = (
+            found_str.trim().parse::<usize>(),
+            total_str.trim().parse::<usize>(),
+        ) {
+            return GreaseweazleProgressEvent::Summary { found, total };
         }
     }
     GreaseweazleProgressEvent::Other(trimmed.to_owned())

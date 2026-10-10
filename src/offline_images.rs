@@ -461,20 +461,19 @@ fn geometry(root: &Path, recipe: &Recipe) -> Result<Value, String> {
             std::str::from_utf8(&data).map_err(|e| e.to_string())?,
         )?;
         let g = &log.geometry;
-        if let (Some(c), Some(h), Some(s)) = (g.cylinders, g.heads, g.sectors_per_track) {
-            if c > 0
-                && h > 0
-                && s > 0
-                && g.bytes_per_sector == Some(512)
-                && c.checked_mul(h as u64)
-                    .and_then(|n| n.checked_mul(s as u64))
-                    == Some(source.total_sectors as u64)
-            {
-                return Ok(
-                    json!({"cylinders":c, "heads":h, "sectors_per_track":s, "bytes_per_sector":512,
+        if let (Some(c), Some(h), Some(s)) = (g.cylinders, g.heads, g.sectors_per_track)
+            && c > 0
+            && h > 0
+            && s > 0
+            && g.bytes_per_sector == Some(512)
+            && c.checked_mul(h as u64)
+                .and_then(|n| n.checked_mul(s as u64))
+                == Some(source.total_sectors as u64)
+        {
+            return Ok(
+                json!({"cylinders":c, "heads":h, "sectors_per_track":s, "bytes_per_sector":512,
                     "total_bytes":source.total_sectors * 512, "format_guess":"offline-derived; source geometry, not a new physical measurement"}),
-                );
-            }
+            );
         }
     }
     Err("Offline publication needs complete corroborating acquisition geometry".into())

@@ -315,20 +315,76 @@ pub(super) struct SavedDefaults {
     pub conversion_workers: usize,
 }
 
-pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefaults>, String> {
+/// Bounded, saved-only station inspection. Completed/pending entries here are
+/// historical records, not freshly verified image certificates or drive probes.
+pub(super) fn saved_status(project: &ProjectState) -> Result<serde_json::Value, String> {
     let path = project.root().join(JOURNAL);
-    regular_or_missing(&path)?;
-    if !path.exists() {
+    let Some(journal) = read_saved(&path)? else {
+        return Ok(json!({"initialized":false,"physical_media_access":false}));
+    };
+    validate_saved(&journal)?;
+    Ok(
+        json!({"initialized":true,"drive":journal.drive,"last_disk":journal.last_disk,
+        "pending_disk":journal.pending.as_ref().map(|p|p.disk),
+        "pending_result_recorded":journal.pending.as_ref().is_some_and(|p|p.result.is_some()),
+        "recorded_completed_labels":journal.completed.iter().map(|r|r.disk).collect::<Vec<_>>(),
+        "completed_receipts_freshly_verified":false,"physical_media_access":false}),
+    )
+}
+
+fn read_saved(path: &Path) -> Result<Option<Journal>, String> {
+    regular_or_missing(path)?;
+    if !path.try_exists().map_err(|e| e.to_string())? {
         return Ok(None);
     }
-    let journal: Journal = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Invalid saved scan settings: {e}"))?;
-    if journal.schema_version != 1 || !matches!(journal.drive, 'A' | 'B') {
-        return Err("Unsupported saved scan settings".to_owned());
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|e| e.to_string())?
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err("Oversized saved scan journal".into());
     }
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|e| format!("Invalid saved scan journal: {e}"))
+}
+
+fn validate_saved(journal: &Journal) -> Result<(), String> {
+    let ids = journal
+        .completed
+        .iter()
+        .map(|r| r.disk)
+        .collect::<BTreeSet<_>>();
+    if journal.schema_version != 1
+        || !matches!(journal.drive, 'A' | 'B')
+        || journal.completed.len() > 4096
+        || ids.contains(&0)
+        || ids.contains(&u32::MAX)
+        || ids.len() != journal.completed.len()
+        || journal.last_disk.is_some_and(|n| n == 0 || n == u32::MAX)
+        || journal.pending.as_ref().is_some_and(|p| {
+            p.disk == 0
+                || p.disk == u32::MAX
+                || ids.contains(&p.disk)
+                || p.result.as_ref().is_some_and(|r| r.disk != p.disk)
+        })
+    {
+        return Err("Invalid or duplicated identities in saved scan journal".into());
+    }
+    GreaseweazleProfile::parse(&journal.profile)?;
     validate_profiles(&journal.profile_map)?;
-    journal.policy.validate()?;
     validate_workers(journal.conversion_workers)?;
+    journal.policy.validate()
+}
+
+pub(super) fn saved_defaults(project: &ProjectState) -> Result<Option<SavedDefaults>, String> {
+    let path = project.root().join(JOURNAL);
+    let Some(journal) = read_saved(&path)? else {
+        return Ok(None);
+    };
+    validate_saved(&journal)?;
     Ok(Some(SavedDefaults {
         profile: GreaseweazleProfile::parse(&journal.profile)?,
         automatic_format: journal.automatic_format,

@@ -209,6 +209,9 @@ pub(crate) fn start_imaging_publication(
     receiver
 }
 
+// Separate source, evidence/publication destinations and custody inputs are
+// intentional at the read-only device thread boundary.
+#[allow(clippy::too_many_arguments)]
 fn run_imaging(
     drive: FloppyDrive,
     geometry: DiskGeometry,
@@ -1256,10 +1259,9 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
                     "bin" | "img" | "ima"
                 )
             })
+            && let Ok(disk_number) = stem.parse::<u32>()
         {
-            if let Ok(disk_number) = stem.parse::<u32>() {
-                disk_numbers.insert(disk_number);
-            }
+            disk_numbers.insert(disk_number);
         }
     }
 

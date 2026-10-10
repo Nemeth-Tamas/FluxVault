@@ -22,6 +22,22 @@ For a **fresh full-chain batch**, use `fv production start --last-disk N`. One o
 
 The installer provides both `fluxvault.exe` and the identical short alias `fv.exe`. `fv init`, `fv status`, and `fv scan` work from the project folder. Plain `scan` uses Greaseweazle; explicit `scan --drive A:` (or USB protection/retry flags) retains the existing guarded USB workflow.
 
+## See what is happening without interrupting it
+
+In another PowerShell window, enter the same project folder and run:
+
+```powershell
+fv status
+fv disk show 59 --details
+fv disk note 59 "Sleeve creased; original label checked"
+```
+
+`status` combines recorded station custody, USB-to-GW transfers/recommendation, controller/production phase and processing backlog. Historical feeding pace supplies a rough fresh-feed ETA after at least three samples and a saved endpoint; transfers, recovery/processing/packaging tail and paused feeding do not get a fabricated whole-job ETA. Missing timings remain unavailable. It opens no device or tool and creates no control records. A recorded READING/PENDING state is not proof of an active reader: the original feeding console's current ACTION/swap banner remains authoritative. Conflicting inactive single/dual histories are displayed without guessing a mode.
+
+`disk show` retains the original attempt list and adds a stable zero-padded lifecycle view: automatically ranked image, bad LBAs, extraction state, saved recovery plan/decisions, processing jobs, conversion snapshot and audit association. Historical reports are explicitly labelled; an old verified report does not freshly verify today's output bytes. `--json` adds versioned `operations`/`lifecycle` fields without removing existing fields; stdout stays JSON-only. Inspection may report invalid/foreign controls rather than silently ignoring them.
+
+`disk note N "TEXT"` is optional, not a scan prompt. It does not change disk identity, cursor, preferred acquisition or media. It refuses a busy processing owner, bounds text to 4,096 UTF-8 bytes without control characters, atomically commits under `Reports/DiskNotes`, and retains earlier notes. An empty quoted string clears the current note. A stopped write retains partial evidence. Explicit operator acquisition preference is not implemented: the displayed preference remains automatic evidence ranking.
+
 ## Import an original script archive
 
 `fv project import --source ZIP --destination NEW_FOLDER [--plan] [--json]` creates a fresh project from saved script images/logs/recovered folders/reports; no re-imaging, external tools or automatic processing. Parent must exist, destination must not; do not initialize it first or nest it in an existing project. Preview writes nothing and does not certify member payloads. Apply CRC-checks/hashes every member and independently verifies copied bytes before publication. Original hashes/index/logs and short images are preserved; legacy claims/files remain attention, not newly managed recovery or Office certification. Normal status/disk inspection works after import. Exit 0 preview / 3 imported legacy attention / 2 error / 130 stop. Partial staging is retained but not resumable/mergeable yet. [Beginner commands, bounds and measured 136-image validation](LEGACY_IMPORT.md).

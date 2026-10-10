@@ -10,6 +10,8 @@ No coding knowledge needed. Examples use **PowerShell on Windows**. Copy command
 
 ## Beginner: first project and scan
 
+Want to check progress without touching the running scan? Open another PowerShell window in the project folder and run `fv status`. It shows recorded station/transfer state and saved-file backlog, plus a rough historical fresh-feed estimate when enough timings exist. Always use the original scan window's current swap instruction before moving media. After stopping, `fv disk show 59 --details` shows that disk's saved lifecycle, and optional `fv disk note 59 "Original label checked"` keeps a note with history. [Meaning and limits](CLI.md#see-what-is-happening-without-interrupting-it).
+
 ### 1. Install or refresh the short command
 
 The current local executable is already built. Install the latest copy as `fv` and `fluxvault`:

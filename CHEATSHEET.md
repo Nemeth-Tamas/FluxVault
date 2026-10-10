@@ -51,6 +51,16 @@ fv production resume --no-verify
 
 Insert the **displayed next/pending disk**, not necessarily 001. Repeat original settings/endpoint; do not run `init` or reset numbering. `--no-verify` skips label typing only and must be supplied each session.
 
+### Quick visibility / optional notes
+
+```powershell
+fv status
+fv disk show 59 --details
+fv disk note 59 "Original label checked"
+```
+
+Status shows recorded stations/transfers, processing backlog and rough historical fresh-feed pace/ETA. The original scan window's current swap cue remains authoritative. Disk details include recovery/extraction/conversion/audit state; old reports are labelled historical. Notes are optional and do not renumber a disk or touch media; save them when the project is not busy. [Details](CLI.md#see-what-is-happening-without-interrupting-it).
+
 ### Stop now; continue later
 
 Type `STOP` during a scan, or use Windows Ctrl+C. `QUIT` instead finishes reads and drains saved work.

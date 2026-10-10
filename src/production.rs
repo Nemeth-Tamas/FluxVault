@@ -190,8 +190,8 @@ fn validate(j: &Journal) -> Result<(), String> {
             }
         }
         for (station, receipt) in [(Station::Usb, &disk.usb), (Station::Greaseweazle, &disk.gw)] {
-            if let Some(r) = receipt {
-                if r.station != station
+            if let Some(r) = receipt
+                && (r.station != station
                     || r.attempt == 0
                     || r.sectors == 0
                     || r.sectors > crate::fat12::MAX_IMAGE_BYTES / 512
@@ -206,10 +206,9 @@ fn validate(j: &Journal) -> Result<(), String> {
                     .iter()
                     .any(|h| h.len() != 64 || !h.bytes().all(|c| c.is_ascii_hexdigit()))
                     || Path::new(&r.image).file_name().and_then(|s| s.to_str())
-                        != Some(r.image.as_str())
-                {
-                    return Err("Invalid production evidence receipt".into());
-                }
+                        != Some(r.image.as_str()))
+            {
+                return Err("Invalid production evidence receipt".into());
             }
         }
         if let Some(triage) = &disk.usb_triage {
@@ -232,8 +231,8 @@ fn validate(j: &Journal) -> Result<(), String> {
                 return Err("USB triage disagrees with sealed receipt/policy/generation".into());
             }
         }
-        let expected = if disk.gw.is_some() {
-            if disk.gw.as_ref().unwrap().bad.is_empty() {
+        let expected = if let Some(gw) = &disk.gw {
+            if gw.bad.is_empty() {
                 Phase::Complete
             } else {
                 Phase::Partial

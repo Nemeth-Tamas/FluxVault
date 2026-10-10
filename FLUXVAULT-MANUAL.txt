@@ -375,9 +375,22 @@ INSTALLATION AND COMMAND CATALOG
     attention/partial, and 2 means invalid input or an operation error. These
     codes will be refined as production automation is added.
 
-    disk show N summarizes saved attempts. Add --details for their hashes,
-    bad-sector LBAs, retry counts, and evidence paths; JSON includes those
-    fields without an extra flag. Neither view accesses the floppy drive.
+    status combines recorded station custody, USB-to-GW transfers, controller
+    operation, production phase and background backlog. Pace/ETA are rough
+    historical fresh-feeding estimates, not deadlines for recovery/conversion
+    or packaging. Missing/paused samples keep ETA unavailable. Recorded READING
+    does not prove an active reader. The original console's current swap cue
+    remains authoritative; conflicting inactive scan modes are not guessed.
+
+    disk show N summarizes attempts and the saved extraction/recovery/processing/
+    conversion/audit lifecycle. Add --details for hashes, bad LBAs, retry counts
+    and evidence paths; JSON includes them automatically. Old reports are
+    labelled historical, not fresh integrity certificates. No floppy access.
+
+    disk note N "TEXT" saves an optional note without renumbering evidence or
+    changing physical custody. Empty quoted text clears it; earlier notes stay
+    under Reports/DiskNotes. Busy projects refuse note changes. Maximum 4096
+    UTF-8 bytes, no control characters. No extra scan prompts are introduced.
 
     report export [--language hu|en] refreshes audit and writes a complete
     versioned final bundle without tools/media or payload changes. JSON

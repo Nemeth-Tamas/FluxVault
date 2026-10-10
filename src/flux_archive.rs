@@ -21,9 +21,12 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 mod work;
 
 #[cfg(test)]
+type Checkpoint<'a> = &'a mut dyn FnMut(&str) -> Result<(), String>;
+
+#[cfg(test)]
 #[derive(Default)]
 struct TestHooks<'a> {
-    checkpoint: Option<&'a mut dyn FnMut(&str) -> Result<(), String>>,
+    checkpoint: Option<Checkpoint<'a>>,
     fail_after: Option<u64>,
     binding_fail_after: Option<u64>,
 }

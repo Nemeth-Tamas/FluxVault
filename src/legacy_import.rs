@@ -344,7 +344,7 @@ fn prepare(cwd: &Path, source: &Path, target: &Path) -> Result<Prepared, String>
             directory,
         });
     }
-    for (name, _) in &names {
+    for name in names.keys() {
         let mut parent = Path::new(name).parent();
         while let Some(p) = parent {
             if names

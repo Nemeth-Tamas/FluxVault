@@ -139,7 +139,7 @@ struct ReadDone {
 enum Event {
     Input(Option<String>),
     Progress(Station, u32, String),
-    Done(Ticket, Result<ReadDone, String>),
+    Done(Ticket, Box<Result<ReadDone, String>>),
 }
 type Reader = Arc<
     dyn Fn(Ticket, Option<TransferGuard>, SyncSender<Event>) -> Result<ReadDone, String>
@@ -404,7 +404,7 @@ fn begin(c: &mut Coordinator, station: Station, disk: u32) -> Result<Ticket, Str
     Ok(ticket)
 }
 
-fn next_action(state: &Value, station: Station, held: Option<(u32, &str)>) -> String {
+pub(super) fn next_action(state: &Value, station: Station, held: Option<(u32, &str)>) -> String {
     let name = station_name(station);
     let prefix = if station == Station::Usb { "u" } else { "g" };
     let paused = state["paused"] == true;
@@ -495,7 +495,7 @@ pub(super) fn saved_queue(state: &Value) -> String {
     lines.join("\n")
 }
 
-fn held_in_state(state: &Value, station: Station) -> Option<(u32, &str)> {
+pub(super) fn held_in_state(state: &Value, station: Station) -> Option<(u32, &str)> {
     let station_key = match station {
         Station::Usb => "usb",
         Station::Greaseweazle => "greaseweazle",
@@ -627,6 +627,9 @@ fn deliver(tx: &SyncSender<Event>, mut event: Event, closing: &AtomicBool) {
     }
 }
 
+// This orchestration boundary names each independent queue/controller explicitly;
+// bundling them would hide ownership and shutdown ordering without simplifying work.
+#[allow(clippy::too_many_arguments)]
 fn feed(
     mut session: Session,
     receiver: Receiver<Event>,
@@ -657,11 +660,9 @@ fn feed(
         let event = match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(event) => event,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if !session.workers.is_empty() {
-                    if refresh.elapsed() >= Duration::from_secs(10) {
-                        display(&session, output, color, draining)?;
-                        refresh = Instant::now();
-                    }
+                if !session.workers.is_empty() && refresh.elapsed() >= Duration::from_secs(10) {
+                    display(&session, output, color, draining)?;
+                    refresh = Instant::now();
                 }
                 continue;
             }
@@ -766,7 +767,7 @@ fn feed(
                                     .unwrap_or_else(|_| {
                                         Err("Physical worker panicked; evidence retained".into())
                                     });
-                                    deliver(&tx, Event::Done(t, result), &closing);
+                                    deliver(&tx, Event::Done(t, Box::new(result)), &closing);
                                 });
                                 session.workers.insert(station as u8, worker);
                                 session.started.insert(station as u8, Instant::now());
@@ -809,7 +810,7 @@ fn feed(
                 if let Some(worker) = session.workers.remove(&(ticket.station as u8)) {
                     let _ = worker.join();
                 }
-                let result = result.and_then(|done| {
+                let result = (*result).and_then(|done| {
                     session.coordinator.complete(&ticket, done.attempt)?;
                     Ok(done)
                 });
@@ -964,7 +965,7 @@ fn feed(
     }
     let mut project = session.coordinator.project.clone();
     project.set_current_disk_number_without_session(session.coordinator.resume_cursor())?;
-    if let Some(log) = telemetry.as_deref_mut() {
+    if let Some(log) = telemetry {
         crate::dual_benchmark::record(
             log,
             "dual_feeding_finished",

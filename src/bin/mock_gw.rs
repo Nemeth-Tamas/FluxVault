@@ -325,6 +325,10 @@ fn main() {
 
 // Lifecycle fixture only: no device calls. Descendant deliberately inherits
 // output pipes, exercising cleanup when the leader exits before its child.
+// This test-only host intentionally exits while its descendant holds inherited
+// pipes, exercising the supervisor's orphan/tree termination. Reaping here would
+// eliminate the failure mode that the integration test must reproduce.
+#[allow(clippy::zombie_processes)]
 fn mock_tree(partial: Option<&std::path::Path>) {
     let root = PathBuf::from(env::var_os("MOCK_GW_TREE_ROOT").unwrap());
     fs::create_dir_all(&root).unwrap();

@@ -73,7 +73,7 @@ For operating the current build, start with [README](README.md), [the beginner/a
 - [x] Recognize/use the existing directories where present: `Images`, `Logs`, `Extracted`, `Converted`, `Recovery`, `Reports`.
 - [x] Add `Flux` (or equivalent) for raw Greaseweazle captures.
 - [ ] Add a small FluxVault project metadata file (`project.json` or similar) containing project name, created time, operator settings, next floppy number, and tool paths/versions.
-- [ ] Model each floppy as a stable record with zero-padded number (`001`, `002`, ...), label/notes, acquisition attempts, current preferred image, extraction state, recovery state, conversion state, and audit state.
+- [x] Model each floppy as a stable record with zero-padded number (`001`, `002`, ...), label/notes, acquisition attempts, current preferred image, extraction state, recovery state, conversion state, and audit state. `disk show` now projects this lifecycle over immutable attempts and saved controls; `disk note` retains optional annotation history. Preference is automatic evidence ranking; explicit operator selection remains open below. Historical reports are not fresh certificates. [Closure evidence](CHECKLIST_85.md).
 - [x] Model acquisition attempts as immutable records: source backend, timestamp, geometry/format, output artifacts, hashes, bad-sector map, status, and log path.
 - [ ] Allow one attempt to be marked **preferred/current** without deleting older attempts.
 - [ ] Preserve enough provenance to answer: “Which read/pass produced this sector/file?”
@@ -88,17 +88,17 @@ For operating the current build, start with [README](README.md), [the beginner/a
   - [x] Add semantic terminal colors: green clean completion, red partial-saved swaps with explicit safe-to-proceed text, amber warnings/raw-only exceptions, cyan next physical action, red operation failure without number advancement. Always include plain-text labels and disk/station identity; never rely on color, special glyphs, or animation alone.
   - [x] Show temporary interactive read/recovery loading progress with ASCII heartbeat, elapsed time and unique host-reported track visitation, resetting targeted ranges without inventing sector-yield percentages. Clear before diagnostics and success/error swap cues; no animation in redirected stderr/JSON or dumb terminals. Test cleanup, quiet heartbeat, duplicates/range bounds and forced-color redirection.
   - [x] Support automatic terminal color detection, explicit color override, and `NO_COLOR`; readable ASCII/monochrome fallback on Windows, no automatic ANSI escapes in redirected logs or JSON/stdout. `--color always` explicitly forces stderr decoration; unit/executable tests cover plain/color/JSON output modes.
-  - [ ] Show concise reading/decoding/processing/waiting status with elapsed time; preserve a clear next-action cue when concurrent worker messages arrive. Optional configurable audible cues may supplement, not replace, the banner.
+  - [x] Show concise reading/decoding/processing/waiting status with elapsed time; preserve a clear next-action cue when concurrent worker messages arrive. Optional configurable audible cues may supplement, not replace, the banner. Existing recurring dual ACTION lines/track meters and bounded station-specific sound cues now join unified saved-only `status`; original feeding-console custody remains authoritative.
     - [x] Dual reader status shows elapsed time/latest capture-decode progress and explicit per-station ACTION lines; a recurring refresh survives frequent worker output. Pending USB transfers include held saved partials without conflating them with removal-confirmed queue entries. Offline status prints concise custody actions and does not mistake persisted READING for proof of an active reader. Session reports add invocation-local feed/full elapsed times; regression and executable tests cover safe status and JSON/monochrome behavior.
   - [x] At the configured endpoint print `BATCH FINISHED / REMOVE 020`, then downstream progress/results; distinguish a persisted next cursor of 021 from an instruction to insert 021. Show session totals and whole-project totals separately.
 - [x] Add explicit testing convenience `scan --no-verify`: Enter confirms the displayed disk, with a prominent warning at every custody prompt. Skip label typing only, never source read-only access, evidence/hash verification, numbering/resume safeguards or per-disk confirmation. Record mode in telemetry; do not persist the shortcut into future scans. EOF never starts a read, wrong explicit numbers remain refused, and default blank-input refusal is retained.
 - [x] `greaseweazle preview` preserves the former safe-command mock/preview without touching hardware.
 - [x] `greaseweazle info` exposes the audited read-only device/firmware query through the CLI; live V4.1/firmware 1.6/Mitsumi-B operation validated on 2026-10-05.
 - [x] Make the default command path much shorter: one production command runs the full safe chain with plain-language status and next physical action. `production start --last-disk N` / `production resume` span scan, recovery, processing, audit and verified archival ZIP under one owner/controller; unfinished labels/transfers prevent packaging.
-- [ ] Print concise station-specific prompts: “Insert floppy #NNN in USB”, “Move floppy #NNN to Greaseweazle”, or “Archive floppy #NNN and insert #NNN+1”.
-- [ ] Add safe pause/resume/cancel semantics and a persisted job queue; a terminal closing must not silently lose completed evidence.
-- [ ] `status` should show both stations, queued escalation, throughput, estimated time, current operation, and the next physical action.
-- [ ] Unavailable hardware/tools must be reported with an actionable reason; never imply a planned capability already works.
+- [x] Print concise station-specific prompts: “Insert floppy #NNN in USB”, “Move floppy #NNN to Greaseweazle”, or “Archive floppy #NNN and insert #NNN+1”. Existing uN/gN custody/saved/transfer cues and endpoint/no-index prompts are exercised by live pilots and executable contracts; saved dashboard reuses those station actions.
+- [x] Add safe pause/resume/cancel semantics and a persisted job queue; a terminal closing must not silently lose completed evidence. Supported controllers/queues preserve sealed receipts, pending custody, raw/Office/package partials and require reconfirmation. Actual mock process-exit/stop fixtures and live WinWord stop/resume pass; arbitrary power-loss/publication cutpoints remain separate open requirements.
+- [x] `status` should show both stations, queued escalation, throughput, estimated time, current operation, and the next physical action. New additive versioned `operations` view combines saved station/controller/production/backlog records and rough historical fresh-feed ETA. Unknown/live-reader state and conflicting inactive modes are not guessed; full recovery/conversion-tail ETA remains open in section 11.
+- [x] Unavailable hardware/tools must be reported with an actionable reason; never imply a planned capability already works. Tool preflight/configuration errors, absent-board/protection refusal, bounded No Index reseat prompts and preserved raw-only format exceptions have explicit action/error contracts; no hardware availability is inferred by offline status.
 
 ## 4. External-tool discovery
 
@@ -196,7 +196,7 @@ Initially reproduce the proven script workflow; we can replace pieces with nativ
 ## 8. Automated recovery engine — pre-Greaseweazle
 
 - [x] Recovery queue ordered by severity/attention state.
-- [ ] Add a comprehensive `disk show N --details` view (and JSON equivalent) for current image, bad-sector list, source log, extraction result, prior attempts, automated decisions, and optional operator notes.
+- [x] Add a comprehensive `disk show N --details` view (and JSON equivalent) for current image, bad-sector list, source log, extraction result, prior attempts, automated decisions, and optional operator notes. Attempt fields remain compatible; versioned `lifecycle` adds automatic selection, extraction/recovery decisions, processing jobs, conversion/audit association and retained notes. Stale/foreign/oversized controls refuse or remain explicitly historical. Real saved 059 confirms three extracted files/two recorded Office jobs/five unresolved sectors without changing source controls.
 - [x] **Re-read with USB drive** action creates another immutable acquisition attempt.
 - [x] Compare attempts sector-by-sector.
 - [x] Reconstruct readable mirrored-FAT sectors into a separate derived image with per-sector provenance even when the disk has more than two bad sectors; other sectors remain unresolved and are never guessed.
@@ -300,7 +300,7 @@ Greaseweazle host tools are intentionally wrapped rather than reimplemented init
   - [x] Initial CLI capture profile defaults from saved 1.44 MB/720 KB USB sector count; other/ambiguous formats require an explicit profile until flux-based inference exists.
 - [ ] After flux capture, automatically decode, compare against USB attempts, build the best composite, retry extraction/recovery, and update audit state.
   - [x] GW-only single-disk job aggregates its independent raw captures with good-byte conflict refusal and explicit single-capture confidence, then calls `process`; full USB/GW composite integration and damaged-filesystem extraction remain open.
-- [ ] Tell the operator exactly when to move a USB-problem disk into the Greaseweazle drive and when it can be removed; no flux expertise should be required.
+- [x] Tell the operator exactly when to move a USB-problem disk into the Greaseweazle drive and when it can be removed; no flux expertise should be required. Dual saved-partial/held/removal-confirmed queue states produce exact numbered MOVE/SET ASIDE/WAIT/REMOVE actions; gN reconfirms identity and saved completion seals precede removal cues. Status never promotes a stale reading record into safe-removal permission.
 
 ### Raw-capture storage efficiency — requested after the 20-disk pilot
 
@@ -370,7 +370,7 @@ The target setup has two different drives working simultaneously on different fl
 - [ ] Keep both drives busy whenever eligible work exists; CPU-heavy extraction/conversion must not stall physical acquisition.
 - [x] Allow continued USB feeding during an earlier GW recovery: independent live adapter workers/event pump, tested with a blocked mock GW while USB saves another disk. Confirm this on the small physical pilot before claiming a measured speed gain.
 - [ ] Use audible cues and unmistakable terminal messages differentiated by station: **USB swap**, **move to Greaseweazle**, **Greaseweazle swap**, and **attention only if automation is exhausted**.
-- [ ] Support pause/resume and clean shutdown while preserving every queue item and in-progress artifact safely.
+- [x] Support pause/resume and clean shutdown while preserving every queue item and in-progress artifact safely. Existing supported queue/controller cancellation, graceful drain, persisted jobs/partial artifacts and exact-label resume satisfy this operational contract; broader power-loss boundaries/physical driver behavior remain open separately.
   - [x] Dual feeding PAUSE/RESUME (p/r) persists across restart, blocks claim/confirmation/queued switching and implicit saved-disk removal before a new read, lets existing reads publish and accepts explicit removal while paused. Resume starts no reader; graceful QUIT still drains. Active cooperative STOP/Ctrl+C and generation-bound second-console `fv stop` now cancel supervised hosts/shared workers, preserve pending custody and require reconfirmation; `fv start` aliases scan and `fv run status` checks the owner offline. Actual mock single/dual capture and decode stop/restart, simultaneous mocked USB/GW, Office issue retry, packing retirement and partial-package tests pass. Live WinWord B stop/resume retains stage time and publishes one verified partial image. Blocked USB reads, every power-loss/publication cutpoint and broad physical production acceptance remain separate. See STOP_RESUME.md.
 - [ ] Estimate throughput and remaining batch time from observed read/retry/conversion durations.
   - [x] Dual scan shows current-invocation saved-label pace and a bounded rough fresh-feed ETA after three distinct fresh saves with an endpoint. Count in-flight initial reads, deduplicate USB/GW transfers, suppress ETA while paused and keep outstanding recovery/file tail outside the estimate. Saved old transfers cannot supply fresh ETA samples; duration includes swaps/pauses, not just summed reader time. Full recovery/conversion/tail prediction remains open.
@@ -388,7 +388,7 @@ The target setup has two different drives working simultaneously on different fl
 - [ ] Report weak/problematic regions and which decode attempt recovered each sector.
   - Implemented exact missing/conflicting LBA/CHS and supporting capture/decode identities, including distinct raw-hash counts. Physical weak-bit/local timing classification remains open; raw pulse statistics alone are not proof.
 - [x] Re-run decode from the same raw flux with alternate supported Greaseweazle profile without touching the physical disk. Existing immutable offline `greaseweazle decode N --capture-attempt N --profile ...` is tested with separate profile diagnostic histories; arbitrary extra decoder-setting search remains outside this command.
-- [ ] Compare results from USB-sector reads versus Greaseweazle-derived sector images.
+- [x] Compare results from USB-sector reads versus Greaseweazle-derived sector images. Saved catalog attempt comparison and dual pre-publication guards compare mutually readable bytes/geometry/maps, reject changed/conflicting/unbound inputs and retain USB queue/evidence on refusal. Live 053–075 transfers and mock conflict/no-shared-sector/tamper tests pass; this is not independent flux CRC certification or unrestricted donor compositing.
 - [x] Composite/reconstruction tools must retain provenance and never masquerade reconstructed bytes as an untouched original capture. Existing DERIVED handoff/provenance tests plus independent diagnostic final-sector/image replay, managed-path refusal and changed-provenance refusal enforce this distinction.
 - [x] Export a recovery note describing what was physical capture, decoded data, retry-recovered data, and reconstructed/composited data. Saved diagnostics list committed missing/conflicting LBAs, pass changes and evidence boundaries; derived/reconstructed bytes remain separately labelled, never new original observations. See `FLUX_DIAGNOSTICS.md`.
 
@@ -530,7 +530,7 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [ ] Regression-test examples with 1 bad sector, tens of bad sectors, hundreds of bad sectors, conversion-only failures, no-recovered-file cases, manual recovery, and signature recovery.
 - [ ] Measure automated recovery yield against the existing manual DMDE/script results; FluxVault must match or exceed recovered verified files wherever the same evidence is available.
 - [ ] Track operator interventions required for all 136 disks and drive the normal technical-decision count toward zero.
-- [ ] Benchmark a simulated/fixture-based two-drive run before using customer media, including queue scheduling and crash-resume behavior.
+- [x] Benchmark a simulated/fixture-based two-drive run before using customer media, including queue scheduling and crash-resume behavior. Existing modeled 136-label/14-transfer scheduling/reopen soak, simultaneous USB/GW worker fixture, real mock-CLI receipt/crash/stop/pause tests and generation-bound telemetry replay satisfy the fixture gate. Physical full-136 throughput/yield acceptance remains open.
 
 ## 17. Testing
 
@@ -539,7 +539,7 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [x] Unit tests for DMDE multi-pass map replay (later successful `C` replaces earlier `E`).
 - [x] Unit tests for path cleanup / delivery naming / collision handling.
 - [x] Unit tests for Greaseweazle command construction, especially raw-flux safety flags.
-- [ ] Unit tests for project persistence and migrations.
+- [x] Unit tests for project persistence and migrations. Schema-1 legacy metadata/cursor compatibility, read-only opening, atomic save failure, preserved extension/tool/operator fields, malformed/oversized/future-schema refusal and full legacy script-ZIP migration are tested. No automatic migration of an unsupported future schema is claimed.
 - [x] Unit tests for SHA/integrity helpers.
 - [x] Fixture-based tests using scrubbed/sample logs and tiny synthetic images; never require a customer floppy for automated tests.
 - [x] Native FAT12 fixtures cover fragmented chains, directory gaps, FAT-copy fallback/conflicts, FAT entries crossing sector boundaries, loops/cross-links, unsafe paths and 701-bad-sector recovery of an independently intact file.
@@ -558,14 +558,14 @@ Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression tru
 - [x] Policy tests cover automatic escalation, bounded retries, no-improvement stopping, severe-damage carving, and unrecoverable outcomes. Runner mocks plus automatic native-fallback/400-bad-sector/zero-candidate fixtures cover the implemented supported-format path; these are not hardware yield certification.
   - [x] Mock tests cover clean fast-pass stop, targeted escalation, no-improvement stop, recovered-sector provenance, control-byte conflict refusal, absent-board refusal, policy-limit validation, output tamper refusal, and offline decode resume after expiry with no board.
 - [x] Long-run soak test models 136 disks, application restart, worker failure, and resumability. Scan fixture now closes/reopens the project between sessions; a separate 136-job cohort fails downstream, reopens, drains exactly once, deduplicates repeated enqueue, preserves source hashes and does not loop attention results. This is deterministic modeled coverage, not a full live run or a forced-process storage soak.
-- [ ] Clear legacy Clippy warnings and enforce strict all-target linting; formatting, all-target checking and automated tests currently pass, but strict `-D warnings` linting does not yet pass.
+- [x] Clear legacy Clippy warnings and enforce strict all-target linting. Compiler-suggested mechanical fixes, smaller boxed channel events, named callback/artifact types and compile-time write-safety assertions pass `cargo clippy --all-targets -- -D warnings`. Narrow documented orchestration-arity exceptions and the intentionally orphaning test host remain; no blanket lint suppression. Full regressions verify unchanged recovery/cancellation behavior.
   - [ ] Investigate one intermittent Windows concurrent test-harness fast-fail (`0xc0000409`) observed during storage development; isolated storage tests and subsequent complete reruns passed. Do not treat the unreproduced event as a diagnosed/fixed defect; keep it in soak-test acceptance.
 
 ## 18. CLI / automation interface
 
 All CLI commands must call the same guarded Rust workflow services so safety, provenance, validation, and output formats cannot drift.
 
-- [ ] Install a `fluxvault` executable that can be added to `PATH` and run from PowerShell, CMD, or another automation process.
+- [x] Install a `fluxvault` executable that can be added to `PATH` and run from PowerShell, CMD, or another automation process. Current release installed into an isolated spaced temporary folder passes PowerShell/CMD PATH resolution, `init`/JSON status and direct automation; aliases match release hashes. WhatIf creates nothing, user/process PATH stays unchanged without opt-in. Actual user installation remains an operator choice; this test changes only child-process PATH.
   - [x] Build and smoke-test a release executable in PowerShell and CMD; provide a dry-run-capable installer with opt-in user `PATH` changes. Actual installation is left to the operator.
 - [x] Discover a project by walking upward from the current directory, like Git, with an explicit `--project <path>` override for the first CLI status command.
 - [x] `fluxvault init [path]` creates a project in the current or supplied directory; `fluxvault status` summarizes its health and next required actions.
@@ -590,7 +590,7 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
   - [x] `report export` uses the Hungarian XLSX exporter; `tools check` uses version checks and the audited external-command runner.
   - [x] `conversion plan`, `conversion run`, and `files manifest` use delivery planning, bounded conversion, and inventory services.
   - [x] Make selected conversion-issue retry resumable after CLI process restart without weakening source provenance checks. CLI `conversion run`/`process` save project-scoped state; `conversion retry [SOURCE]` reloads it and validates fresh source hashes, delivery paths, and existing outputs.
-- [ ] Human-readable output by default plus stable `--json` output for scripts; progress goes to stderr so JSON/stdout remains machine-readable.
+- [x] Human-readable output by default plus stable `--json` output for scripts; progress goes to stderr so JSON/stdout remains machine-readable. Existing executable scan/recovery/import/report/production/error/stop contracts plus new dashboard/lifecycle tests verify supported commands. New versioned objects are additive; historical/unknown states, exit codes and redirected/color/sound behavior remain explicit.
 - [x] Stable documented exit codes for success, partial recovery, operator action required, invalid project/input, missing tool, and fatal failure. STOP_RESUME.md documents their shared-category mapping and operator cancellation; subprocess tests verify the contract. Distinct codes for each kind of error are not implied.
   - [x] CLI contract: 0 complete within command scope, 3 attention/partial/operator decision, 2 invalid input/project/missing tool/operation failure, 130 operator cancellation. `audit` and `process` return 3 for recovery/conversion attention. JSON cancellation errors use operation_cancelled; other errors retain operation_error. Help options cannot create an init project or start tools/media.
 - [ ] Non-interactive/background operations require explicit policy flags; physical-media operations retain read-only safety while confirmations are limited to unavoidable custody/media changes.
@@ -609,10 +609,10 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
 
 - [x] **M0 — CLI foundation:** module layout, settings, project create/open, guarded workflow services, and folder-first commands. The earlier desktop shell was retired.
 - [x] **M1 — WORKING USB ARCHIVER:** safely image a real floppy, retry/fallback, bad-sector map, SHA-256, persistent project record.
-- [ ] **M2 — SCRIPT REPLACEMENT CORE:** import legacy archives/logs, auto extraction, recovery queue, manifests.
-- [ ] **M3 — AUTOMATED RECOVERY CORE:** multiple USB attempts, policy-driven compare/composite, FAT12 reconstruction, carving, provenance, and legacy DMDE import compatibility.
-- [ ] **M4 — GREASEWEAZLE READY WITHOUT HARDWARE:** tool detection, mocked backend, safe command construction, raw/derived artifact model.
-- [ ] **M5 — GREASEWEAZLE LIVE:** raw-flux capture + decode/redecode + detailed flux diagnostics after hardware arrives.
+- [x] **M2 — SCRIPT REPLACEMENT CORE:** import legacy archives/logs, auto extraction, recovery queue, manifests. Core services now shipped and tested, including actual original 136-image ZIP import. Historical yield/schema equivalence remains a separate open acceptance target, not implied by this milestone.
+- [x] **M3 — AUTOMATED RECOVERY CORE:** multiple USB attempts, policy-driven compare/composite, FAT12 reconstruction, carving, provenance, and legacy DMDE import compatibility. Existing bounded supported-format engine/fixtures/live saved cohorts satisfy the core milestone; broader damaged-tree/container reconstruction and full DMDE yield parity remain open in sections 8/16.
+- [x] **M4 — GREASEWEAZLE READY WITHOUT HARDWARE:** tool detection, mocked backend, safe command construction, raw/derived artifact model. Mock runner/recovery/decode/timeout/stop/safety and immutable evidence contracts pass without a connected board; milestone reconciled with already shipped work.
+- [x] **M5 — GREASEWEAZLE LIVE:** raw-flux capture + decode/redecode + detailed flux diagnostics after hardware arrives. Protected Mitsumi/B HD/DD/damaged/stop-resume pilots and saved raw/packed diagnostics validate implemented capture/decode/measurement scope. Weak-bit/alignment/per-revolution CRC classification and full-136 acceptance remain open; no new physical read this checkpoint.
 - [ ] **M6 — COMPLETE SUITE:** Office conversion, integrity, audit workbook/report exports, customer ZIP packaging.
 - [ ] **M7 — HARDENING:** recovery regression tests, crash/cancel behavior, settings polish, release build.
 - [ ] **M8 — ZERO-TOUCH PRODUCTION:** concurrent USB + Greaseweazle scheduler, automatic escalation, one-button downstream pipeline, 136-disk afternoon benchmark, and near-minimum operator touches.

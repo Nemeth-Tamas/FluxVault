@@ -229,10 +229,13 @@ fn dmde_filelist(bytes: &[u8]) -> Result<BTreeMap<String, (u64, &'static str)>, 
         let key = safe_relative(rest)?.to_lowercase();
         // Deleted versions can share a live filename. Ambiguous paths must
         // stay unknown (in scope), never be silently excluded as deleted.
-        if result.contains_key(&key) {
-            result.insert(key, (0, "ambiguous"));
-        } else {
-            result.insert(key, (size, state));
+        match result.entry(key) {
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                e.insert((0, "ambiguous"));
+            }
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert((size, state));
+            }
         }
     }
     Ok(result)

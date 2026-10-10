@@ -104,8 +104,7 @@ fn entry_named(payload: &[u8], name: &str) -> usize {
         .into_iter()
         .find(|at| {
             let n = u16at(payload, *at + 64) as usize;
-            n >= 2
-                && n <= 64
+            (2..=64).contains(&n)
                 && String::from_utf16(
                     &payload[*at..*at + n - 2]
                         .chunks_exact(2)

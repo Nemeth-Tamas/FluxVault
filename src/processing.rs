@@ -175,7 +175,7 @@ fn jobs(directory: &Path) -> Result<Vec<(PathBuf, Job)>, String> {
             }
         }
     }
-    result.sort_by(|a, b| (a.1.disk, a.1.attempt).cmp(&(b.1.disk, b.1.attempt)));
+    result.sort_by_key(|a| (a.1.disk, a.1.attempt));
     Ok(result)
 }
 

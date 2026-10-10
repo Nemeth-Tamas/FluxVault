@@ -60,11 +60,11 @@ static CONSOLE: std::sync::OnceLock<Token> = std::sync::OnceLock::new();
 #[cfg(windows)]
 unsafe extern "system" fn console_handler(kind: u32) -> windows::core::BOOL {
     use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
-    if matches!(kind, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
-        if let Some(token) = CONSOLE.get() {
-            token.request();
-            return true.into();
-        }
+    if matches!(kind, CTRL_C_EVENT | CTRL_BREAK_EVENT)
+        && let Some(token) = CONSOLE.get()
+    {
+        token.request();
+        return true.into();
     }
     false.into()
 }

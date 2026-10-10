@@ -242,13 +242,13 @@ fn reject_source_inside_project(request: &ManualRecoveryImportRequest) -> Result
         )
     })?;
     for destination in [&request.extracted_root, &request.recovery_root] {
-        if let Ok(destination) = destination.canonicalize() {
-            if source.starts_with(&destination) {
-                return Err(format!(
-                    "A recovered forrásmappa nem lehet a FluxVault célmappán belül: {}",
-                    source.display()
-                ));
-            }
+        if let Ok(destination) = destination.canonicalize()
+            && source.starts_with(&destination)
+        {
+            return Err(format!(
+                "A recovered forrásmappa nem lehet a FluxVault célmappán belül: {}",
+                source.display()
+            ));
         }
     }
     Ok(())

@@ -10,6 +10,7 @@ pub mod conversion;
 mod conversion_lock;
 pub mod conversion_run;
 mod delivery_maintenance;
+pub mod disk_record;
 pub mod dmde_logs;
 pub mod document_salvage;
 pub mod dual_benchmark;

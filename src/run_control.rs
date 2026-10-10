@@ -204,11 +204,13 @@ impl Session {
                 if token.requested() {
                     break;
                 }
-                if let Ok(request) = read::<Request>(&request_path(&root, &r.generation)) {
-                    if request.schema == 1 && request.generation == r.generation && request.stop {
-                        token.request();
-                        break;
-                    }
+                if let Ok(request) = read::<Request>(&request_path(&root, &r.generation))
+                    && request.schema == 1
+                    && request.generation == r.generation
+                    && request.stop
+                {
+                    token.request();
+                    break;
                 }
                 match rx.recv_timeout(Duration::from_millis(100)) {
                     Err(mpsc::RecvTimeoutError::Timeout) => {}

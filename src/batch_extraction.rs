@@ -32,7 +32,7 @@ pub struct BatchExtractionRequest {
 pub enum BatchExtractionEvent {
     Stage(String),
     Progress { completed: usize, total: usize },
-    Finished(Result<BatchExtractionResult, String>),
+    Finished(Box<Result<BatchExtractionResult, String>>),
 }
 
 #[derive(Debug, Clone)]
@@ -93,7 +93,7 @@ pub fn spawn_batch_extraction(request: BatchExtractionRequest) -> Receiver<Batch
                 let _ = sender.send(BatchExtractionEvent::Progress { completed, total });
             },
         );
-        let _ = sender.send(BatchExtractionEvent::Finished(result));
+        let _ = sender.send(BatchExtractionEvent::Finished(Box::new(result)));
     });
 
     receiver

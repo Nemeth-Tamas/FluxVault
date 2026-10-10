@@ -372,7 +372,7 @@ fn extract_strict(
         );
     }
     trace.lock().unwrap().allow_holes = true;
-    let word = stream(&mut compound, "/WordDocument", &trace, &bytes, &sources)?;
+    let word = stream(&mut compound, "/WordDocument", &trace, bytes, sources)?;
     let fib = known(&word, 0, 426)?;
     let name = if u16at(fib, 10) & 0x200 != 0 {
         "/1Table"
@@ -388,7 +388,7 @@ fn decode_streams(
     table: &SparseStream,
     mut metadata: BTreeSet<u64>,
 ) -> Result<Document, String> {
-    let fib = known(&word, 0, 426)?;
+    let fib = known(word, 0, 426)?;
     let version = u16at(fib, 2);
     let flags = u16at(fib, 10);
     let base_expected = match version {
@@ -411,11 +411,11 @@ fn decode_streams(
         return Err("Unsupported Word FIB field-count version".into());
     }
     let new_at = 154 + pairs * 8;
-    let new_count = u16at(known(&word, new_at, 2)?, 0) as usize;
+    let new_count = u16at(known(word, new_at, 2)?, 0) as usize;
     if new_count > 5 {
         return Err("Unsupported Word extended FIB count".into());
     }
-    let new_words = known(&word, new_at + 2, new_count * 2)?;
+    let new_words = known(word, new_at + 2, new_count * 2)?;
     let valid_new = match new_count {
         0 => pairs == base_expected,
         2 => matches!(
@@ -441,13 +441,13 @@ fn decode_streams(
     };
     let clx_at = u32at(fib, 418);
     let clx_len = u32at(fib, 422);
-    if clx_len > 64 * 1024 || clx_len < 5 {
+    if !(5..=64 * 1024).contains(&clx_len) {
         return Err("Word CLX ceiling/invalid length".into());
     }
-    let clx = known(&table, clx_at, clx_len)?;
-    metadata.extend(source_lbas(&word, 0, 426));
-    metadata.extend(source_lbas(&word, new_at, 2 + new_words.len()));
-    metadata.extend(source_lbas(&table, clx_at, clx_len));
+    let clx = known(table, clx_at, clx_len)?;
+    metadata.extend(source_lbas(word, 0, 426));
+    metadata.extend(source_lbas(word, new_at, 2 + new_words.len()));
+    metadata.extend(source_lbas(table, clx_at, clx_len));
     let mut at = 0;
     while clx.get(at) == Some(&1) {
         let header = clx.get(at..at + 3).ok_or("Truncated Word Prc")?;
@@ -460,7 +460,7 @@ fn decode_streams(
     }
     let header = clx.get(at..at + 5).ok_or("Missing Word piece table")?;
     let n = u32at(header, 1);
-    if header[0] != 2 || n < 4 || (n - 4) % 12 != 0 || at + 5 + n != clx.len() {
+    if header[0] != 2 || n < 4 || !(n - 4).is_multiple_of(12) || at + 5 + n != clx.len() {
         return Err("Invalid Word piece-table envelope".into());
     }
     let plc = &clx[at + 5..];
@@ -504,7 +504,7 @@ fn decode_streams(
         // MS-DOC FcCompressed: the reserved high bit must be ignored by readers.
         let fc = fc & 0x3fff_ffff;
         let width = if compressed { 1 } else { 2 };
-        if compressed && fc % 2 != 0 {
+        if compressed && !fc.is_multiple_of(2) {
             return Err("Invalid compressed Word offset".into());
         }
         let begin = if compressed { fc / 2 } else { fc };

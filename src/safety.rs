@@ -45,15 +45,19 @@ impl MediaSafetyPolicy {
             "FluxVault source media access must remain read-only"
         );
 
-        assert!(
-            !Self::ALLOW_PHYSICAL_MEDIA_WRITES,
-            "FluxVault must never enable writes to source floppy media"
-        );
+        const {
+            assert!(
+                !Self::ALLOW_PHYSICAL_MEDIA_WRITES,
+                "FluxVault must never enable writes to source floppy media"
+            );
+        }
 
-        assert!(
-            !Self::ALLOW_GREASEWEAZLE_WRITES,
-            "FluxVault must never enable Greaseweazle write operations"
-        );
+        const {
+            assert!(
+                !Self::ALLOW_GREASEWEAZLE_WRITES,
+                "FluxVault must never enable Greaseweazle write operations"
+            );
+        }
     }
 }
 

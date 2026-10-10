@@ -11,7 +11,7 @@ $fluxVaultCompleter = {
 
     $children = @{
         '' = @('init','status','start','stop','scan','acquire','disk','project','drive','tools','greaseweazle','diagnose','extract','recovery','conversion','files','audit','report','process','processing','storage','benchmark','production','finalize','package','run','completions','help')
-        'disk' = @('list','show','select','next')
+        'disk' = @('list','show','note','select','next')
         'project' = @('show','import')
         'drive' = @('list','probe')
         'tools' = @('check','show','set','clear')
