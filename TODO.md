@@ -36,7 +36,7 @@ For operating the current build, start with [README](README.md), [the beginner/a
 
 **Same-disk disagreement follow-up (2026-10-10):** After correcting the typo, the real 133 agrees with its USB image on 2,584 readable sectors but differs at LBAs 17/773 (USB has 294 missing; GW reports zero missing). `g confirm N` explicitly binds a minor-disagreement candidate to the operator's same-physical-disk assertion; `gN` then resumes saved recovery, with both byte editions and exact conflict hashes retained. Immutable publication/catalog loading and final audit preserve attention rather than falsely claiming a clean read. Wrong identities, broad disagreements and changed evidence still refuse. Follow-up: compare affected files/regions during the full 136-disk benchmark and improve operator recommendations under existing decision-provenance and acceptance items. Independent CRC confidence and the existing checklist denominator remain unchanged.
 
-**Saved 136-label replay / finishing fix (2026-10-10):** All 136 labels now replay as verified saved custody evidence, including one identity release and one same-disk confirmation. The final workbook step exposed an older telemetry reader rejecting those new events; source/debug replay now validates both as operator actions, with no invented read/receipt/removal/yield. Strict unknown-event and malformed/active-reader checks remain. The original project and timing files are not rewritten; finishing is resumed on the corrected build. Packaging/full-pipeline acceptance and historical payload comparison are still pending, so this does not close an acceptance box or change the denominator.
+**Saved 136-label replay / finishing fix (2026-10-10):** All 136 labels now replay as verified saved custody evidence, including one identity release and one same-disk confirmation. The final workbook step exposed an older telemetry reader rejecting those new events; the corrected reader validates both as operator actions, with no invented read/receipt/removal/yield. Strict unknown-event and malformed/active-reader checks remain. The operator subsequently completed production with attention: all 136 labels audited and the archival ZIP/hash verified. The physical-pilot collection item below is now complete; historical payload comparison, customer completeness and broader interruption/power-loss acceptance remain separate open work.
 
 - [x] Rust stable, Windows-first application.
 - [x] CLI-only executable; remove the desktop window, file dialogs, GUI session state, and their dependencies without removing the shared workflow services.
@@ -465,6 +465,7 @@ Replace the current updater/audit script chain with one in-app source of truth w
 
 Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 
+- [ ] Make automatic final delivery obvious and ready to hand over: publish the verified ready ZIP and its checksum in the project root beside `project.json`, and copy the latest final workbook and human-readable/audit reports prominently into that root without manual assembly. Preserve the hash-bound immutable report generation and existing sibling archives; exclude owned published ZIP/report copies from subsequent package inputs to prevent self-inclusion/recursive growth. Publication/resume must be consistent and idempotent, preserve unrelated user files and retain attention labels rather than falsely certify completeness. This is a requested layout change, not the current outside-project destination behavior.
 - [x] Choose destination outside project/source tree and enforce that guardrail.
 - [x] Stage only allowed archival/customer folders in the package file list (no source-tree mutation).
 - [x] Exclude internal helper/state files from customer content.
@@ -483,6 +484,20 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 - [x] Optional production policy automatically builds the final package when the last physical disk and all background queues are complete. Choosing `production start` opts into archival partial-results-with-attention policy; journal/receipt hashes, full range and pending USB transfers are checked before finishing. Ordinary `scan` and strict-default `finalize` are unchanged.
 
 ## 16. Current dataset regression targets
+
+### Completed 136-disk baseline / next offline investigations (2026-10-10)
+
+Use `C:\Users\User\Desktop\FluxVault-Test\Customer-136-Dual-20261010` as the saved regression/benchmark collection. All 136 labels have images; clean USB reads provide IMG evidence, while problematic disks and many clean GW reads also retain flux evidence. Production completed with attention and a verified archival ZIP in the sibling delivery directory. The latest final report records 107 disks passing its audit scope / 29 requiring attention, 1,120 recovered source records, 807 successful conversions and zero invalid generated outputs. These are observed records, not proof of every original file being recovered.
+
+**Operator agreement:** routine scanning is validated and does not need repeating for development. Default to the saved images/captures, offline decode, recovery and comparison. Ask for a fresh physical read only when a specific investigation needs evidence that is not already available; do not automatically rerun the 136 disks.
+
+- [ ] Investigate disk 101's unsupported/invalid FAT12 layout from its saved IMG and available flux evidence. The standard-layout hypothesis was correctly refused because FAT headers/copies disagree; distinguish decoder/layout issues from damage and recover only evidence-supported files, without forcing a guessed standard filesystem.
+- [ ] Classify the zero-live-file results on 041, 047, 103 and 116 from saved FAT/root/directory/allocation evidence and the historical baseline. Readable standard layouts with no reported directory gaps do not establish whether disks are empty, contain deleted/orphaned content, or have missed live files. Keep deleted recovery opt-in and record the distinction rather than automatically calling these failed or blank disks.
+- [ ] Reconcile the five untracked delivery outputs on 085/131 against source, carving, conversion and generation manifests: one carved JPEG on 085, and two carved-document DOCX/PDF pairs on 131. Establish ownership/provenance and whether they are stale-generation or missing-inventory results before any retirement; preserve files and visible exceptions until proven.
+- [ ] Review disk 133's USB/GW disagreements at LBAs 17/773 and their filesystem/file impact, including `V_xB5MOSANG.DOC`. The operator confirmed the correct physical label; preserve both observed byte versions and investigate metadata dependencies/readable editions without choosing an unsupported original-content winner or treating zero missing sectors as clean evidence.
+- [ ] Investigate the batch's 13 known live-file dependencies on missing/disputed sectors and 16 incomplete/ambiguous chains using saved evidence. Prioritize 017/022/027/033/040/052/066/123/128/133, apply bounded document-aware salvage/fragment recovery where justified, and retain exact holes, uncertain ownership and original bytes. Dependencies are not automatically 13 lost files, and readable salvage is not an intact-original certificate.
+
+Full script/DMDE payload comparison remains the existing unchecked comparison/yield targets below; do not duplicate that acceptance box or infer parity from conversion success.
 
 ### First workable pilot — single Greaseweazle station
 
@@ -524,8 +539,8 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
   - [x] Fresh 009 automatic-DD smoke test (2026-10-07): 1,440 readable sectors, one capture/109.8 s, correct automatic format, background drain/packed retention and verified JPEG; image/payload bytes identical to the earlier physical pilot.
   - [x] Fresh 058 repeat (2026-10-07): 2,880 readable sectors, one capture/105.1 s, five successful document conversions; image and all extracted payload hashes match the earlier 053–064 scan. Historical archive differences reproduce, not acquisition drift. Operator confirms read animation/clearing works.
   - [ ] Compare live 009 against the archive's signature-carved outputs (including a large legacy Word candidate and JPEG), distinguishing deleted/orphaned content, recovery-tool reports and actual reachable files. A clean FAT extraction is not equivalence to legacy carving, and whole-image/payload hashes currently differ.
-- [ ] Run the first 136-disk physical pilot and collect benchmark/audit/recovery artifacts, preserving the original script archive for comparison.
-- [ ] Compare pilot source/recovered-file hashes and yield against the script/DMDE baseline, then prioritize changes using measured failure/throughput data.
+- [x] Run the first 136-disk physical pilot and collect benchmark/audit/recovery artifacts, preserving the original script archive for comparison. `Customer-136-Dual-20261010` completed production with attention; 136 images/audited labels, saved timing/recovery records and hash-verified final reports/archival ZIP are available. This closes collection, not full historical yield, customer certification or every crash/power-loss gate.
+- [ ] Compare pilot source/recovered-file hashes and yield against the script/DMDE baseline, then prioritize changes using measured failure/throughput data. Use the completed 136-disk collection and preserved original script-created ZIP: report per-label byte/hash matches, changed/missing/new payloads and naming/provenance differences, with deleted-file scope separate and no percentage inferred from feature coverage.
 
 Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression truth while porting functionality.
 
