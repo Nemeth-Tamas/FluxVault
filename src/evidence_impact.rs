@@ -4,6 +4,10 @@ use crate::{fat12, project::ProjectState, sector_inspection};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+#[path = "evidence_impact_batch.rs"]
+mod batch;
+pub use batch::{inspect_all, render_all};
+
 const WARNING: &str = "Saved evidence only. Mapped dependencies are not proof of original content, independent flux CRC, or customer completeness. A disputed readable sector keeps its observed bytes; it is not silently zeroed or repaired. Unknown directory entries and unmapped tails cannot be attributed to invented files. Deleted, carved, manual and converted files are outside this live FAT-chain map.";
 const MAX_RELATIONS: usize = 65_536;
 
@@ -233,6 +237,7 @@ pub fn inspect(
                 || limited
                 || analysis.as_ref().is_ok_and(|a| !a.skipped.is_empty()
                     || !a.directory_gaps.is_empty()
+                    || !a.unrecovered_files.is_empty()
                     || a.layout_evidence.warning.is_some())
         );
     }
@@ -353,17 +358,20 @@ mod tests {
             )
         }
         fn save(&self, attempt: u32, original: &[u8], bad: &[u64]) {
+            self.save_disk(1, attempt, original, bad);
+        }
+        fn save_disk(&self, disk: u32, attempt: u32, original: &[u8], bad: &[u64]) {
             let mut bytes = original.to_vec();
             for lba in bad {
                 bytes[*lba as usize * 512..(*lba as usize + 1) * 512].fill(0);
             }
             let sha = format!("{:x}", Sha256::digest(&bytes));
-            let stem = format!("001_attempt_{attempt:03}");
+            let stem = format!("{disk:03}_attempt_{attempt:03}");
             let log = self.0.logs_dir().join(format!("{stem}.log"));
             let status = if bad.is_empty() { "OK" } else { "PARTIAL" };
-            fs::write(&log,format!("BEGIN | disk=1 | attempt={attempt}\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track=18 | bytes_per_sector=512 | total_sectors=2880 | total_bytes=1474560\n{}END | status={status} | bytes=1474560 | sha256={sha}\n",bad.iter().map(|l|format!("BAD_SECTOR | LBA={l}\n")).collect::<String>())).unwrap();
+            fs::write(&log,format!("BEGIN | disk={disk} | attempt={attempt}\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track=18 | bytes_per_sector=512 | total_sectors=2880 | total_bytes=1474560\n{}END | status={status} | bytes=1474560 | sha256={sha}\n",bad.iter().map(|l|format!("BAD_SECTOR | LBA={l}\n")).collect::<String>())).unwrap();
             fs::write(self.0.images_dir().join(format!("{stem}.img")), bytes).unwrap();
-            fs::write(self.0.images_dir().join(format!("{stem}.json")),serde_json::to_vec(&json!({"disk_number":1,"attempt_number":attempt,"status":status,
+            fs::write(self.0.images_dir().join(format!("{stem}.json")),serde_json::to_vec(&json!({"disk_number":disk,"attempt_number":attempt,"status":status,
                 "source_backend":"synthetic-test","source_device":"none","timestamp_unix_ms":attempt,
                 "image_file":format!("{stem}.img"),"log_file":log,"sha256":sha,
                 "total_sectors":2880,"bytes_written":1474560,"bad_sector_count":bad.len(),"bad_sectors":bad.iter().map(|l|json!({"lba":l})).collect::<Vec<_>>(),
@@ -573,5 +581,100 @@ mod tests {
                 .unwrap_err()
                 .contains("changed during inspection")
         );
+    }
+    #[test]
+    fn batch_deduplicates_attempts_sorts_labels_counts_files_and_never_writes() {
+        let f = Fixture::new();
+        f.save_disk(2, 1, &image(), &[36]);
+        f.save_disk(1, 1, &image(), &[]);
+        f.save_disk(1, 2, &image(), &[36]);
+        let before = tree(f.0.root());
+        let mut progress = Vec::new();
+        let r = inspect_all(&f.0, |i, n, d| progress.push((i, n, d))).unwrap();
+        assert_eq!(progress, [(1, 2, 1), (2, 2, 2)]);
+        assert_eq!(r["counts"]["saved_labels"], 2);
+        assert_eq!(r["counts"]["attention_disks"], 1);
+        assert_eq!(r["counts"]["no_attention_in_inspected_scope"], 1);
+        assert_eq!(
+            r["counts"]["inspected_image_totals"]["known_files_with_problem_dependencies"],
+            1
+        );
+        assert_eq!(
+            r["counts"]["inspected_image_totals"]["incomplete_or_ambiguous_files"],
+            1
+        );
+        assert_eq!(r["disks"][0]["attempt"], 1);
+        assert_eq!(r["files_written"], 0);
+        assert_eq!(r["physical_media_access"], false);
+        assert_eq!(r["inventory_changed"], false);
+        assert!(render_all(&r).contains("Known dependency: CHAIN.TXT"));
+        assert_eq!(tree(f.0.root()), before);
+        let mut args = vec![
+            "recovery".into(),
+            "impact".into(),
+            "all".into(),
+            "--json".into(),
+        ];
+        let response = crate::cli::run(&args, f.0.root()).unwrap();
+        assert_eq!(response.exit_code, 3);
+        args.extend(["--attempt".into(), "1".into()]);
+        assert!(
+            crate::cli::run(&args, f.0.root())
+                .unwrap_err()
+                .contains("per-disk")
+        );
+    }
+    #[test]
+    fn batch_keeps_unknown_corrupt_legacy_and_raw_only_labels_visible() {
+        let f = Fixture::new();
+        f.save_disk(1, 1, &image(), &[]);
+        f.save_disk(2, 1, &image(), &[]);
+        fs::write(f.0.logs_dir().join("002_attempt_001.log"), "unknown").unwrap();
+        f.save_disk(3, 1, &image(), &[]);
+        fs::write(f.0.images_dir().join("003_attempt_001.img"), b"tampered").unwrap();
+        fs::write(f.0.images_dir().join("4.img"), b"legacy").unwrap();
+        fs::write(
+            f.0.root().join("Flux/005_attempt_001.partial.json"),
+            b"partial raw hint",
+        )
+        .unwrap();
+        let before = tree(f.0.root());
+        let r = inspect_all(&f.0, |_, _, _| {}).unwrap();
+        assert_eq!(r["counts"]["saved_labels"], 5);
+        assert_eq!(r["counts"]["inspected_disks"], 2);
+        assert_eq!(r["counts"]["refused_disks"], 3);
+        assert_eq!(r["counts"]["attention_disks"], 4);
+        assert_eq!(r["counts"]["unknown_filesystem_disks"], 1);
+        assert_eq!(r["disks"][2]["inspection_state"], "refused");
+        assert!(render_all(&r).contains("REFUSED"));
+        let args = ["recovery", "impact", "all", "--json"].map(str::to_owned);
+        assert_eq!(crate::cli::run(&args, f.0.root()).unwrap().exit_code, 2);
+        assert_eq!(tree(f.0.root()), before);
+    }
+    #[test]
+    fn batch_inventory_churn_is_attention_not_an_atomic_clean_report() {
+        let f = Fixture::new();
+        f.save(1, &image(), &[]);
+        let r = inspect_all(&f.0, |_, _, _| f.save_disk(2, 1, &image(), &[])).unwrap();
+        assert_eq!(r["inventory_changed"], true);
+        assert_eq!(r["attention_required"], true);
+        assert_eq!(r["counts"]["saved_labels"], 1);
+        assert!(render_all(&r).contains("rerun after processing is idle"));
+    }
+    #[test]
+    fn batch_empty_and_cancelled_inspection_do_not_return_a_clean_empty_success() {
+        let f = Fixture::new();
+        assert!(
+            inspect_all(&f.0, |_, _, _| {})
+                .unwrap_err()
+                .contains("No saved")
+        );
+        f.save(1, &image(), &[]);
+        let token = crate::cancellation::Token::default();
+        let _scope = crate::cancellation::enter(token.clone());
+        token.request();
+        assert!(crate::cancellation::stopped(
+            &inspect_all(&f.0, |_, _, _| {}).unwrap_err()
+        ));
     }
 }

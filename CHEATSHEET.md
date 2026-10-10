@@ -208,7 +208,7 @@ Dual timing: `fv production benchmark` exports saved timing JSON/CSV offline. Ne
 - `--color never` removes colored scan cues; text instructions remain.
 - `fv --help` lists implemented commands. There is no GUI; two-drive mode remains an opt-in pilot, not full-collection production acceptance.
 - Expert saved-byte check: `fv recovery sector 59 --lba 24 --sectors 2`. Add `--attempt 2` for an image attempt or `--json`; this never reads a floppy. Missing/derived bytes stay labeled. [Sector inspector](SECTOR_INSPECTION.md).
-- See affected live files: `fv recovery impact 59`; trace a file: `fv recovery trace 59 'FOLDER\LETTER.DOC'`. Add `--attempt 2` or `--json`. Saved images only, no writes; missing-directory attribution stays unknown and disputed bytes remain attention. [Guide](EVIDENCE_IMPACT.md).
+- Whole batch damage summary: `fv recovery impact all`. See exact affected live files/offsets: `fv recovery impact 59`; trace a file: `fv recovery trace 59 'FOLDER\LETTER.DOC'`. Add `--json` for full details, or `--attempt 2` for a single disk only. Saved images only, no writes; unknown/refused disks stay visible. [Guide](EVIDENCE_IMPACT.md).
 
 Selection/cleanup are automatic: verified richer generations become preferred, earlier evidence stays intact, and eligible obsolete original copies move into recoverable `Recovery/DeliveryQuarantine`. Edited/untracked/pre-ledger copies and old Office derivatives stay preserved. [Details](RECOVERY_SELECTION.md).
 

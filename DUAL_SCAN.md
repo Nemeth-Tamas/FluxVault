@@ -66,6 +66,8 @@ Both observations stay intact: the GW image is an observed edition, not guessed 
 
 ## Resume and results
 
+**Finishing compatibility fix (2026-10-10):** Older report readers rejected the new `dual_identity_released` / `dual_same_disk_confirmed` timing events after captures were already saved. The current source/debug build accepts and validates these operator-action records without counting them as reads, saved receipts, recoveries or removals. Unknown/malformed/misplaced events still refuse. If this exact error stopped the final workbook step, `fv production resume` on the corrected build rechecks the completed endpoint and resumes saved-file finishing; there is no need to scan the batch again. Use the corrected executable, not an older installed alias. Release refresh remains separate while an operator is scanning.
+
 ```powershell
 fv scan --double --write-blocker-verified
 fv production status

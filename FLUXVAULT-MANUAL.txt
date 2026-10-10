@@ -943,8 +943,19 @@ SAVED-SECTOR INSPECTOR (ADVANCED)
     More examples and limits: SECTOR_INSPECTION.md.
 
 SAVED DAMAGE AND FILE TRACE (ADVANCED)
+    fv recovery impact all [--json]
     fv recovery impact N [--attempt N] [--json]
     fv recovery trace N PATH [--attempt N] [--json]
+
+    "all" prints a batch summary, per-disk table and known affected file names,
+    using one preferred/default native image per discovered saved disk label.
+    Progress stays on stderr; JSON includes full per-disk impact details.
+    No --attempt with all. Legacy/raw-only/inconsistent disks remain REFUSED,
+    unknown filesystems remain UNKNOWN, never silently counted clean.
+    Run after processing is idle; inventory changes warn. Per-disk snapshots
+    are verified, not an atomic batch or an intended-range completeness check.
+    Batch limit: 4,096 labels / 100,000 entries / 64 MiB of report details.
+    A refused disk yields exit 2 with the useful batch report still printed.
 
     Map missing/disputed sectors to filesystem regions and known live FAT
     file dependencies. Trace uses a relative live directory path, ignoring

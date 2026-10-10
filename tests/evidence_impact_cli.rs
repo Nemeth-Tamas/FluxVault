@@ -128,3 +128,57 @@ fn unsupported_flags_paths_and_missing_labels_fail_without_side_effects() {
     }
     assert_eq!(tree(f.0.root()), before);
 }
+
+#[test]
+fn batch_cli_keeps_json_clean_and_reports_attention_or_refusal_without_writes() {
+    for bad in [false, true] {
+        let f = Fixture::new(bad);
+        let before = tree(f.0.root());
+        let out = f.run(&["recovery", "impact", "all", "--json"]);
+        assert_eq!(
+            out.status.code(),
+            Some(if bad { 3 } else { 0 }),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out.stderr).contains("[IMPACT] 1/1: disk 001"));
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["mode"], "batch_sector_impact");
+        assert_eq!(v["counts"]["saved_labels"], 1);
+        assert_eq!(v["counts"]["refused_disks"], 0);
+        assert_eq!(v["files_written"], 0);
+        assert_eq!(tree(f.0.root()), before);
+        fs::write(f.0.images_dir().join("002_attempt_001.json"), b"invalid").unwrap();
+        let before = tree(f.0.root());
+        let out = f.run(&["recovery", "impact", "all", "--json"]);
+        assert_eq!(out.status.code(), Some(2));
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["counts"]["saved_labels"], 2);
+        assert_eq!(v["counts"]["refused_disks"], 1);
+        assert_eq!(v["disks"][0]["inspection_state"], "inspected");
+        assert_eq!(v["disks"][1]["inspection_state"], "refused");
+        assert!(v.get("error").is_none()); // Useful partial batch, not discarded.
+        assert_eq!(tree(f.0.root()), before);
+    }
+}
+
+#[test]
+fn batch_attempt_flags_and_empty_projects_do_not_create_a_clean_report() {
+    let f = Fixture::new(false);
+    let before = tree(f.0.root());
+    for args in [
+        vec!["recovery", "impact", "all", "--attempt", "1", "--json"],
+        vec!["recovery", "impact", "all", "--include-deleted", "--json"],
+        vec!["recovery", "trace", "all", "HELLO.TXT", "--json"],
+    ] {
+        let out = f.run(&args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(
+            serde_json::from_slice::<Value>(&out.stdout)
+                .unwrap()
+                .get("error")
+                .is_some()
+        );
+    }
+    assert_eq!(tree(f.0.root()), before);
+}

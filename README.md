@@ -19,7 +19,7 @@ Latest development checkpoint: **426/473 TODOs (90.1%)**, with the same denomina
 | Want optional settings and individual tools | [Advanced tutorial](TUTORIAL.md#advanced-optional-controls) and [CLI reference](CLI.md) |
 | Running a measured batch | [136-disk runbook](PILOT_136.md) or [small-test launcher](TOMORROW_TEST.md) |
 | Understand a difficult saved disk | [Saved-flux diagnostics](FLUX_DIAGNOSTICS.md): `fv diagnose 59` |
-| See which files depend on bad/disputed sectors | [Damage impact and file trace](EVIDENCE_IMPACT.md): `fv recovery impact 59` |
+| See which files depend on bad/disputed sectors | [Batch damage impact and file trace](EVIDENCE_IMPACT.md): `fv recovery impact all` or `fv recovery impact 59` |
 | Stop active work and continue later | [Stop/resume](STOP_RESUME.md): `STOP`, `fv stop`, `fv start` |
 | Recovered files, conversion issues and delivery hashes | [Final report guide](FINAL_REPORTS.md): `fv report export` |
 | Finish/archive saved results and resume interrupted finishing | [Finishing guide](FINALIZATION.md): `fv finalize --destination PATH` |

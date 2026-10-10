@@ -7,8 +7,21 @@ These optional diagnostics read saved images only. They do not reread a floppy, 
 From the project folder:
 
 ```powershell
+fv recovery impact all
 fv recovery impact 59
 ```
+
+`all` inspects the **whole saved batch**, one preferred/default native image per discovered disk label. It prints a summary, a disk table, affected known file names and directory/tail warnings. Progress goes to the error stream, so it stays visible without contaminating `--json` output. It never opens a floppy. For exact offsets and LBAs, inspect an individual disk afterward.
+
+```powershell
+fv recovery impact all --json
+# Optional: save the full report yourself, outside the managed project outputs.
+fv recovery impact all --json | Set-Content -Encoding utf8 '..\batch-impact.json'
+```
+
+Disks with inconsistent/missing evidence, legacy-only images or raw/partial captures without a completed native image get explicit **REFUSED** rows; other disks still appear. Unsupported/unknown filesystems are **UNKNOWN**, not empty clean disks. Totals include only inspected selected images and count files per disk, not deduplicated customer documents or conversion results. `--attempt` is per-disk only and is refused with `all`.
+
+Run after scanning/background finishing is idle for the most useful result. Each disk is checked consistently, but the entire project is **not an atomic snapshot**. If the numbered image/raw/preference inventory changes, the result warns and exits with attention: rerun when idle. Only discovered saved labels are included; this is not a check that an intended 001–136 range was fed correctly or finished. Batch bounds: 4,096 labels, 100,000 directory entries, 64 MiB of serialized per-disk details; exceeding a bound refuses instead of silently truncating a supposedly clean batch.
 
 The result lists each missing/conflicting sector, its filesystem region, and any known live file that depends on it. A payload dependency gives the **byte offset inside that file**, even for fragmented allocation. Metadata dependencies mean the file's name, layout, directory ancestry or allocation relies on that sector; they do not mean every byte of the file is corrupted.
 
@@ -45,3 +58,5 @@ Deleted entries, signature/fragment candidates, manually imported files, convert
 Changed source bytes, contradictory metadata/logs, malformed maps, missing referenced evidence, unsafe/device paths and redirected files refuse. Existing immutable offline/GW publication proofs are replayed; selected image/metadata/log/proof snapshots are checked again before returning. One report permits at most 65,536 sector-to-file dependency rows; reaching that ceiling is explicitly flagged as a non-exhaustive listing. Other bounds match the [sector inspector](SECTOR_INSPECTION.md).
 
 Exit codes: **0** means no attention in the inspected command scope; **3** means missing/disputed/unknown/inferred/derived or incomplete evidence; **2** means invalid input or inconsistent/unavailable evidence. None is a whole-disk or customer certificate. Retry inspection later if saved evidence changes while processing publishes it.
+
+For `all`, a per-disk refusal produces **exit 2 with the useful batch report still printed**; attention without refusals is 3. Invalid command/input or an exceeded batch bound produces the usual error instead. Empty projects refuse rather than returning an empty success.

@@ -97,6 +97,65 @@ fn station(data: &Value) -> Result<&str, String> {
         _ => Err("Invalid dual telemetry station".into()),
     }
 }
+
+fn same_disk_event(data: &Value) -> Result<(), String> {
+    let mut proof = data.clone();
+    proof
+        .as_object_mut()
+        .ok_or("Invalid dual same-disk event")?
+        .remove("elapsed_ms");
+    let proof: crate::read_conflicts::Confirmation = serde_json::from_value(proof)
+        .map_err(|e| format!("Invalid dual same-disk confirmation: {e}"))?;
+    let hash = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    if proof.schema != 1
+        || proof.disk == 0
+        || proof.disk == u32::MAX
+        || proof.usb_attempt == 0
+        || proof.ticket_generation == 0
+        || proof.confirmed_unix_ms == 0
+        || proof.assertion != "operator_confirms_same_physical_disk_not_content_certification"
+        || proof.agreeing_sectors < 128
+        || proof.agreeing_sectors > 8192
+        || proof.conflicts.is_empty()
+        || proof.conflicts.len() > 32
+        || proof.conflicts.len() * 100 > proof.agreeing_sectors + proof.conflicts.len()
+        || [
+            &proof.usb_image_sha256,
+            &proof.usb_metadata_sha256,
+            &proof.usb_log_sha256,
+            &proof.gw_image_sha256,
+        ]
+        .iter()
+        .any(|s| !hash(s))
+        || proof.conflicts.iter().any(|c| {
+            c.lba >= 8192
+                || !hash(&c.usb_sha256)
+                || !hash(&c.gw_sha256)
+                || c.usb_sha256 == c.gw_sha256
+        })
+        || proof
+            .conflicts
+            .iter()
+            .map(|c| c.lba)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != proof.conflicts.len()
+        || proof.gw_bad_lbas.len() > 8192
+        || proof.gw_bad_lbas.iter().any(|n| *n >= 8192)
+        || proof
+            .gw_bad_lbas
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != proof.gw_bad_lbas.len()
+    {
+        return Err("Invalid dual same-disk confirmation shape/bounds".into());
+    }
+    // This validates a telemetry action, not its original-content assertion.
+    // Publication/custody replay independently verifies actual source bindings.
+    Ok(())
+}
 fn regular(path: &Path) -> Result<(), String> {
     let m = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     #[cfg(windows)]
@@ -168,6 +227,8 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
     let mut warnings = Vec::new();
     let mut confirmations = 0;
     let mut removals = 0;
+    let mut identity_releases = 0;
+    let mut same_disk_confirmations = 0;
     let mut failures = 0;
     let mut finished = 0;
     let mut finished_elapsed = 0;
@@ -337,6 +398,26 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                     station(&e.data)?;
                     removals += 1;
                 }
+                "dual_identity_released" => {
+                    let disk = number(&e.data, "disk")?;
+                    if disk == 0
+                        || disk >= u32::MAX as u64
+                        || station(&e.data)? != "GW"
+                        || e.data["rejected_evidence_preserved"] != true
+                        || starts.values().any(|(_, _, s)| s == "GW")
+                        || feed.is_some()
+                    {
+                        return Err("Invalid/misplaced dual identity release".into());
+                    }
+                    identity_releases += 1;
+                }
+                "dual_same_disk_confirmed" => {
+                    if starts.values().any(|(_, _, s)| s == "GW") || feed.is_some() {
+                        return Err("Misplaced dual same-disk confirmation".into());
+                    }
+                    same_disk_event(&e.data)?;
+                    same_disk_confirmations += 1;
+                }
                 "dual_pause" => {
                     if paused_at.is_none() {
                         paused_at = Some(time);
@@ -423,12 +504,13 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
         "verified_saved_unique_labels":verified_count,"timed_saved_unique_labels":timed_labels.len(),
         "unique_timed_receipts":receipts.len(),"numbered_read_confirmations":confirmations,
         "explicit_removal_confirmations":removals,"reader_failures":failures,
+        "identity_release_actions":identity_releases,"same_disk_confirmation_actions":same_disk_confirmations,
         "finished_session_elapsed_ms":finished_elapsed,"finished_feeding_elapsed_ms":finished_feed,
         "finished_invocations_timed_saved_unique_labels":finished_labels.len(),
         "finished_invocations_saved_labels_per_hour":if finished_feed>0 && !finished_labels.is_empty(){Some(finished_labels.len() as f64*3_600_000.0/finished_feed as f64)} else {None},
         "recorded_reader_busy_union_ms":all_busy,"recorded_both_readers_overlap_ms":all_overlap,
         "timings":timings,"warnings":warnings,"custody":state,
-        "note":"Invocation wall times include swaps/pauses; incomplete durations are lower bounds. Reader intervals include decode/publication; confirmation commands are not measured physical touches. Old DualScan reports are not synthesized into timing logs."}),
+        "note":"Invocation wall times include swaps/pauses; incomplete durations are lower bounds. Reader intervals include decode/publication; confirmation commands are not measured physical touches. Identity release/same-disk events count operator actions, not reads, receipts, recovery yield or original-content proof. Old DualScan reports are not synthesized into timing logs."}),
     )
 }
 
@@ -601,6 +683,109 @@ mod tests {
         assert!(result["finished_invocations_saved_labels_per_hour"].is_null());
         drop(log);
         fs::remove_dir_all(p.root()).unwrap();
+    }
+    fn confirmation() -> Value {
+        json!({"schema":1,"disk":133,"usb_attempt":1,"ticket_generation":4,"confirmed_unix_ms":1,
+            "assertion":"operator_confirms_same_physical_disk_not_content_certification",
+            "usb_image_sha256":"a".repeat(64),"usb_metadata_sha256":"b".repeat(64),"usb_log_sha256":"c".repeat(64),
+            "gw_image_sha256":"d".repeat(64),"gw_bad_lbas":[],"agreeing_sectors":2584,
+            "conflicts":[{"lba":17,"usb_sha256":"a".repeat(64),"gw_sha256":"b".repeat(64)}]})
+    }
+    #[test]
+    fn identity_actions_replay_without_fake_reads_receipts_removals_or_yield() {
+        let p = fixture();
+        let mut log = log(&p);
+        record(
+            &mut log,
+            "dual_identity_released",
+            json!({"disk":133,"station":"GW","rejected_evidence_preserved":true}),
+        )
+        .unwrap();
+        record(&mut log, "dual_same_disk_confirmed", confirmation()).unwrap();
+        record(&mut log, "dual_feeding_finished", json!({})).unwrap();
+        record(&mut log, "dual_session_finished", json!({})).unwrap();
+        let original = fs::read(log.path()).unwrap();
+        let r = report(&p).unwrap();
+        assert_eq!(r["identity_release_actions"], 1);
+        assert_eq!(r["same_disk_confirmation_actions"], 1);
+        assert_eq!(r["finished_sessions"], 1);
+        for key in [
+            "unique_timed_receipts",
+            "numbered_read_confirmations",
+            "explicit_removal_confirmations",
+            "verified_saved_unique_labels",
+            "reader_failures",
+        ] {
+            assert_eq!(r[key], 0, "{key}");
+        }
+        assert_eq!(fs::read(log.path()).unwrap(), original);
+        drop(log);
+        fs::remove_dir_all(p.root()).unwrap();
+    }
+    #[test]
+    fn malformed_and_active_reader_identity_events_still_refuse() {
+        for (kind, mut data, active) in [
+            (
+                "dual_identity_released",
+                json!({"disk":133,"station":"USB","rejected_evidence_preserved":true}),
+                false,
+            ),
+            (
+                "dual_identity_released",
+                json!({"disk":0,"station":"GW","rejected_evidence_preserved":true}),
+                false,
+            ),
+            (
+                "dual_identity_released",
+                json!({"disk":133,"station":"GW","rejected_evidence_preserved":false}),
+                false,
+            ),
+            ("dual_same_disk_confirmed", confirmation(), true),
+            ("dual_same_disk_confirmed", confirmation(), false),
+            ("dual_unknown_future_event", json!({}), false),
+        ] {
+            let p = fixture();
+            let mut log = log(&p);
+            if active {
+                record(
+                    &mut log,
+                    "dual_read_started",
+                    json!({"disk":133,"station":"GW","generation":4}),
+                )
+                .unwrap();
+            } else if kind == "dual_same_disk_confirmed" {
+                data["agreeing_sectors"] = json!(10);
+            }
+            record(&mut log, kind, data).unwrap();
+            assert!(report(&p).is_err(), "{kind} / active={active}");
+            drop(log);
+            fs::remove_dir_all(p.root()).unwrap();
+        }
+    }
+    #[test]
+    #[ignore = "requires explicit FV_TEST_SAVED_DUAL_PROJECT; saved-evidence replay only, no media or output files"]
+    fn saved_operator_dual_identity_events_replay_without_writes() {
+        let root = PathBuf::from(
+            std::env::var("FV_TEST_SAVED_DUAL_PROJECT")
+                .expect("Set FV_TEST_SAVED_DUAL_PROJECT to an existing saved dual project"),
+        );
+        let p = crate::sector_inspection::open_project(root).unwrap();
+        let before = fs::read(p.root().join("project.json")).unwrap();
+        let r = report(&p).unwrap();
+        assert!(r["verified_saved_unique_labels"].as_u64().unwrap() > 0);
+        assert!(r["identity_release_actions"].as_u64().unwrap() > 0);
+        assert!(r["same_disk_confirmation_actions"].as_u64().unwrap() > 0);
+        assert_eq!(fs::read(p.root().join("project.json")).unwrap(), before);
+        println!(
+            "Saved dual replay: {} verified labels; {} release / {} same-disk actions; {} failed reads; {} timed receipts; {} finished / {} incomplete invocations. No reports written.",
+            r["verified_saved_unique_labels"],
+            r["identity_release_actions"],
+            r["same_disk_confirmation_actions"],
+            r["reader_failures"],
+            r["unique_timed_receipts"],
+            r["finished_sessions"],
+            r["incomplete_sessions"]
+        );
     }
     #[test]
     fn oversized_event_is_refused_before_append_and_does_not_poison_the_sequence() {

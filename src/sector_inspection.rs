@@ -96,7 +96,7 @@ impl Snapshot {
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn regular(path: &Path, directory: bool) -> Result<(), String> {
+pub(crate) fn regular(path: &Path, directory: bool) -> Result<(), String> {
     crate::safety::workstation_path(path)?;
     let info = fs::symlink_metadata(path)
         .map_err(|e| format!("Cannot inspect {}: {e}", path.display()))?;

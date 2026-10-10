@@ -21,6 +21,7 @@ $fluxVaultCompleter = {
         'greaseweazle' = @('preview','info','capture','decode','identify','status','diagnose','compare','consensus','plan','recover','scan')
         'extract' = @('all','disk')
         'recovery' = @('plan','compare','backup','queue','composite','fat','extract','documents','import','sector','impact','trace')
+        'recovery impact' = @('all')
         'conversion' = @('plan','run','issues','retry')
         'files' = @('manifest')
         'report' = @('export')
@@ -62,6 +63,7 @@ $fluxVaultCompleter = {
         'recovery extract' = @('--include-deleted')
         'recovery sector' = @('--lba','--sectors','--attempt')
         'recovery impact' = @('--attempt')
+        'recovery impact all' = @()
         'recovery trace' = @('--attempt')
         'recovery import' = @('--source','--dmde-log')
         'conversion run' = @('--conversion-workers')
@@ -113,12 +115,14 @@ $fluxVaultCompleter = {
         } else { $positionals += $word }
     }
     $context = $positionals -join ' '
+    $numericImpact = $positionals.Count -ge 3 -and $positionals[0] -eq 'recovery' -and $positionals[1] -eq 'impact' -and $positionals[2] -match '^\d+$'
     # Numeric disk labels/paths are arguments, not new command branches.
     while ($context -and -not $children.ContainsKey($context) -and -not $options.ContainsKey($context)) {
         $positionals = @($positionals | Select-Object -SkipLast 1)
         $context = $positionals -join ' '
     }
     $prefix = ([string]$wordToComplete).Trim([char[]](39,34))
+    if ($numericImpact) { $children['recovery impact'] = @() }
     if ($context -eq 'production start' -and $flags -contains '--double') {
         $options[$context] = @('--drive','--gw-drive','--last-disk','--destination','--write-blocker-verified','--conversion-workers','--color','--sound')
     }

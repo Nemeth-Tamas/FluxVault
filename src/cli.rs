@@ -138,6 +138,7 @@ Usage:
   fluxvault recovery sector N --lba L [--sectors 1..8] [--attempt N] [--json]
                                     Saved-sector hex/ASCII, LBA/CHS and attempt provenance; read-only
   fluxvault recovery impact N [--attempt N] [--json]
+  fluxvault recovery impact all [--json]  Batch saved damage summary and per-disk details
                                     Map missing/disputed sectors to live files and filesystem regions
   fluxvault recovery trace N PATH [--attempt N] [--json]
                                     Trace a live FAT file's ordered bytes and metadata to saved sectors
@@ -650,30 +651,48 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         {
             return Err("recovery impact/trace accept only --project, --json and --attempt".into());
         }
-        let disk = positional[2]
-            .parse::<u32>()
-            .ok()
-            .filter(|n| *n > 0)
-            .ok_or("Use a positive disk label")?;
+        let all = positional[1] == "impact" && positional[2] == "all";
+        if all && sector_attempt.is_some() {
+            return Err("recovery impact all selects each disk's preferred/default image; --attempt is per-disk only".into());
+        }
+        let disk = if all {
+            0
+        } else {
+            positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or("Use a positive disk label, or recovery impact all")?
+        };
         crate::safety::workstation_path(cwd)?;
         if let Some(path) = &project_override {
             crate::safety::workstation_path(path)?;
         }
         let root = resolve_project_root(cwd, project_override.as_deref())?;
         let project = crate::sector_inspection::open_project(root)?;
-        let result = crate::evidence_impact::inspect(
-            &project,
-            disk,
-            sector_attempt,
-            positional.get(3).map(String::as_str),
-        )?;
+        let result = if all {
+            crate::evidence_impact::inspect_all(&project, |done, total, disk| {
+                eprintln!("[IMPACT] {done}/{total}: disk {disk:03} / saved evidence only");
+            })?
+        } else {
+            crate::evidence_impact::inspect(
+                &project,
+                disk,
+                sector_attempt,
+                positional.get(3).map(String::as_str),
+            )?
+        };
         return Ok(CliResponse {
             output: if json_output {
                 result.to_string()
+            } else if all {
+                crate::evidence_impact::render_all(&result)
             } else {
                 crate::evidence_impact::render(&result)
             },
-            exit_code: if result["attention_required"] == true {
+            exit_code: if all && result["counts"]["refused_disks"].as_u64().unwrap_or(0) > 0 {
+                2
+            } else if result["attention_required"] == true {
                 3
             } else {
                 0

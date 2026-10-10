@@ -242,6 +242,7 @@ No inserted floppy needed:
 
 ```powershell
 fv disk show 59 --details
+fv recovery impact all
 fv recovery impact 59
 fv recovery trace 59 'FOLDER\LETTER.DOC'
 fv recovery extract 59
