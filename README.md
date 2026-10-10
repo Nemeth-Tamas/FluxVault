@@ -57,6 +57,8 @@ The [tutorial](TUTORIAL.md) covers setup, damaged disks, interruptions and deliv
 
 `fv status` now combines recorded stations, transfers, background work and rough fresh-feed pace. `fv disk show N --details` shows saved recovery/extraction/conversion/audit state, and `fv disk note N "TEXT"` saves an optional note without changing acquisition identity. Historical reports are labelled as such; the original console's current swap cue remains authoritative. [Inspection and notes](CLI.md#see-what-is-happening-without-interrupting-it).
 
+Optional conveniences: `--sound on` adds station-specific swap/error reminders, including a distinct rising USB-to-GW transfer cue in dual mode. `fv package build --destination PATH --keep-staging` keeps a verified unpacked copy of the ZIP beside it; extra storage/time, with automatic production still ZIP-only. [CLI details](CLI.md).
+
 ## What you need
 
 - Windows and a built FluxVault executable. [Installation](TUTORIAL.md#1-install-or-refresh-the-short-command) requires no coding when the executable is present.

@@ -167,7 +167,7 @@ Usage:
                                     Process/report and verify an archive; clean-only by default
   fluxvault finalize resume         Resume interrupted finishing offline; rechecks evidence
   fluxvault finalize status         Inspect historical finishing receipts, no tools/media
-  fluxvault package build --destination PATH [--project PATH]
+  fluxvault package build --destination PATH [--keep-staging] [--project PATH]
                                     Create and verify an archival ZIP
   fluxvault --help                  Show this help
   fluxvault completions powershell Generate static PowerShell 7+ Tab completion
@@ -303,6 +303,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut baseline_zip: Option<PathBuf> = None;
     let mut include_deleted = false;
     let mut allow_attention = false;
+    let mut keep_staging = false;
     let mut conversion_workers: Option<usize> = None;
     let mut details = false;
     let mut report_language = None;
@@ -366,6 +367,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             }
             "--include-deleted" => include_deleted = true,
             "--allow-attention" => allow_attention = true,
+            "--keep-staging" => keep_staging = true,
             "--baseline" => {
                 index += 1;
                 baseline_zip = Some(PathBuf::from(
@@ -564,6 +566,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         index += 1;
     }
 
+    if keep_staging && positional != ["package", "build"] {
+        return Err("--keep-staging is only valid with package build".into());
+    }
     if positional == ["production", "start"] || positional == ["production", "resume"] {
         return production_flow::run(args, cwd);
     }
@@ -2489,25 +2494,31 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             } else {
                 cwd.join(destination)
             };
-            let result = package::build_package(
+            let result = package::build_package_with_staging(
                 &PackageRequest {
                     project_root: project.root().to_path_buf(),
                     destination,
                     project_name: project.name().to_owned(),
                 },
+                keep_staging,
                 &|stage| eprintln!("{stage}"),
             )?;
             if json_output {
                 Ok(json!({"zip": result.zip_path, "sha256_file": result.sha256_path,
                     "sha256": result.sha256, "files": result.file_count, "bytes": result.total_bytes,
-                    "customer_delivery_certified": false}).to_string())
+                    "staging": result.staging_path, "customer_delivery_certified": false}).to_string())
             } else {
                 Ok(format!(
-                    "Verified archival ZIP (not customer-certified): {}\nFiles: {} | Source bytes: {}\nSHA-256: {}",
+                    "Verified archival ZIP (not customer-certified): {}\nFiles: {} | Source bytes: {}\nSHA-256: {}{}",
                     result.zip_path.display(),
                     result.file_count,
                     result.total_bytes,
-                    result.sha256
+                    result.sha256,
+                    result
+                        .staging_path
+                        .as_ref()
+                        .map(|p| format!("\nVerified unpacked staging: {}", p.display()))
+                        .unwrap_or_default()
                 ))
             }
         }

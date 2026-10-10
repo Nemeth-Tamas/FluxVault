@@ -37,7 +37,9 @@ OPTIONAL SOUND CUES
     Default off; per invocation, not remembered on resume. Single-GW, USB-only
     and dual scans support it. A clean saved result uses one tone; partial or
     raw-only saved results use two descending tones; read/reseat errors use
-    three. USB starts lower than GW. Progress and cancellation do not sound.
+    three ending low. In dual mode a USB partial uses three rising tones for
+    transfer/set-aside to GW; GW partials stay descending. USB starts lower
+    than GW. Progress and cancellation do not sound.
 
     Windows interactive stderr only: redirected logs/JSON and TERM=dumb stay
     silent. Audio is best-effort, bounded and non-blocking. Busy/stale notices
@@ -364,10 +366,19 @@ INSTALLATION AND COMMAND CATALOG
         fluxvault report export --language en --json
         fluxvault audit
         fluxvault package build --destination C:\CustomerPackages
+        fluxvault package build --destination C:\CustomerPackages --keep-staging
         fluxvault finalize --destination C:\CustomerPackages
         fluxvault finalize --destination C:\CustomerPackages --allow-attention
         fluxvault finalize status
         fluxvault finalize resume
+
+    package build --keep-staging retains a verified unpacked snapshot of the
+    exact ZIP members beside the ZIP as <package-name>.staging, including its
+    README and manifests. JSON adds staging (path, or null without the flag).
+    Extra storage/copy time; default and automatic production stay ZIP-only.
+    Source project stays intact. Existing folders are never merged/replaced;
+    interrupted .partial.staging/.partial.zip evidence is retained. A folder
+    already verified before ZIP promotion can remain if a later stop occurs.
 
     Use --project C:\path\to\project to select a project explicitly. Add --json
     to a command for machine-readable stdout (including structured errors);

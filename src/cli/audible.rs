@@ -41,6 +41,7 @@ pub(super) enum Station {
 pub(super) enum Outcome {
     Saved,
     PartialSaved,
+    TransferToGw,
     Failed,
 }
 
@@ -60,8 +61,17 @@ impl Notice {
         match self.outcome {
             Outcome::Saved => vec![(pitch, 100)],
             Outcome::PartialSaved => vec![(pitch, 100), (330, 120)],
+            Outcome::TransferToGw => vec![(pitch, 80), (990, 80), (1320, 100)],
             Outcome::Failed => vec![(pitch, 100), (220, 100), (220, 100)],
         }
+    }
+}
+
+pub(super) fn saved_outcome(station: Station, partial: bool) -> Outcome {
+    match (station, partial) {
+        (Station::Usb, true) => Outcome::TransferToGw,
+        (_, true) => Outcome::PartialSaved,
+        (_, false) => Outcome::Saved,
     }
 }
 
@@ -164,7 +174,12 @@ mod tests {
     fn all_station_outcome_patterns_are_distinct_and_bounded() {
         let mut patterns = Vec::new();
         for station in [Station::Usb, Station::Greaseweazle] {
-            for outcome in [Outcome::Saved, Outcome::PartialSaved, Outcome::Failed] {
+            for outcome in [
+                Outcome::Saved,
+                Outcome::PartialSaved,
+                Outcome::TransferToGw,
+                Outcome::Failed,
+            ] {
                 let tones = Notice {
                     station,
                     outcome,
@@ -214,6 +229,17 @@ mod tests {
         let cues = Cues::with_player(false, |_, _| panic!("Disabled player ran"));
         assert!(cues.sender.is_none());
         cues.notify(Station::Usb, Outcome::Saved);
+    }
+
+    #[test]
+    fn only_dual_usb_partial_requests_the_transfer_pattern() {
+        assert_eq!(saved_outcome(Station::Usb, true), Outcome::TransferToGw);
+        assert_eq!(
+            saved_outcome(Station::Greaseweazle, true),
+            Outcome::PartialSaved
+        );
+        assert_eq!(saved_outcome(Station::Usb, false), Outcome::Saved);
+        assert_eq!(saved_outcome(Station::Greaseweazle, false), Outcome::Saved);
     }
 
     #[test]

@@ -39,7 +39,9 @@ No policy/format file is needed. New scans identify supported 720 KB/1.44 MB for
 
 Production also builds a verified ZIP automatically at the checked endpoint, under sibling `My-New-Batch-Delivery`. Partial/raw-only results stay attention, not customer-certified. Early QUIT never archives an unfinished batch. [Guide](PRODUCTION_WORKFLOW.md).
 
-Optional audible swap/error reminders: add `--sound on`, for example `fv scan --last-disk 136 --no-verify --sound on`. Off by default and not remembered on restart. USB/GW tones differ; clean/partial/error patterns differ. Audio is best-effort and interactive-only: always follow the written saved/swap cue, not a sound alone. [Details](CLI.md#optional-scan-sound-cues).
+Optional audible swap/error reminders: add `--sound on`, for example `fv scan --last-disk 136 --no-verify --sound on`. Off by default and not remembered on restart. USB/GW tones differ; clean/partial/error patterns differ. Dual USB partials use a separate rising transfer-to-GW pattern. Audio is best-effort and interactive-only: always follow the written saved/swap cue, not a sound alone. [Details](CLI.md#optional-scan-sound-cues).
+
+Optional unpacked delivery copy: `fv package build --destination C:\CustomerPackages --keep-staging` keeps the exact verified ZIP members in a separate `.staging` folder beside the ZIP. Extra storage/time; your project stays unchanged. Automatic production remains ZIP-only.
 
 ### Existing batch: enter, inspect, continue
 

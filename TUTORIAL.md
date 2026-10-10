@@ -186,6 +186,8 @@ The destination must exist **outside the project**, on workstation storage. `fin
 
 `package build` is an expert archival command, **not** a shortcut to recovery certification. An archive can preserve partial evidence without proving complete customer recovery.
 
+Want an unpacked folder as well? Run `fv package build --destination 'C:\Users\User\Desktop\FluxVault-Delivery' --keep-staging`. It retains a hash-checked copy of the exact ZIP contents beside the ZIP as `<package-name>.staging`; your project remains intact. This costs extra storage/time, so automatic production keeps its faster ZIP-only default.
+
 ## Optional: Tab completes commands
 
 In PowerShell 7, load the [optional completion script](SHELL_COMPLETION.md), then type `fv sc` + Tab or `fv scan --no` + Tab. No project or drive is inspected, no read starts, and your profile is not modified automatically.

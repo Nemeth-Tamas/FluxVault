@@ -12,6 +12,9 @@ use chrono::{DateTime, Local, Utc};
 use sha2::{Digest, Sha256};
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+#[path = "package_staging.rs"]
+mod staging;
+
 const INCLUDED_DIRECTORIES: &[&str] = &[
     "Images",
     "Logs",
@@ -42,6 +45,7 @@ pub struct PackageResult {
     pub file_count: usize,
     pub total_bytes: u64,
     pub sha256: String,
+    pub staging_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -72,6 +76,14 @@ pub fn spawn_package(request: PackageRequest) -> Receiver<PackageEvent> {
 
 pub(crate) fn build_package(
     request: &PackageRequest,
+    stage: &impl Fn(&str),
+) -> Result<PackageResult, String> {
+    build_package_with_staging(request, false, stage)
+}
+
+pub(crate) fn build_package_with_staging(
+    request: &PackageRequest,
+    keep_staging: bool,
     stage: &impl Fn(&str),
 ) -> Result<PackageResult, String> {
     crate::cancellation::check()?;
@@ -167,6 +179,22 @@ pub(crate) fn build_package(
     };
 
     let sha256 = hash_file(&partial_path)?;
+    let staging_path = if keep_staging {
+        stage("Keeping and verifying an unpacked copy of the exact package members...");
+        Some(
+            staging::retain(
+                &partial_path,
+                &destination.join(format!("{stem}.partial.staging")),
+                &destination.join(format!("{stem}.staging")),
+                &sha256,
+            )
+            .map_err(|error| {
+                format!("{error} Partial ZIP retained at {}", partial_path.display())
+            })?,
+        )
+    } else {
+        None
+    };
     crate::cancellation::check()?;
     fs::rename(&partial_path, &zip_path).map_err(|error| {
         format!(
@@ -195,6 +223,7 @@ pub(crate) fn build_package(
         file_count,
         total_bytes,
         sha256,
+        staging_path,
     })
 }
 
@@ -613,6 +642,7 @@ fn hash_file(path: &Path) -> Result<String, String> {
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        crate::cancellation::check()?;
         let count = input.read(&mut buffer).map_err(|error| error.to_string())?;
         if count == 0 {
             break;
@@ -625,6 +655,47 @@ fn hash_file(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kept_staging_uses_verified_archive_not_changed_project() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-staging-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let project =
+            crate::project::ProjectState::create_without_session(root.join("project")).unwrap();
+        let destination = root.join("delivery");
+        fs::create_dir(&destination).unwrap();
+        let source = project.root().join("Extracted/data.doc");
+        fs::write(&source, b"original").unwrap();
+        let result = build_package_with_staging(
+            &PackageRequest {
+                project_root: project.root().to_owned(),
+                destination,
+                project_name: "snapshot".into(),
+            },
+            true,
+            &|stage| {
+                if stage.starts_with("Keeping and verifying") {
+                    fs::write(&source, b"external fixture edit after ZIP verification").unwrap();
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(result.staging_path.unwrap().join("Extracted/data.doc")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"external fixture edit after ZIP verification"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn stop_during_package_write_preserves_partial_and_never_promotes_it() {

@@ -68,7 +68,7 @@ $fluxVaultCompleter = {
         'benchmark compare' = @('--baseline','--include-deleted')
         'finalize' = @('--destination','--conversion-workers','--allow-attention')
         'finalize resume' = @('--allow-attention')
-        'package build' = @('--destination')
+        'package build' = @('--destination','--keep-staging')
     }
     $values = @{
         '--profile' = @('auto','ibm.1440','ibm.720')

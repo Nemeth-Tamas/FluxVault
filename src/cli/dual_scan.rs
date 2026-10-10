@@ -880,11 +880,7 @@ fn feed(
                         )?;
                         sounds.notify(
                             sound_station(ticket.station),
-                            if partial {
-                                SoundOutcome::PartialSaved
-                            } else {
-                                SoundOutcome::Saved
-                            },
+                            super::audible::saved_outcome(sound_station(ticket.station), partial),
                         );
                     }
                     Err(error) => {

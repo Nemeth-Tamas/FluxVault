@@ -26,6 +26,90 @@ fn invoke(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Output {
 }
 
 #[test]
+fn package_keep_staging_is_opt_in_exact_and_package_scoped() {
+    use std::io::Read;
+    let root = std::env::temp_dir().join(format!(
+        "fv-package-stage-cli-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let project =
+        fluxvault::project::ProjectState::create_without_session(root.join("project")).unwrap();
+    let delivery = root.join("delivery");
+    fs::create_dir(&delivery).unwrap();
+    fs::create_dir(project.root().join("Extracted/001")).unwrap();
+    fs::write(
+        project.root().join("Extracted/001/customer.doc"),
+        b"customer bytes",
+    )
+    .unwrap();
+    fs::write(
+        project.root().join("Extracted/001/.fluxvault-private.json"),
+        b"private",
+    )
+    .unwrap();
+    let metadata = fs::read(project.root().join("project.json")).unwrap();
+    for keep in [false, true] {
+        let mut args = vec![
+            "package",
+            "build",
+            "--destination",
+            delivery.to_str().unwrap(),
+            "--json",
+        ];
+        if keep {
+            args.push("--keep-staging");
+        }
+        let output = invoke(project.root(), &args, None);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["customer_delivery_certified"], false);
+        if keep {
+            let stage = Path::new(result["staging"].as_str().unwrap());
+            assert!(!stage.join("Extracted/001/.fluxvault-private.json").exists());
+            let mut zip =
+                zip::ZipArchive::new(fs::File::open(result["zip"].as_str().unwrap()).unwrap())
+                    .unwrap();
+            for i in 0..zip.len() {
+                let mut entry = zip.by_index(i).unwrap();
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).unwrap();
+                assert_eq!(fs::read(stage.join(entry.name())).unwrap(), bytes);
+            }
+            assert!(stage.join("PACKAGE_MANIFEST.csv").is_file());
+            assert!(stage.join("PACKAGE_MANIFEST.sha256").is_file());
+            assert!(stage.join("README.txt").is_file());
+        } else {
+            assert!(result["staging"].is_null());
+        }
+    }
+    for args in [
+        vec!["init", "oops", "--keep-staging", "--json"],
+        vec!["scan", "--double", "--keep-staging", "--json"],
+        vec!["production", "start", "--keep-staging", "--json"],
+    ] {
+        assert_eq!(invoke(project.root(), &args, None).status.code(), Some(2));
+    }
+    assert!(!project.root().join("oops").exists());
+    assert_eq!(
+        fs::read(project.root().join("project.json")).unwrap(),
+        metadata
+    );
+    assert_eq!(
+        fs::read(project.root().join("Extracted/001/customer.doc")).unwrap(),
+        b"customer bytes"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn sound_validation_preserves_json_errors_and_help_never_touches_a_project() {
     for args in [
         vec!["status", "--sound", "on", "--json"],

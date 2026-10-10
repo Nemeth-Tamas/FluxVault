@@ -68,7 +68,7 @@ Interactive recovery/scan displays a temporary ASCII bar with disk identity, pha
 
 ### Optional scan sound cues
 
-`scan --sound on` (also `start`, explicit GW scan, USB-only scan and `--double`) enables short Windows tones after saved-result/error cues. Default `--sound off` is unchanged silence. This setting is **per invocation, not persisted**; it changes no read, retry, recovery or custody policy. Saved clean results use one tone, partial/raw-only saved results two descending tones, and failed reads/reseat instructions three tones. USB starts at a lower pitch than GW so dual-station cues differ. Cancellation and recurring progress/status messages do not trigger completion sounds.
+`scan --sound on` (also `start`, explicit GW scan, USB-only scan and `--double`) enables short Windows tones after saved-result/error cues. Default `--sound off` is unchanged silence. This setting is **per invocation, not persisted**; it changes no read, retry, recovery or custody policy. Saved clean results use one tone, partial/raw-only saved results two descending tones, and failed reads/reseat instructions three tones ending low. In dual mode a saved USB partial instead uses three rising tones: **set aside/move this label to GW**. GW partials retain the descending pattern. USB starts at a lower pitch than GW so station cues differ. Cancellation and recurring progress/status messages do not trigger completion sounds.
 
 Sound is supplemental: read the station/label/banner before moving a disk; a sound never authorizes removal. Only interactive stderr on Windows enables audio, even with `--sound on`; redirected output and `TERM=dumb` stay silent. No BEL/ANSI sound bytes enter stdout, JSON or logs, and `NO_COLOR` does not disable requested audio. Native Windows audio respects the machine's audio configuration. One bounded non-blocking worker drops busy/stale notices and discards queued cues at shutdown; audio unavailability/failure never interrupts acquisition. A final cue may be skipped during immediate exit. There is no external player, profile/registry change or physical-drive access for audio.
 
@@ -147,6 +147,7 @@ fluxvault report export
 fluxvault report export --language en --json
 fluxvault audit
 fluxvault package build --destination C:\CustomerPackages
+fluxvault package build --destination C:\CustomerPackages --keep-staging
 fluxvault finalize --destination C:\CustomerPackages
 fluxvault finalize --destination C:\CustomerPackages --allow-attention
 fluxvault finalize status
@@ -154,6 +155,8 @@ fluxvault finalize resume
 ```
 
 Use `--project C:\path\to\project` to select a project explicitly. Add `--json` to a command for machine-readable stdout (including structured errors); long-running progress goes to stderr. Exit code 0 means complete, 3 means attention/partial, and 2 means invalid input or an operation error. These codes will be refined as production automation is added.
+
+`package build --keep-staging` additionally keeps `<package-stem>.staging` next to the verified ZIP, containing its exact members, README and manifest/hash sidecar. Each copied file is hash-checked; internal/quarantined files stay excluded. JSON adds `staging` (a path, or null without the flag). This is a separate unpacked **snapshot of the verified ZIP**, not a move, merge, live project view, or customer-completeness certificate. It requires extra storage and copy/verification time; default packaging and automatic production remain ZIP-only. Cancellation/errors retain uniquely named `.partial.staging` / `.partial.zip` evidence, never replace an earlier folder, and do not report successful packaging. If cancellation occurs after the folder is verified/published but before ZIP promotion, that verified folder can remain alongside the partial ZIP. The original project is always preserved.
 
 `disk show N` summarizes saved attempts. Add `--details` for their hashes, bad-sector LBAs, retry counts, and evidence paths; JSON includes those fields without an extra flag. Neither view accesses the floppy drive.
 
