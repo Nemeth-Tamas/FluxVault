@@ -202,6 +202,13 @@ fn released_wrong_identity_recaptures_in_a_new_slot_and_never_reuses_wrong_bytes
 fn confirmed_minor_reader_conflicts_resume_offline_stay_attention_and_preserve_versions() {
     use crate::production::{Coordinator, Station};
     let (p, mut original) = fixture(&[]);
+    fat12::tests::file(
+        &mut original,
+        19 * 512 + 64,
+        b"DISPUTE TXT",
+        742,
+        b"an observed disputed payload",
+    );
     original[24..26].copy_from_slice(&18u16.to_le_bytes());
     original[26..28].copy_from_slice(&2u16.to_le_bytes());
     let mut c = Coordinator::open(p.clone(), Some(1), false).unwrap();
@@ -289,7 +296,36 @@ fn confirmed_minor_reader_conflicts_resume_offline_stay_attention_and_preserve_v
     assert!(best.attention_required && best.bad_sectors.is_empty());
     assert_eq!(fs::read(&result.image).unwrap(), original);
     let managed = managed(&p, best);
-    assert_eq!(managed.files, 2);
+    assert_eq!(managed.files, 3);
+    let impact = crate::evidence_impact::inspect(&p, 1, Some(2), None).unwrap();
+    assert_eq!(impact["counts"]["problem_sectors"], 2);
+    assert_eq!(impact["attention_required"], true);
+    assert_eq!(impact["sectors"][0]["lba"], 17);
+    assert_eq!(impact["sectors"][0]["region"]["region"], "fat");
+    assert_eq!(
+        impact["sectors"][1]["file_dependencies"][0]["path"],
+        "DISPUTE.TXT"
+    );
+    assert_eq!(
+        impact["sectors"][1]["file_dependencies"][0]["file_offset"],
+        0
+    );
+    let traced = crate::evidence_impact::inspect(&p, 1, Some(2), Some("DISPUTE.TXT")).unwrap();
+    assert_eq!(
+        traced["file"]["state"],
+        "observed_complete_payload_with_disputed_dependencies"
+    );
+    assert_eq!(
+        traced["file"]["data"][0]["origin"]["flux_sector"]["capture_attempts"],
+        json!([1])
+    );
+    assert_eq!(traced["independent_flux_crc_verified"], false);
+    let sector = crate::sector_inspection::inspect(&p, 1, 773, 1, Some(2)).unwrap();
+    assert_eq!(
+        sector["sectors"][0]["status"],
+        "confirmed_cross_reader_conflict"
+    );
+    assert_eq!(sector["attention_required"], true);
     let audit = crate::audit::run_audit(&p, &|_| {}).unwrap();
     assert_eq!(audit.verified_disks, 0);
     assert_eq!(audit.attention_disks, 1);

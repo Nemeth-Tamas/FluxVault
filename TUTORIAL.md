@@ -242,6 +242,8 @@ No inserted floppy needed:
 
 ```powershell
 fv disk show 59 --details
+fv recovery impact 59
+fv recovery trace 59 'FOLDER\LETTER.DOC'
 fv recovery extract 59
 fv recovery extract 59 --include-deleted
 fv files manifest
@@ -251,6 +253,8 @@ fv benchmark report
 ```
 
 Native extraction returns attention even after salvaging files. Deleted recovery is **off by default**, forensic-only and separate from normal delivery. Retry checks saved source bindings. Tool paths, capture/decode controls, guarded USB operations and JSON usage are in [CLI.md](CLI.md).
+
+`recovery impact` explains which known live files and metadata depend on missing/disputed sectors; `recovery trace` shows a named file's logical offsets, holes and saved origins. They read images only and write nothing. Unknown directory entries are not guessed. [Examples and scope](EVIDENCE_IMPACT.md).
 
 Compare against the old script/DMDE archive:
 

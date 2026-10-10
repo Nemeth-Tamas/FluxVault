@@ -53,6 +53,46 @@ struct Candidate {
     meta: Metadata,
 }
 
+/// One bounded, replay-verified saved-image snapshot shared by diagnostics.
+/// No project owner, hardware reservation, output file or tool process is created.
+pub(crate) struct Snapshot {
+    selected: Candidate,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) origins: Option<Vec<Value>>,
+    pub(crate) flux: Option<Value>,
+    pub(crate) map_known: bool,
+    image: PathBuf,
+    log_path: Option<PathBuf>,
+    log_snapshot: Option<Vec<u8>>,
+    flux_snapshot: Option<(PathBuf, Vec<u8>)>,
+}
+
+impl Snapshot {
+    pub(crate) fn metadata(&self) -> &Value {
+        &self.selected.value
+    }
+
+    pub(crate) fn unchanged(&self) -> Result<(), String> {
+        if read(&self.selected.path, 1024 * 1024)? != self.selected.snapshot
+            || read(&self.image, crate::fat12::MAX_IMAGE_BYTES as u64)? != self.bytes
+            || self
+                .log_path
+                .as_ref()
+                .zip(self.log_snapshot.as_ref())
+                .is_some_and(|(p, b)| read(p, CONTROL_LIMIT).as_ref() != Ok(b))
+            || self
+                .flux_snapshot
+                .as_ref()
+                .is_some_and(|(p, b)| read(p, CONTROL_LIMIT).as_ref() != Ok(b))
+        {
+            return Err(
+                "Saved evidence changed during inspection; retry when processing is idle".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -157,6 +197,54 @@ pub fn inspect(
     if disk == 0 || !(1..=8).contains(&count) || attempt == Some(0) {
         return Err("Use a positive disk/attempt and 1..8 sectors; LBA is zero-based".into());
     }
+    let snapshot = load_snapshot(project, disk, attempt)?;
+    let selected = &snapshot.selected;
+    let m = &selected.meta;
+    let end = lba
+        .checked_add(count as u64)
+        .filter(|n| *n <= m.total_sectors as u64)
+        .ok_or("Sector range lies outside the saved image")?;
+    let confirmations: Option<crate::read_conflicts::Confirmation> = serde_json::from_value(
+        selected
+            .value
+            .get("read_conflicts")
+            .cloned()
+            .unwrap_or(Value::Null),
+    )
+    .map_err(|e| e.to_string())?;
+    let mut attention = !snapshot.map_known || m.status == "DERIVED";
+    let sectors: Vec<_> = (lba..end).map(|n| {
+        let bad = m.bad_sectors.iter().any(|b| b.lba == n);
+        let conflict = confirmations.as_ref().and_then(|c| c.conflicts.iter().find(|c| c.lba == n));
+        let state = if bad { "unreadable_or_conflicting" } else if conflict.is_some() { "confirmed_cross_reader_conflict" } else if !snapshot.map_known { "unknown" } else if m.status == "DERIVED" { "derived" } else { "readable_saved_evidence" };
+        attention |= bad || conflict.is_some();
+        let start = n as usize * m.geometry.bytes_per_sector as usize;
+        let payload = &snapshot.bytes[start..start + m.geometry.bytes_per_sector as usize];
+        let rows: Vec<_> = payload.chunks(16).enumerate().map(|(i,row)| json!({"offset":start + i*16,
+            "hex":row.iter().map(|b|format!("{b:02X}")).collect::<Vec<_>>().join(" "),
+            "ascii":row.iter().map(|b|if (32..=126).contains(b) {char::from(*b)} else {'.'}).collect::<String>()})).collect();
+        json!({"lba":n,"chs":chs(&m.geometry,n),"status":state,"sha256":hash(payload),"rows":rows,
+            "origin":snapshot.origins.as_ref().map(|o| &o[n as usize]),
+            "recorded_flux_origin":snapshot.flux.as_ref().map(|v| &v["sectors"][n as usize]),
+            "cross_reader_conflict":conflict})
+    }).collect();
+    snapshot.unchanged()?;
+    Ok(
+        json!({"schema_version":1,"disk":disk,"attempt":m.attempt_number,"image":snapshot.image,"metadata":selected.path,
+        "log":snapshot.log_path,"image_sha256":hash(&snapshot.bytes),"source_backend":m.source_backend,"source_device":m.source_device,
+        "map_verified":snapshot.map_known,"flux_lineage_replayed":m.source_backend == "greaseweazle-derived",
+        "independent_flux_crc_verified":false,"attention_required":attention,"warning":WARNING,"sectors":sectors}),
+    )
+}
+
+pub(crate) fn load_snapshot(
+    project: &ProjectState,
+    disk: u32,
+    attempt: Option<u32>,
+) -> Result<Snapshot, String> {
+    if disk == 0 || attempt == Some(0) {
+        return Err("Use a positive disk and image attempt".into());
+    }
     regular(project.root(), true)?;
     let images = project.root().join("Images");
     regular(&images, true)?;
@@ -210,14 +298,10 @@ pub fn inspect(
         if let Some(number)=crate::preferred_image::preferred_number(&images,disk)? {
             candidates.iter().find(|c| c.meta.attempt_number==number)
         } else {
-            candidates.iter().min_by_key(|c|(c.meta.status!="OK"||!c.meta.bad_sectors.is_empty(),c.meta.bad_sectors.len(),std::cmp::Reverse(c.meta.attempt_number)))
+            candidates.iter().min_by_key(|c|(c.meta.status!="OK"||!c.meta.bad_sectors.is_empty()||!c.value["read_conflicts"].is_null(),c.meta.bad_sectors.len(),std::cmp::Reverse(c.meta.attempt_number)))
         }
     }.ok_or("No completed native acquisition for this disk/attempt; legacy bare images are unsupported by this diagnostic")?;
     let m = &selected.meta;
-    let end = lba
-        .checked_add(count as u64)
-        .filter(|n| *n <= m.total_sectors as u64)
-        .ok_or("Sector range lies outside the saved image")?;
     let image = local_file(&images, &m.image_file)?;
     let bytes = read(&image, crate::fat12::MAX_IMAGE_BYTES as u64)?;
     if bytes.len() as u64 != m.bytes_written || !hash(&bytes).eq_ignore_ascii_case(&m.sha256) {
@@ -225,6 +309,7 @@ pub fn inspect(
     }
     crate::offline_images::verify_metadata(&images, &selected.path, &selected.value)?;
     crate::flux_recovery::verify_catalog_metadata(&images, &selected.value)?;
+    crate::read_conflicts::verify_metadata_binding(&images, &selected.value)?;
     let mut log_path = None;
     let mut log_snapshot = None;
     let mut map_known = false;
@@ -305,7 +390,8 @@ pub fn inspect(
         retry_recovered_sectors: 0,
         bad_sectors: m.bad_sectors.iter().map(|b| b.lba).collect(),
     };
-    let origins = crate::offline_images::inspection_origins(&images, &summary, lba, end)?;
+    let origins =
+        crate::offline_images::inspection_origins(&images, &summary, 0, m.total_sectors as u64)?;
     let mut flux = None;
     let mut flux_snapshot = None;
     if let Some(recorded) = selected
@@ -341,42 +427,24 @@ pub fn inspect(
     } else if selected.value.get("flux_provenance_sha256").is_some() {
         return Err("Flux provenance binding is incomplete".into());
     }
-    let mut attention = !map_known || m.status == "DERIVED";
-    let sectors: Vec<_> = (lba..end).map(|n| {
-        let bad = m.bad_sectors.iter().any(|b| b.lba == n);
-        let state = if bad { "unreadable_or_conflicting" } else if !map_known { "unknown" } else if m.status == "DERIVED" { "derived" } else { "readable_saved_evidence" };
-        attention |= bad;
-        let start = n as usize * m.geometry.bytes_per_sector as usize;
-        let payload = &bytes[start..start + m.geometry.bytes_per_sector as usize];
-        let rows: Vec<_> = payload.chunks(16).enumerate().map(|(i,row)| json!({"offset":start + i*16,
-            "hex":row.iter().map(|b|format!("{b:02X}")).collect::<Vec<_>>().join(" "),
-            "ascii":row.iter().map(|b|if (32..=126).contains(b) {char::from(*b)} else {'.'}).collect::<String>()})).collect();
-        json!({"lba":n,"chs":chs(&m.geometry,n),"status":state,"sha256":hash(payload),"rows":rows,
-            "origin":origins.as_ref().map(|o| &o[(n-lba) as usize]),
-            "recorded_flux_origin":flux.as_ref().map(|v| &v["sectors"][n as usize])})
-    }).collect();
-    // Controls and bytes used for this response are snapshots. Refuse a concurrent
-    // changed record instead of pairing an old map with a new image.
-    if read(&selected.path, 1024 * 1024)? != selected.snapshot
-        || read(&image, crate::fat12::MAX_IMAGE_BYTES as u64)? != bytes
-        || log_path
-            .as_ref()
-            .zip(log_snapshot.as_ref())
-            .is_some_and(|(p, b)| read(p, CONTROL_LIMIT).as_ref() != Ok(b))
-        || flux_snapshot
-            .as_ref()
-            .is_some_and(|(p, b)| read(p, CONTROL_LIMIT).as_ref() != Ok(b))
-    {
-        return Err(
-            "Saved evidence changed during inspection; retry when processing is idle".into(),
-        );
-    }
-    Ok(
-        json!({"schema_version":1,"disk":disk,"attempt":m.attempt_number,"image":image,"metadata":selected.path,
-        "log":log_path,"image_sha256":hash(&bytes),"source_backend":m.source_backend,"source_device":m.source_device,
-        "map_verified":map_known,"flux_lineage_replayed":m.source_backend == "greaseweazle-derived",
-        "independent_flux_crc_verified":false,"attention_required":attention,"warning":WARNING,"sectors":sectors}),
-    )
+    let result = Snapshot {
+        selected: Candidate {
+            path: selected.path.clone(),
+            snapshot: selected.snapshot.clone(),
+            value: selected.value.clone(),
+            meta: serde_json::from_slice(&selected.snapshot).map_err(|e| e.to_string())?,
+        },
+        bytes,
+        origins,
+        flux,
+        map_known,
+        image,
+        log_path,
+        log_snapshot,
+        flux_snapshot,
+    };
+    result.unchanged()?;
+    Ok(result)
 }
 
 pub fn render(value: &Value) -> String {
@@ -408,6 +476,12 @@ pub fn render(value: &Value) -> String {
             output.push_str(&format!(
                 "Recorded flux origin: {}\n",
                 sector["recorded_flux_origin"]
+            ));
+        }
+        if !sector["cross_reader_conflict"].is_null() {
+            output.push_str(&format!(
+                "Unresolved cross-reader versions: {}\n",
+                sector["cross_reader_conflict"]
             ));
         }
         for row in sector["rows"].as_array().into_iter().flatten() {

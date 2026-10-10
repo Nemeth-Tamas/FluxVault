@@ -942,10 +942,30 @@ SAVED-SECTOR INSPECTOR (ADVANCED)
     Never certifies the physical label, whole disk or customer completeness.
     More examples and limits: SECTOR_INSPECTION.md.
 
+SAVED DAMAGE AND FILE TRACE (ADVANCED)
+    fv recovery impact N [--attempt N] [--json]
+    fv recovery trace N PATH [--attempt N] [--json]
+
+    Map missing/disputed sectors to filesystem regions and known live FAT
+    file dependencies. Trace uses a relative live directory path, ignoring
+    case and slash style. It lists logical byte offsets, exact sector order,
+    EOF-clipped extents, metadata/FAT dependencies and saved donor/GW origins.
+    Missing ranges and unmapped tails remain explicit; incomplete payloads
+    have no invented whole-file hash. Confirmed USB/GW versions stay disputed.
+
+    Native completed 512-byte-sector images only, at most 4 MiB; no tools,
+    media reads, extraction, report files or project changes. Unknown layout
+    or missing directory ownership is not guessed. No known file dependency
+    is NOT proof the sector is unused/harmless. Deleted/carved/manual and
+    converted files are outside this live-chain diagnostic. At most 65,536
+    dependency rows; truncation is explicit. See EVIDENCE_IMPACT.md.
+    Exit 0: no attention within inspection scope; 3: attention; 2: error.
+    Never certifies customer completeness, identity or independent flux CRC.
+
 SOURCE
     CLI.md in the FluxVault repository. This companion is a static snapshot;
     future CLI changes may require regenerating it. Use fv --help for the
     installed executable's implemented command list.
 
-FluxVault                     2026-10-09                          FLUXVAULT(1)
+FluxVault                     2026-10-10                          FLUXVAULT(1)
 

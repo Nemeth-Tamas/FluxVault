@@ -2279,8 +2279,11 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
     );
 
     // QUIT exits before enumeration, probing, or reading a physical drive.
-    let quit = invoke(
+    // Keep this test's synthetic reservation away from an operator's live scan.
+    let app_data = root.join("appdata");
+    let quit = invoke_mock_with_input(
         &nested,
+        &app_data,
         &[
             "scan",
             "--drive",
@@ -2289,9 +2292,17 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
             "--acquisition-only",
             "--json",
         ],
+        false,
         Some(b"QUIT\n"),
+        &[],
     );
-    assert_eq!(quit.status.code(), Some(0));
+    assert_eq!(
+        quit.status.code(),
+        Some(0),
+        "{}\n{}",
+        String::from_utf8_lossy(&quit.stdout),
+        String::from_utf8_lossy(&quit.stderr)
+    );
     let quit_json: serde_json::Value = serde_json::from_slice(&quit.stdout).unwrap();
     assert_eq!(quit_json["scanned"], 0);
     assert_eq!(quit_json["next_disk"], 1);
@@ -2315,7 +2326,7 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
             .unwrap()
             .contains("No saved disk images")
     );
-    assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 2); // Project + isolated appdata.
     fs::remove_dir_all(root).unwrap();
 }
 

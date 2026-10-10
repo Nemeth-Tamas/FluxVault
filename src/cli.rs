@@ -137,6 +137,10 @@ Usage:
                                     Compare the two latest saved attempts
   fluxvault recovery sector N --lba L [--sectors 1..8] [--attempt N] [--json]
                                     Saved-sector hex/ASCII, LBA/CHS and attempt provenance; read-only
+  fluxvault recovery impact N [--attempt N] [--json]
+                                    Map missing/disputed sectors to live files and filesystem regions
+  fluxvault recovery trace N PATH [--attempt N] [--json]
+                                    Trace a live FAT file's ordered bytes and metadata to saved sectors
   fluxvault recovery backup N [--project PATH]
                                     Create/reuse immutable pass-1 evidence backup
   fluxvault recovery queue [--project PATH]
@@ -633,6 +637,49 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     let sector_inspector =
         positional.len() == 3 && positional[0] == "recovery" && positional[1] == "sector";
+    let evidence_impact = positional.first().is_some_and(|s| s == "recovery")
+        && (positional.len() == 3 && positional[1] == "impact"
+            || positional.len() == 4 && positional[1] == "trace");
+    if evidence_impact {
+        if sector_lba.is_some()
+            || sector_count.is_some()
+            || args
+                .iter()
+                .filter(|a| a.starts_with("--"))
+                .any(|a| !matches!(a.as_str(), "--project" | "--json" | "--attempt"))
+        {
+            return Err("recovery impact/trace accept only --project, --json and --attempt".into());
+        }
+        let disk = positional[2]
+            .parse::<u32>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or("Use a positive disk label")?;
+        crate::safety::workstation_path(cwd)?;
+        if let Some(path) = &project_override {
+            crate::safety::workstation_path(path)?;
+        }
+        let root = resolve_project_root(cwd, project_override.as_deref())?;
+        let project = crate::sector_inspection::open_project(root)?;
+        let result = crate::evidence_impact::inspect(
+            &project,
+            disk,
+            sector_attempt,
+            positional.get(3).map(String::as_str),
+        )?;
+        return Ok(CliResponse {
+            output: if json_output {
+                result.to_string()
+            } else {
+                crate::evidence_impact::render(&result)
+            },
+            exit_code: if result["attention_required"] == true {
+                3
+            } else {
+                0
+            },
+        });
+    }
     if sector_inspector {
         if args.iter().filter(|a| a.starts_with("--")).any(|a| {
             !matches!(
@@ -678,7 +725,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         });
     }
     if sector_lba.is_some() || sector_count.is_some() || sector_attempt.is_some() {
-        return Err("--lba, --sectors and --attempt are only valid with recovery sector N".into());
+        return Err("--lba/--sectors require recovery sector N; --attempt requires recovery sector/impact/trace".into());
     }
     if allow_attention && positional != ["finalize"] && positional != ["finalize", "resume"] {
         return Err("--allow-attention is only valid with finalize or finalize resume".into());

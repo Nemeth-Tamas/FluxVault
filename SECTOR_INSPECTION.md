@@ -20,12 +20,15 @@ The output includes image/metadata/log paths, the image hash, sector hashes, hex
 | `unreadable_or_conflicting` | The recorded bad map includes it. Bytes may be zero-filled placeholders and must not be interpreted as recovered content. |
 | `unknown` | A completed recognized log does not establish a readable map. Matching image bytes alone are insufficient. |
 | `derived` | Sector belongs to an offline reconstruction. Exact saved-copy provenance replays, but it is not an independent physical read. |
+| `confirmed_cross_reader_conflict` | The operator confirmed the same physical disk, but USB/GW readable sector versions disagree. Both versions remain preserved; this is attention, not missing or certified original bytes. |
 
 Composite/FAT-derived images include the original donor attempt/LBA/hash and mirrored-FAT copy steps, after verifying the sealed recipe. Catalogued GW images now replay their immutable publication stages against saved raw/packed capture hashes, decode bytes/maps and capture settings, then compare the final image and every sector origin. A later mutable recovery job does not replace that publication's authority. Changed or hash-only/unbound claims are refused.
 
 JSON retains `recorded_flux_origin` and adds `flux_lineage_replayed` for the selected GW catalog image; `independent_flux_crc_verified` remains **false**. This is saved lineage/agreement replay, not a new native MFM/CRC decoder, physical reread, proof of label identity or certification of customer content. Single-capture sectors keep their explicitly lower confidence.
 
 ## Exit codes and boundaries
+
+For known live file dependencies and exact logical offsets rather than a hex dump, use `recovery impact N` or `recovery trace N PATH`. [Damage/file guide](EVIDENCE_IMPACT.md). JSON sector output adds `cross_reader_conflict` (null when absent); default native selection includes confirmed conflicts in attention ranking.
 
 - **0:** the selected range has readable saved evidence. A different sector on the same disk may still be bad.
 - **3:** the selected range needs attention (missing/conflicting, unknown or derived).

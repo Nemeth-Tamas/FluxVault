@@ -14,6 +14,7 @@ pub mod disk_record;
 pub mod dmde_logs;
 pub mod document_salvage;
 pub mod dual_benchmark;
+pub mod evidence_impact;
 pub mod external_tools;
 pub mod extraction;
 pub mod fat12;

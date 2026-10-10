@@ -168,6 +168,10 @@ From the project folder, `fv recovery sector 7 --lba 0` displays the first saved
 
 No floppy, host tool or project writer is opened. Missing/conflicting placeholders and unknown maps are explicitly labeled, never treated as recovered bytes. Reconstructed attempts trace replay-verified donor/FAT-copy origins; catalog flux images replay their immutable saved capture/decode lineage and retain vendor-reported confidence. This is not independent MFM/CRC validation or a physical reread. Legacy images without native acquisition metadata are not supported by this diagnostic. Exit 0 means the selected range has readable saved evidence; 3 means that range is missing/unknown/derived; 2 means invalid input or inconsistent evidence. None certifies physical label identity, the rest of the disk or customer completeness. [Bounds and examples](SECTOR_INSPECTION.md).
 
+## Saved damage and file tracing
+
+`fv recovery impact 59` maps missing/disputed sectors to filesystem regions and known live file dependencies. `fv recovery trace 59 'FOLDER\LETTER.DOC'` traces logical file bytes, holes, metadata LBAs and saved origins. Both accept `--attempt N` and `--json`, use native saved evidence only, and write nothing. Unknown directory ownership stays unknown; confirmed USB/GW conflicts stay attention. [Examples, scope and exit codes](EVIDENCE_IMPACT.md).
+
 ## USB acquisition: optional advanced path
 
 `fv scan --usb [--drive A:] --write-blocker-verified [--last-disk N]` selects USB-only feeding (default A:), with automatic background saved-file processing and final reconciliation. It does not open GW. Type the displayed number; blank/wrong labels never start a read. `OUT` confirms removal, `PAUSE`/`RESUME` control new reads, `STATUS` inspects custody, `QUIT` drains and `STOP` cancels safely. `--count` caps this invocation; the optional numbered endpoint persists across restart. Resume the same command/project, not a new `init`.
