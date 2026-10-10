@@ -254,6 +254,18 @@ fn station_commands_require_positive_exact_labels_and_never_accept_blank_enter()
         command("g release 133"),
         Ok(Command::Release(Station::Greaseweazle, 133))
     ));
+    assert!(matches!(
+        command("g confirm 133"),
+        Ok(Command::ConfirmSame(Station::Greaseweazle, 133))
+    ));
+    for text in [
+        "g confirm",
+        "g confirm 0",
+        "g confirm -1",
+        "g confirm 4294967295",
+    ] {
+        assert!(command(text).is_err());
+    }
     for text in [
         "g release",
         "g release 0",

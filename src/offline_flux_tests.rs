@@ -42,7 +42,11 @@ impl GreaseweazleBackend for Mock {
             }
             "convert" => {
                 fs::write(command.arguments().last().unwrap(), &self.bytes).unwrap();
-                grid(34)
+                grid(if self.bytes[34 * 512..35 * 512].iter().all(|b| *b == 0) {
+                    34
+                } else {
+                    usize::MAX
+                })
             }
             _ => panic!("Unexpected command; no hardware or writes authorized"),
         };
@@ -88,7 +92,10 @@ fn grid(bad: usize) -> String {
             output.push_str(&format!("{head}.{sector:>2}: {cells}\n"));
         }
     }
-    output.push_str("Found 2879 sectors of 2880 (99%)\n");
+    output.push_str(&format!(
+        "Found {} sectors of 2880 (99%)\n",
+        if bad < 2880 { 2879 } else { 2880 }
+    ));
     output
 }
 fn mixed() -> Fixture {
@@ -191,6 +198,145 @@ fn released_wrong_identity_recaptures_in_a_new_slot_and_never_reuses_wrong_bytes
     assert!(flux_recovery::reject_identity_job(&project, 1, 100).is_err());
     fs::remove_dir_all(project.root()).unwrap();
 }
+#[test]
+fn confirmed_minor_reader_conflicts_resume_offline_stay_attention_and_preserve_versions() {
+    use crate::production::{Coordinator, Station};
+    let (p, mut original) = fixture(&[]);
+    original[24..26].copy_from_slice(&18u16.to_le_bytes());
+    original[26..28].copy_from_slice(&2u16.to_le_bytes());
+    let mut c = Coordinator::open(p.clone(), Some(1), false).unwrap();
+    let usb_ticket = c.claim(Station::Usb, 1).unwrap();
+    c.confirm(&usb_ticket, "1", true).unwrap();
+    let mut usb = original.clone();
+    usb[33 * 512..34 * 512].fill(0);
+    usb[17 * 512] = 0xAA;
+    usb[773 * 512] = 0xBB;
+    let sha = hash(&usb);
+    let log = p.logs_dir().join("001_attempt_001.log");
+    fs::write(&log, format!("BEGIN | disk=1 | attempt=1 | source=windows-raw-sector\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track=18 | bytes_per_sector=512 | total_sectors=2880 | total_bytes=1474560\nBAD_SECTOR | LBA=33\nEND | status=PARTIAL | bytes=1474560 | sha256={sha}\n")).unwrap();
+    let meta = json!({"fluxvault_version":"test", "status":"PARTIAL", "disk_number":1, "attempt_number":1,
+        "source_backend":"windows-raw-sector", "source_device":"synthetic only", "image_file":"001_attempt_001.img", "log_file":log,
+        "timestamp_unix_ms":1, "geometry":{"cylinders":80,"heads":2,"sectors_per_track":18,"bytes_per_sector":512,"total_bytes":1474560,"format_guess":"ibm.1440"},
+        "sector_retries":0,"total_sectors":2880,"bytes_written":1474560,"retry_recovered_sectors":0,"bad_sector_count":1,
+        "bad_sectors":[{"lba":33,"cylinder":0,"head":1,"sector":16}],"sha256":sha});
+    fs::write(p.images_dir().join("001_attempt_001.img"), &usb).unwrap();
+    fs::write(
+        p.images_dir().join("001_attempt_001.json"),
+        serde_json::to_vec(&meta).unwrap(),
+    )
+    .unwrap();
+    c.complete(&usb_ticket, 1).unwrap();
+    c.removed(&usb_ticket, true).unwrap();
+    let ticket = c.claim(Station::Greaseweazle, 1).unwrap();
+    c.confirm(&ticket, "1", true).unwrap();
+    let guard = c.transfer_guard(&ticket).unwrap().unwrap();
+    let mut backend = Mock {
+        bytes: original.clone(),
+        reads: 0,
+    };
+    let error = flux_recovery::recover_auto_checked(
+        &p,
+        1,
+        'B',
+        Default::default(),
+        &mut backend,
+        &|_| {},
+        &|bytes, bad| guard.check(bytes, bad),
+    )
+    .unwrap_err();
+    assert!(
+        error.starts_with("USB/GW readable bytes disagree;"),
+        "{error}"
+    );
+    c.failed(&ticket, &error).unwrap();
+    assert!(c.confirm_same_disk(Station::Usb, 1).is_err());
+    assert!(c.confirm_same_disk(Station::Greaseweazle, 2).is_err());
+    let approval = c.confirm_same_disk(Station::Greaseweazle, 1).unwrap();
+    assert_eq!(approval["conflicts"].as_array().unwrap().len(), 2);
+    let raw_before = fs::read(p.root().join("Flux/001_attempt_001.scp")).unwrap();
+    drop(c);
+    let mut c = Coordinator::open(p.clone(), Some(1), false).unwrap();
+    let ticket = c.claim(Station::Greaseweazle, 1).unwrap();
+    c.confirm(&ticket, "1", true).unwrap();
+    let guard = c.transfer_guard(&ticket).unwrap().unwrap();
+    let result = flux_recovery::recover_auto_checked(
+        &p,
+        1,
+        'B',
+        Default::default(),
+        &mut backend,
+        &|_| {},
+        &|bytes, bad| guard.check(bytes, bad),
+    )
+    .unwrap();
+    assert_eq!(backend.reads, 1);
+    assert_eq!(result.physical_reads_this_run, 0);
+    assert!(result.missing_lbas.is_empty());
+    c.complete(&ticket, 2).unwrap();
+    assert_eq!(
+        c.status()["disks"]["1"]["gw"]["confirmed_conflicts"],
+        json!([17, 773])
+    );
+    c.removed(&ticket, true).unwrap();
+    assert_eq!(c.status()["disks"]["1"]["phase"], "partial");
+    assert_eq!(c.status()["usb_recovery_queue"], json!([]));
+    assert!(c.confirm_same_disk(Station::Greaseweazle, 1).is_err());
+    drop(c);
+    drop(Coordinator::open(p.clone(), Some(1), false).unwrap());
+    let attempts = imaging::load_attempts_for_disk(&p.images_dir(), 1).unwrap();
+    let best = imaging::best_attempt(&attempts).unwrap();
+    assert_eq!(best.attempt_number, 2);
+    assert!(best.attention_required && best.bad_sectors.is_empty());
+    assert_eq!(fs::read(&result.image).unwrap(), original);
+    let managed = managed(&p, best);
+    assert_eq!(managed.files, 2);
+    let audit = crate::audit::run_audit(&p, &|_| {}).unwrap();
+    assert_eq!(audit.verified_disks, 0);
+    assert_eq!(audit.attention_disks, 1);
+    assert_eq!(
+        audit.document.disks[0].evidence_status,
+        "CONFIRMED_CROSS_READER_CONFLICTS"
+    );
+    assert!(audit.document.disks[0].issue.contains("read_conflicts"));
+    assert_eq!(result.read_conflict_lbas, vec![17, 773]);
+    assert_eq!(result.status, "partial");
+    assert_eq!(
+        fs::read(p.images_dir().join("001_attempt_001.img")).unwrap(),
+        usb
+    );
+    assert_eq!(
+        fs::read(p.root().join("Flux/001_attempt_001.scp")).unwrap(),
+        raw_before
+    );
+    let metadata_path = result.image.with_extension("json");
+    let published = fs::read(&metadata_path).unwrap();
+    let mut tampered: Value = serde_json::from_slice(&published).unwrap();
+    tampered.as_object_mut().unwrap().remove("read_conflicts");
+    fs::write(&metadata_path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+    assert!(imaging::load_attempts_for_disk(&p.images_dir(), 1).is_err());
+    fs::write(&metadata_path, published).unwrap();
+    flux_recovery::verify_completed_result(&p, &result).unwrap();
+    let approved: crate::read_conflicts::Confirmation = serde_json::from_value(approval).unwrap();
+    let mut changed = original.clone();
+    changed[773 * 512] ^= 1;
+    assert!(crate::read_conflicts::verify(&p, &approved, &changed, &[]).is_err());
+    assert!(crate::read_conflicts::verify(&p, &approved, &original, &[17]).is_err());
+    let usb_metadata_path = p.images_dir().join("001_attempt_001.json");
+    let usb_metadata = fs::read(&usb_metadata_path).unwrap();
+    fs::write(
+        &usb_metadata_path,
+        [usb_metadata.clone(), b"\n".to_vec()].concat(),
+    )
+    .unwrap();
+    assert!(crate::read_conflicts::verify(&p, &approved, &original, &[]).is_err());
+    fs::write(&usb_metadata_path, usb_metadata).unwrap();
+    // Broad mismatch cannot get the same-disk escape, even with an assertion.
+    assert!(
+        crate::read_conflicts::build(&p, 1, 1, 99, 1, &vec![0x42; original.len()], &[]).is_err()
+    );
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
 fn metadata(f: &Fixture) -> (PathBuf, Value) {
     let path = f.result.image.with_extension("json");
     let value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();

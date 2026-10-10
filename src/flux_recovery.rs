@@ -118,6 +118,8 @@ struct Journal {
     /// Operator-rejected identity evidence stays on disk but is never a donor.
     #[serde(default)]
     rejected_capture_attempts: BTreeSet<u32>,
+    #[serde(default)]
+    read_conflicts: Option<crate::read_conflicts::Confirmation>,
 }
 
 fn capture_remaining_ms(job: &Journal, index: usize, now: u64) -> u64 {
@@ -175,6 +177,8 @@ pub struct RecoveryResult {
     pub provenance_sha256: String,
     pub missing_lbas: Vec<u64>,
     pub conflicting_lbas: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_conflict_lbas: Vec<u64>,
     pub corroborated_sectors: usize,
     pub single_capture_sectors: usize,
     pub physical_reads_this_run: usize,
@@ -222,6 +226,8 @@ struct CatalogProvenance {
     stages: Vec<Stage>,
     image_sha256: String,
     sectors: Vec<SectorProvenance>,
+    #[serde(default)]
+    read_conflicts: Option<crate::read_conflicts::Confirmation>,
 }
 
 /// Replay the immutable publication's own stages, not the latest mutable job.
@@ -341,6 +347,24 @@ pub(crate) fn verify_catalog_metadata(
         || value["geometry"]["total_bytes"] != image_bytes.len()
     {
         return Err("Catalog flux image/map/origins disagree with saved capture replay".into());
+    }
+    let recorded: Option<crate::read_conflicts::Confirmation> = serde_json::from_value(
+        value
+            .get("read_conflicts")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|e| e.to_string())?;
+    if recorded != proof.read_conflicts {
+        return Err(
+            "Catalog read-conflict confirmation disagrees with immutable publication".into(),
+        );
+    }
+    if let Some(approval) = &proof.read_conflicts {
+        if approval.disk != proof.disk {
+            return Err("Wrong confirmed disk identity".into());
+        }
+        crate::read_conflicts::verify(&project, approval, &image_bytes, &bad)?;
     }
     crate::cancellation::check()?;
     if read(&provenance, 4 * 1024 * 1024)? != proof_bytes {
@@ -607,6 +631,7 @@ fn recover_impl(
             stages: Vec::new(),
             result: None,
             rejected_capture_attempts: BTreeSet::new(),
+            read_conflicts: None,
         }
     };
     if j.schema_version != 1
@@ -711,6 +736,31 @@ fn recover_impl(
         }
         result.resumed = true;
         result.physical_reads_this_run = 0;
+        return Ok(result);
+    }
+    if let Some(approval) = &j.read_conflicts {
+        // Confirmation authorizes this exact finished saved candidate, not
+        // another physical pass or a different source edition.
+        let evidence = aggregate(project, disk, profile, &j.stages)?;
+        let bad: Vec<_> = evidence
+            .missing
+            .iter()
+            .chain(&evidence.conflicts)
+            .copied()
+            .collect();
+        crate::read_conflicts::verify(project, approval, &evidence.bytes, &bad)?;
+        accept(&evidence.bytes, &bad)?;
+        let mut result = publish(
+            project,
+            &dir,
+            &j,
+            &evidence,
+            "operator_confirmed_minor_cross_reader_disagreement",
+        )?;
+        result.resumed = true;
+        result.physical_reads_this_run = 0;
+        j.result = Some(result.clone());
+        save_journal(&state, &j)?;
         return Ok(result);
     }
     if j.policy.time_limit_scope == TimeLimitScope::PerStage {
@@ -948,7 +998,7 @@ fn recover_impl(
                         disk, selected_profile:None, status:"raw_format_exception".into(),
                         stop_reason:"supported_formats_ambiguous_or_insufficient; raw evidence preserved; no geometry assumed".into(),
                         capture_attempts:vec![capture], image:PathBuf::new(), image_sha256:String::new(),
-                        provenance:report.clone(),provenance_sha256:hash_path(&report)?,missing_lbas:vec![],conflicting_lbas:vec![],
+                        provenance:report.clone(),provenance_sha256:hash_path(&report)?,missing_lbas:vec![],conflicting_lbas:vec![],read_conflict_lbas:vec![],
                         corroborated_sectors:0,single_capture_sectors:0,physical_reads_this_run:reads,resumed,
                         format_exception:Some(FormatException {capture_attempt:capture,source_sha256:decision.source_sha256.clone(),reason:decision.reason.clone()}),
                     };
@@ -1042,6 +1092,9 @@ fn recover_impl(
         .copied()
         .collect::<Vec<_>>();
     accept(&e.bytes, &bad)?;
+    if let Some(approval) = &j.read_conflicts {
+        crate::read_conflicts::verify(project, approval, &e.bytes, &bad)?;
+    }
     let mut result = publish(project, &dir, &j, &e, reason)?;
     result.physical_reads_this_run = reads;
     result.resumed = resumed;
@@ -1108,6 +1161,71 @@ fn identity_job(
         return Err("Invalid identity recovery journal".into());
     }
     Ok(Some((path, bytes, job)))
+}
+
+pub(crate) fn confirmed_read_conflicts(
+    project: &ProjectState,
+    disk: u32,
+) -> Result<Option<crate::read_conflicts::Confirmation>, String> {
+    Ok(identity_job(project, disk)?.and_then(|(_, _, job)| job.read_conflicts))
+}
+
+pub(crate) fn confirm_same_disk(
+    project: &ProjectState,
+    disk: u32,
+    usb_attempt: u32,
+    generation: u64,
+) -> Result<crate::read_conflicts::Confirmation, String> {
+    let (path, bytes, mut job) =
+        identity_job(project, disk)?.ok_or("No saved GW candidate to confirm")?;
+    if job.result.is_some()
+        || job.stages.is_empty()
+        || job.stages.iter().any(|s| s.decode_attempt.is_none())
+    {
+        return Err(
+            "Confirmation requires an unpublished, fully decoded candidate; no active read".into(),
+        );
+    }
+    job.policy.validate()?;
+    if job.stages.len() > job.policy.passes.len() {
+        return Err("Invalid candidate stages".into());
+    }
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.parent().unwrap().join(format!("{disk:03}.lock")))
+        .map_err(|e| e.to_string())?;
+    lock.try_lock()
+        .map_err(|_| "Recovery is active; same-disk confirmation refused".to_string())?;
+    let evidence = aggregate(
+        project,
+        disk,
+        GreaseweazleProfile::parse(&job.profile)?,
+        &job.stages,
+    )?;
+    let bad: Vec<_> = evidence
+        .missing
+        .iter()
+        .chain(&evidence.conflicts)
+        .copied()
+        .collect();
+    let approval = crate::read_conflicts::build(
+        project,
+        disk,
+        usb_attempt,
+        generation,
+        external_tools::current_unix_ms(),
+        &evidence.bytes,
+        &bad,
+    )?;
+    if fs::read(&path).map_err(|e| e.to_string())? != bytes {
+        return Err("Candidate job changed during confirmation".into());
+    }
+    job.read_conflicts = Some(approval.clone());
+    save_journal(&path, &job)?;
+    Ok(approval)
 }
 
 pub(crate) fn rejected_capture_attempts(
@@ -1251,6 +1369,7 @@ pub(crate) fn reject_identity_job(
         write_new(&archive, &bytes)?;
     }
     job.stages.clear();
+    job.read_conflicts = None;
     job.started_unix_ms = external_tools::current_unix_ms();
     job.empty_capture_budget_restarts.clear();
     job.stage_budget_version = 1;
@@ -1328,6 +1447,7 @@ pub(crate) fn verify_completed_result(
         || saved.status != result.status
         || saved.missing_lbas != result.missing_lbas
         || saved.conflicting_lbas != result.conflicting_lbas
+        || saved.read_conflict_lbas != result.read_conflict_lbas
         || saved.capture_attempts != result.capture_attempts
         || saved.format_exception != result.format_exception
     {
@@ -1350,6 +1470,24 @@ pub(crate) fn verify_completed_result(
         || hash_path(&result.provenance)? != result.provenance_sha256
     {
         return Err("Completed recovery output changed; disk numbering not advanced".to_owned());
+    }
+    if let Some(approval) = &job.read_conflicts {
+        let value: serde_json::Value = serde_json::from_slice(
+            &fs::read(result.image.with_extension("json")).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let recorded: Option<crate::read_conflicts::Confirmation> = serde_json::from_value(
+            value
+                .get("read_conflicts")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        )
+        .map_err(|e| e.to_string())?;
+        if recorded.as_ref() != Some(approval) {
+            return Err("Completed conflict confirmation differs from its job".into());
+        }
+        crate::read_conflicts::verify_metadata_binding(&project.images_dir(), &value)?;
+        verify_catalog_metadata(&project.images_dir(), &value)?;
     }
     Ok(())
 }
@@ -1755,7 +1893,8 @@ fn publish(
         "incomplete_capture_attempts": j.stages.iter().filter(|s| s.decode_attempt.is_none()).map(|s| s.capture_attempt).collect::<Vec<_>>(),
         "image_sha256": sha256,
         "sectors": e.sectors,
-        "note": "Single-capture sectors have lower confidence. Unreadable/conflicting sectors are explicitly zero-filled. No customer-delivery certification."
+        "read_conflicts": j.read_conflicts,
+        "note": "Single-capture sectors have lower confidence. Within-GW unreadable/conflicting sectors are zero-filled. Optional read_conflicts records separately preserved USB/GW disagreements; the observed GW edition is retained, not guessed or certified. No customer-delivery certification."
     })).map_err(|e| e.to_string())?;
     write_new(&provenance, &prov)?;
     write_new(&partial, &e.bytes)?;
@@ -1808,7 +1947,8 @@ fn publish(
         "bad_sectors": bad_sectors,
         "sha256": sha256,
         "flux_provenance": provenance,
-        "flux_provenance_sha256": prov_hash
+        "flux_provenance_sha256": prov_hash,
+        "read_conflicts": j.read_conflicts
     }))
     .map_err(|e| e.to_string())?;
     publish_image_no_replace(&partial, &image)?;
@@ -1819,7 +1959,7 @@ fn publish(
     Ok(RecoveryResult {
         disk: j.disk,
         selected_profile: Some(j.profile.clone()),
-        status: if unresolved.is_empty() {
+        status: if unresolved.is_empty() && j.read_conflicts.is_none() {
             "acquired"
         } else if unresolved.len() == e.sectors.len() {
             "unrecoverable_within_policy"
@@ -1840,6 +1980,10 @@ fn publish(
         provenance_sha256: prov_hash,
         missing_lbas: e.missing.clone(),
         conflicting_lbas: e.conflicts.clone(),
+        read_conflict_lbas: j
+            .read_conflicts
+            .as_ref()
+            .map_or(Vec::new(), |c| c.conflicts.iter().map(|s| s.lba).collect()),
         corroborated_sectors: e
             .sectors
             .iter()
@@ -1859,6 +2003,38 @@ fn publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires FV_READ_CONFLICT_SOURCE; read-only saved 133 replay, never hardware"]
+    fn saved_133_minor_reader_conflicts_are_hash_bound_without_modifying_source() {
+        let root = std::env::var_os("FV_READ_CONFLICT_SOURCE").unwrap();
+        let p = ProjectState::open_without_session(root.into()).unwrap();
+        let (_, before, job) = identity_job(&p, 133).unwrap().unwrap();
+        assert!(job.result.is_none());
+        let evidence = aggregate(
+            &p,
+            133,
+            GreaseweazleProfile::parse(&job.profile).unwrap(),
+            &job.stages,
+        )
+        .unwrap();
+        let bad: Vec<_> = evidence
+            .missing
+            .iter()
+            .chain(&evidence.conflicts)
+            .copied()
+            .collect();
+        let approval =
+            crate::read_conflicts::build(&p, 133, 1, 146, 1, &evidence.bytes, &bad).unwrap();
+        assert_eq!(approval.agreeing_sectors, 2584);
+        assert_eq!(
+            approval.conflicts.iter().map(|c| c.lba).collect::<Vec<_>>(),
+            vec![17, 773]
+        );
+        assert!(bad.is_empty());
+        crate::read_conflicts::verify(&p, &approval, &evidence.bytes, &bad).unwrap();
+        assert_eq!(identity_job(&p, 133).unwrap().unwrap().1, before);
+    }
 
     #[test]
     fn identity_rejection_preserves_bytes_excludes_old_capture_and_keeps_slots() {
@@ -1926,6 +2102,7 @@ mod tests {
             policy: RecoveryPolicy::default(),
             result: None,
             rejected_capture_attempts: BTreeSet::new(),
+            read_conflicts: None,
             stages: vec![Stage {
                 capture_attempt: 1,
                 decode_attempt: None,

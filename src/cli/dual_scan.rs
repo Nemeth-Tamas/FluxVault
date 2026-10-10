@@ -314,6 +314,7 @@ fn concise_stage(message: &str) -> Option<String> {
 enum Command {
     Read(Station, u32),
     Release(Station, u32),
+    ConfirmSame(Station, u32),
     Out(Station),
     Status,
     Pause,
@@ -359,6 +360,11 @@ fn command(text: &str) -> Result<Command, String> {
         return Ok(Command::Release(station, disk));
     }
     if !suffix.bytes().all(|b| b.is_ascii_digit()) {
+        if let Some(number) = suffix.strip_prefix("CONFIRM ") {
+            let disk = number.trim().parse::<u32>().ok().filter(|n| *n > 0 && *n < u32::MAX)
+                .ok_or("Use g confirm N only after verifying the SAME physical floppy as the original USB label")?;
+            return Ok(Command::ConfirmSame(station, disk));
+        }
         return Err("Use digits after u/g, e.g. u1 / g2".into());
     }
     let disk = suffix.parse::<u32>().ok().filter(|n| *n > 0 && *n < u32::MAX).ok_or("Use a station plus exact positive disk number, e.g. u1 / g2; blank Enter does not read")?;
@@ -433,7 +439,7 @@ pub(super) fn next_action(state: &Value, station: Station, held: Option<(u32, &s
                         .is_some_and(|e| e.starts_with("USB/GW readable bytes disagree;"))
                 {
                     return format!(
-                        "CHECK IDENTITY {disk:03}; wrong label? Wait for drive idle, remove disk, then g release {disk}. Evidence kept; no automatic read"
+                        "CHECK IDENTITY {disk:03}; wrong label: idle/remove then g release {disk}; definitely same USB floppy: g confirm {disk}, then g{disk}. Conflicts remain attention"
                     );
                 }
                 return format!(
@@ -770,6 +776,20 @@ fn feed(
                                 })
                         }
                     }
+                    Ok(Command::ConfirmSame(station, disk)) => {
+                        if session.workers.contains_key(&(station as u8)) {
+                            Err("Reader is active; confirmation refused".into())
+                        } else {
+                            session.coordinator.confirm_same_disk(station, disk).and_then(|proof| {
+                                if let Some(log) = telemetry.as_deref_mut() {
+                                    crate::dual_benchmark::record(log, "dual_same_disk_confirmed", proof.clone())?;
+                                }
+                                terminal::banner(output, color, Cue::Error, "SAME DISK CONFIRMED / CONFLICTS RETAINED / NO READ STARTED",
+                                    &format!("{disk:03}: {} matching, {} differing readable sectors. Exact saved candidate bound; both source versions retained. Type g{disk} to finish from saved evidence. Not clean-content certification.", proof["agreeing_sectors"], proof["conflicts"].as_array().map_or(0, Vec::len)))?;
+                                display(&session, output, color, draining)
+                            })
+                        }
+                    }
                     Ok(Command::Read(station, disk)) => {
                         let before = session.coordinator.status();
                         let priority = before["recovery_priorities"]
@@ -893,7 +913,11 @@ fn feed(
                                 }
                             }
                         }
-                        let partial = !a.bad_sectors.is_empty();
+                        let partial = a.attention_required;
+                        let conflict_count = session.coordinator.status()["disks"]
+                            [ticket.disk.to_string()]["gw"]["confirmed_conflicts"]
+                            .as_array()
+                            .map_or(0, Vec::len);
                         measurements.push(json!({"disk":ticket.disk,"station":station_name(ticket.station),"attempt":done.attempt,
                             "read_decode_ms":read_ms,"bad_sectors":a.bad_sectors.len(),"image_sha256":a.sha256}));
                         let detail = if ticket.station == Station::Usb && partial {
@@ -913,7 +937,7 @@ fn feed(
                                 ticket.disk
                             ),
                             &format!(
-                                "{} missing sectors. Read/decode: {:.1}s. {detail}",
+                                "{} missing sectors; {conflict_count} confirmed cross-reader conflicts. Read/decode: {:.1}s. {detail}",
                                 a.bad_sectors.len(),
                                 read_ms as f64 / 1000.0
                             ),
@@ -955,8 +979,8 @@ fn feed(
                                 )
                             } else if error.starts_with("USB/GW readable bytes disagree;") {
                                 format!(
-                                    "{error}\nWrong label entered? After drive activity stops, remove that floppy and type g release {} (the interrupted number). Its correct disk stays queued; rejected evidence is preserved, not reused. Then insert the intended floppy and type its gN.",
-                                    ticket.disk
+                                    "{error}\nWrong label? After drive activity stops, remove the floppy and type g release {}. Definitely the SAME floppy as its original USB label? Type g confirm {}, then g{}; only minor disagreements qualify and conflicts remain attention. Neither option guesses or merges conflicting bytes.",
+                                    ticket.disk, ticket.disk, ticket.disk
                                 )
                             } else {
                                 format!(

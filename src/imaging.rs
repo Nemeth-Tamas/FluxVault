@@ -76,6 +76,8 @@ struct AcquisitionMetadata {
     bad_sectors: Vec<BadSectorMetadata>,
 
     sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read_conflicts: Option<crate::read_conflicts::Confirmation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -698,6 +700,7 @@ fn run_imaging(
         bad_sectors: bad_sector_metadata,
 
         sha256: sha256.clone(),
+        read_conflicts: None,
     };
 
     let metadata_json = serde_json::to_string_pretty(&metadata)
@@ -960,6 +963,10 @@ pub(crate) fn load_unselected_attempts(
             &path,
             &serde_json::from_str(&json).map_err(|e| e.to_string())?,
         )?;
+        crate::read_conflicts::verify_metadata_binding(
+            directory,
+            &serde_json::from_str(&json).map_err(|e| e.to_string())?,
+        )?;
 
         let resolved_log_path =
             resolve_archiver_log_path(directory, &metadata.log_file, metadata.disk_number);
@@ -970,8 +977,9 @@ pub(crate) fn load_unselected_attempts(
             .map(|path| path.display().to_string())
             .unwrap_or(metadata.log_file);
 
-        let attention_required =
-            !metadata.status.eq_ignore_ascii_case("OK") || !metadata.bad_sectors.is_empty();
+        let attention_required = !metadata.status.eq_ignore_ascii_case("OK")
+            || !metadata.bad_sectors.is_empty()
+            || metadata.read_conflicts.is_some();
 
         attempts.push(AttemptSummary {
             preferred: false,

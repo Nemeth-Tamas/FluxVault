@@ -1359,6 +1359,7 @@ mod tests {
             provenance_sha256: "test".to_owned(),
             missing_lbas: if partial { vec![24] } else { vec![] },
             conflicting_lbas: vec![],
+            read_conflict_lbas: vec![],
             corroborated_sectors: 0,
             single_capture_sectors: 0,
             physical_reads_this_run: 1,

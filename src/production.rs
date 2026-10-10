@@ -64,6 +64,8 @@ struct Receipt {
     log_sha256: String,
     sectors: usize,
     bad: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    confirmed_conflicts: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +200,11 @@ fn validate(j: &Journal) -> Result<(), String> {
                     || r.bad.len() > r.sectors
                     || r.bad.windows(2).any(|p| p[0] >= p[1])
                     || r.bad.iter().any(|l| *l >= r.sectors as u64)
+                    || r.confirmed_conflicts.len() > 32
+                    || r.confirmed_conflicts.windows(2).any(|p| p[0] >= p[1])
+                    || r.confirmed_conflicts.iter().any(|l| *l >= r.sectors as u64)
+                    || (!r.confirmed_conflicts.is_empty()
+                        && (station != Station::Greaseweazle || disk.usb.is_none()))
                     || [
                         r.sha256.as_str(),
                         r.metadata_sha256.as_str(),
@@ -232,7 +239,7 @@ fn validate(j: &Journal) -> Result<(), String> {
             }
         }
         let expected = if let Some(gw) = &disk.gw {
-            if gw.bad.is_empty() {
+            if gw.bad.is_empty() && gw.confirmed_conflicts.is_empty() {
                 Phase::Complete
             } else {
                 Phase::Partial
@@ -323,6 +330,8 @@ fn receipt(
         log_sha256: digest(&log),
         sectors: a.total_sectors,
         bad,
+        confirmed_conflicts: metadata_confirmation(&value)?
+            .map_or(Vec::new(), |c| c.conflicts.iter().map(|s| s.lba).collect()),
     };
     Ok((r, image))
 }
@@ -350,6 +359,44 @@ fn consistent(old: &Receipt, usb: &[u8], r: &Receipt, bytes: &[u8]) -> Result<()
     Ok(())
 }
 
+fn metadata_confirmation(
+    value: &Value,
+) -> Result<Option<crate::read_conflicts::Confirmation>, String> {
+    serde_json::from_value(value.get("read_conflicts").cloned().unwrap_or(Value::Null))
+        .map_err(|e| e.to_string())
+}
+
+fn check_pair(
+    project: &ProjectState,
+    disk: u32,
+    old: &Receipt,
+    usb: &[u8],
+    gw: &Receipt,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let value: Value = serde_json::from_slice(&read(
+        &project
+            .images_dir()
+            .join(format!("{disk:03}_attempt_{:03}.json", gw.attempt)),
+        1048576,
+    )?)
+    .map_err(|e| e.to_string())?;
+    if let Some(approval) = metadata_confirmation(&value)? {
+        if approval.disk != disk
+            || approval.usb_attempt != old.attempt
+            || approval.usb_image_sha256 != old.sha256
+            || approval.usb_metadata_sha256 != old.metadata_sha256
+            || approval.usb_log_sha256 != old.log_sha256
+        {
+            return Err("Confirmed source identity disagrees with USB receipt".into());
+        }
+        crate::flux_recovery::verify_catalog_metadata(&project.images_dir(), &value)?;
+        crate::read_conflicts::verify(project, &approval, bytes, &gw.bad)
+    } else {
+        consistent(old, usb, gw, bytes)
+    }
+}
+
 fn verify_receipts(project: &ProjectState, j: &Journal) -> Result<(), String> {
     for (number, disk) in &j.disks {
         let mut verified = Vec::new();
@@ -361,7 +408,14 @@ fn verify_receipts(project: &ProjectState, j: &Journal) -> Result<(), String> {
             verified.push((r, bytes));
         }
         if verified.len() == 2 {
-            consistent(verified[0].0, &verified[0].1, verified[1].0, &verified[1].1)?;
+            check_pair(
+                project,
+                *number,
+                verified[0].0,
+                &verified[0].1,
+                verified[1].0,
+                &verified[1].1,
+            )?;
         }
     }
     Ok(())
@@ -755,6 +809,44 @@ impl Coordinator {
         self.commit(j)
     }
 
+    /// Operator affirms both labelled reads concern the same physical disk.
+    /// Bound minor disagreements remain evidence attention, never clean proof.
+    pub(crate) fn confirm_same_disk(
+        &mut self,
+        station: Station,
+        disk: u32,
+    ) -> Result<Value, String> {
+        let (ticket, phase) = self.held(station).ok_or("No interrupted GW identity")?;
+        if station != Station::Greaseweazle
+            || ticket.disk != disk
+            || phase != "interrupted"
+            || ticket.work != Work::UsbRecovery
+            || !self.journal.disks[&disk]
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("USB/GW readable bytes disagree;"))
+        {
+            return Err(
+                "Confirm requires the exact interrupted GW USB-transfer identity disagreement"
+                    .into(),
+            );
+        }
+        let usb = self.journal.disks[&disk]
+            .usb
+            .as_ref()
+            .ok_or("Missing USB receipt")?;
+        if receipt(&self.project, disk, usb.attempt, Station::Usb)?.0 != *usb {
+            return Err("Original USB evidence changed; confirmation refused".into());
+        }
+        let confirmation = crate::flux_recovery::confirm_same_disk(
+            &self.project,
+            disk,
+            usb.attempt,
+            ticket.generation,
+        )?;
+        serde_json::to_value(confirmation).map_err(|e| e.to_string())
+    }
+
     /// Only completed, hash/map/log-verified saved acquisitions enter routing.
     /// Hardware adapters must stage/validate cross-station identity BEFORE they
     /// expose new artifacts to downstream processing; this core launches none.
@@ -771,7 +863,7 @@ impl Coordinator {
             if &checked != old || r.sectors != old.sectors {
                 return Err("USB/GW source binding or geometry differs; queue unchanged".into());
             }
-            consistent(old, &usb, &r, &bytes)?;
+            check_pair(&self.project, ticket.disk, old, &usb, &r, &bytes)?;
         }
         let d = Self::current(&mut j, ticket, Phase::Reading)?;
         match ticket.station {
@@ -802,7 +894,12 @@ impl Coordinator {
         d.phase = match ticket.station {
             Station::Usb if !d.usb.as_ref().unwrap().bad.is_empty() => Phase::AwaitGw,
             Station::Usb => Phase::Complete,
-            Station::Greaseweazle if !d.gw.as_ref().unwrap().bad.is_empty() => Phase::Partial,
+            Station::Greaseweazle
+                if !d.gw.as_ref().unwrap().bad.is_empty()
+                    || !d.gw.as_ref().unwrap().confirmed_conflicts.is_empty() =>
+            {
+                Phase::Partial
+            }
             Station::Greaseweazle => Phase::Complete,
         };
         d.ticket = None;
@@ -835,7 +932,21 @@ impl TransferGuard {
         }
         let mut candidate = self.usb.clone();
         candidate.bad = bad.to_vec();
-        consistent(&self.usb, &usb, &candidate, bytes)
+        if let Some(approval) =
+            crate::flux_recovery::confirmed_read_conflicts(&self.project, self.disk)?
+        {
+            if approval.disk != self.disk
+                || approval.usb_attempt != self.usb.attempt
+                || approval.usb_image_sha256 != self.usb.sha256
+                || approval.usb_metadata_sha256 != self.usb.metadata_sha256
+                || approval.usb_log_sha256 != self.usb.log_sha256
+            {
+                return Err("Confirmation source receipt changed".into());
+            }
+            crate::read_conflicts::verify(&self.project, &approval, bytes, bad)
+        } else {
+            consistent(&self.usb, &usb, &candidate, bytes)
+        }
     }
 }
 

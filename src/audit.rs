@@ -269,6 +269,13 @@ pub(crate) fn run_audit(
                 record.issue = "Conversion has not been audited or has invalid outputs.".to_owned();
             }
         }
+        if attempt.status == "OK" && attempt.bad_sectors.is_empty() && attempt.attention_required {
+            record.evidence_status = "CONFIRMED_CROSS_READER_CONFLICTS".to_owned();
+            append_issue(
+                &mut record.issue,
+                "Operator-confirmed same floppy has differing USB/GW readable sectors. Both versions retained; see image metadata read_conflicts for exact LBAs/source and per-sector hashes. GW image is an observed edition, not resolved-content certification.",
+            );
+        }
         disks.push(record);
     }
     let verified_disks = disks
