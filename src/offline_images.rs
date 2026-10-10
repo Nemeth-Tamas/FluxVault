@@ -84,6 +84,56 @@ pub(crate) struct Published {
     pub report: PathBuf,
     pub reused: bool,
 }
+
+/// Standalone/automatic composite callers must validate the same catalog flux
+/// proof before using its bytes. Legacy image-only sources remain compatible.
+pub(crate) fn verify_composite_source(
+    images: &Path,
+    disk: u32,
+    source: &crate::composite::CompositeSource,
+) -> Result<(), String> {
+    let metadata = source.image_path.with_extension("json");
+    match fs::symlink_metadata(&metadata) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+        Ok(_) => {}
+    }
+    let value: Value =
+        serde_json::from_slice(&read(&metadata, CONTROL)?).map_err(|e| e.to_string())?;
+    let flux = value["source_backend"] == "greaseweazle-derived"
+        || value.get("flux_provenance").is_some()
+        || value.get("flux_provenance_sha256").is_some();
+    if !flux {
+        return Ok(());
+    }
+    crate::flux_recovery::verify_catalog_metadata(images, &value)?;
+    let bad = value["bad_sectors"]
+        .as_array()
+        .ok_or("Missing composite flux sector map")?
+        .iter()
+        .map(|b| b["lba"].as_u64().ok_or("Invalid composite flux LBA"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if value["disk_number"] != disk
+        || value["attempt_number"] != source.attempt_number
+        || value["total_sectors"] != source.total_sectors
+        || map(&bad, source.total_sectors)? != map(&source.bad_sectors, source.total_sectors)?
+        || crate::recovery_plan::resolve_image_path(
+            images,
+            value["image_file"]
+                .as_str()
+                .ok_or("Missing composite flux image")?,
+        )?
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+            != source
+                .image_path
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+    {
+        return Err("Composite source disagrees with catalog flux identity".into());
+    }
+    Ok(())
+}
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -256,6 +306,7 @@ fn replay(root: &Path, recipe: &Recipe) -> Result<(Vec<u8>, Vec<u64>), String> {
             }
             let value: Value =
                 serde_json::from_slice(&sealed(root, meta, CONTROL)?).map_err(|e| e.to_string())?;
+            crate::flux_recovery::verify_catalog_metadata(&root.join("Images"), &value)?;
             let metadata_bad = value["bad_sectors"]
                 .as_array()
                 .ok_or("Missing original sector map")?
@@ -897,7 +948,18 @@ pub(crate) fn inspection_origins(
 }
 
 pub(crate) fn verify_attempt(images: &Path, attempt: &AttemptSummary) -> Result<(), String> {
+    let metadata = if !attempt.metadata_path.as_os_str().is_empty() {
+        let value: Value = serde_json::from_slice(&read(&attempt.metadata_path, CONTROL)?)
+            .map_err(|e| e.to_string())?;
+        crate::flux_recovery::verify_catalog_metadata(images, &value)?;
+        Some(value)
+    } else {
+        None
+    };
     if attempt.status != "DERIVED"
+        && !metadata
+            .as_ref()
+            .is_some_and(|v| v["source_backend"] == "greaseweazle-derived")
         && !attempt
             .parsed_log
             .as_ref()
@@ -905,8 +967,7 @@ pub(crate) fn verify_attempt(images: &Path, attempt: &AttemptSummary) -> Result<
     {
         return Ok(());
     }
-    let value: Value = serde_json::from_slice(&read(&attempt.metadata_path, CONTROL)?)
-        .map_err(|e| e.to_string())?;
+    let value = metadata.ok_or("Lineage-bound acquisition metadata missing")?;
     verify_metadata(images, &attempt.metadata_path, &value)?;
     let bad = value["bad_sectors"]
         .as_array()
@@ -931,7 +992,7 @@ pub(crate) fn verify_attempt(images: &Path, attempt: &AttemptSummary) -> Result<
                 .canonicalize()
                 .map_err(|e| e.to_string())?
     {
-        return Err("Derived attempt summary does not match verified publication".into());
+        return Err("Lineage-bound attempt summary does not match verified publication".into());
     }
     Ok(())
 }

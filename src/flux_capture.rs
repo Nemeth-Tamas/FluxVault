@@ -595,6 +595,23 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDiskStatus, String> {
+    inspect_disk_mode(project, disk_number, true)
+}
+
+/// Explicit immutable stages already select their format; a later mutable job
+/// is not the authority for replaying an older catalog publication.
+pub(crate) fn inspect_saved_decodes(
+    project: &ProjectState,
+    disk_number: u32,
+) -> Result<FluxDiskStatus, String> {
+    inspect_disk_mode(project, disk_number, false)
+}
+
+fn inspect_disk_mode(
+    project: &ProjectState,
+    disk_number: u32,
+    journal_profile: bool,
+) -> Result<FluxDiskStatus, String> {
     if disk_number == 0 {
         return Err("Greaseweazle status requires a positive disk number".to_owned());
     }
@@ -760,7 +777,11 @@ pub fn inspect_disk(project: &ProjectState, disk_number: u32) -> Result<FluxDisk
             .all(|decode| decode.output_hash_matches && decode.source_hash_matches);
     Ok(FluxDiskStatus {
         disk_number,
-        preferred_profile: crate::flux_recovery::completed_profile(project, disk_number)?,
+        preferred_profile: if journal_profile {
+            crate::flux_recovery::completed_profile(project, disk_number)?
+        } else {
+            None
+        },
         captures,
         decodes,
         evidence_healthy,

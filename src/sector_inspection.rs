@@ -11,7 +11,7 @@ use std::{
 };
 
 const CONTROL_LIMIT: u64 = 8 * 1024 * 1024;
-const WARNING: &str = "Saved evidence only: readable bytes are not proof of physical label identity or customer completeness. Missing-sector bytes are placeholders, not recovered data. Recorded flux origins are hash-bound records, not an independent flux replay.";
+const WARNING: &str = "Saved evidence only: readable bytes are not proof of physical label identity or customer completeness. Missing-sector bytes are placeholders, not recovered data. Catalog flux lineage is replayed against saved captures/decodes, not independently CRC-validated or physically reread.";
 
 #[derive(Clone, Deserialize)]
 struct Geometry {
@@ -224,6 +224,7 @@ pub fn inspect(
         return Err("Saved image size/SHA-256 does not match acquisition metadata".into());
     }
     crate::offline_images::verify_metadata(&images, &selected.path, &selected.value)?;
+    crate::flux_recovery::verify_catalog_metadata(&images, &selected.value)?;
     let mut log_path = None;
     let mut log_snapshot = None;
     let mut map_known = false;
@@ -373,7 +374,8 @@ pub fn inspect(
     Ok(
         json!({"schema_version":1,"disk":disk,"attempt":m.attempt_number,"image":image,"metadata":selected.path,
         "log":log_path,"image_sha256":hash(&bytes),"source_backend":m.source_backend,"source_device":m.source_device,
-        "map_verified":map_known,"attention_required":attention,"warning":WARNING,"sectors":sectors}),
+        "map_verified":map_known,"flux_lineage_replayed":m.source_backend == "greaseweazle-derived",
+        "independent_flux_crc_verified":false,"attention_required":attention,"warning":WARNING,"sectors":sectors}),
     )
 }
 
@@ -618,7 +620,7 @@ mod tests {
         );
     }
     #[test]
-    fn hash_bound_flux_origins_are_recorded_not_independently_replayed() {
+    fn hash_only_flux_claims_require_catalog_backend_and_replay() {
         let f = fixture();
         let directory = f.project.root().join("Flux").join("Recovery");
         fs::create_dir(&directory).unwrap();
@@ -630,22 +632,22 @@ mod tests {
             v["flux_provenance"] = json!(path);
             v["flux_provenance_sha256"] = json!(hash(&bytes));
         });
-        let r = inspect(&f.project, 1, 2, 1, None).unwrap();
-        assert_eq!(
-            r["sectors"][0]["recorded_flux_origin"]["capture_attempts"],
-            json!([1, 2])
-        );
         assert!(
-            r["warning"]
-                .as_str()
-                .unwrap()
-                .contains("not an independent flux replay")
+            inspect(&f.project, 1, 2, 1, None)
+                .unwrap_err()
+                .contains("relabelled")
+        );
+        mutate(&f, |v| v["source_backend"] = json!("greaseweazle-derived"));
+        assert!(
+            inspect(&f.project, 1, 2, 1, None)
+                .unwrap_err()
+                .contains("Invalid catalog flux lineage")
         );
         fs::write(path, b"changed").unwrap();
         assert!(
             inspect(&f.project, 1, 2, 1, None)
                 .unwrap_err()
-                .contains("provenance hash")
+                .contains("lineage hash")
         );
     }
     #[test]

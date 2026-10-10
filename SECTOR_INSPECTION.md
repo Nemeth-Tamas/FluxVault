@@ -21,7 +21,9 @@ The output includes image/metadata/log paths, the image hash, sector hashes, hex
 | `unknown` | A completed recognized log does not establish a readable map. Matching image bytes alone are insufficient. |
 | `derived` | Sector belongs to an offline reconstruction. Exact saved-copy provenance replays, but it is not an independent physical read. |
 
-Composite/FAT-derived images include the original donor attempt/LBA/hash and mirrored-FAT copy steps, after verifying the sealed recipe. GW-derived images can include the **recorded** capture/decode confidence entry after checking its provenance hash and image/disk/sector binding. That record is not an independent raw-flux replay or proof that the operator inserted the labeled disk.
+Composite/FAT-derived images include the original donor attempt/LBA/hash and mirrored-FAT copy steps, after verifying the sealed recipe. Catalogued GW images now replay their immutable publication stages against saved raw/packed capture hashes, decode bytes/maps and capture settings, then compare the final image and every sector origin. A later mutable recovery job does not replace that publication's authority. Changed or hash-only/unbound claims are refused.
+
+JSON retains `recorded_flux_origin` and adds `flux_lineage_replayed` for the selected GW catalog image; `independent_flux_crc_verified` remains **false**. This is saved lineage/agreement replay, not a new native MFM/CRC decoder, physical reread, proof of label identity or certification of customer content. Single-capture sectors keep their explicitly lower confidence.
 
 ## Exit codes and boundaries
 
@@ -31,4 +33,4 @@ Composite/FAT-derived images include the original donor attempt/LBA/hash and mir
 
 Only completed native `Images/NNN_attempt_NNN.json` acquisitions are supported. Legacy bare images/DMDE logs are still usable by existing recovery workflows, but not this diagnostic. A recorded nonempty log path must resolve to an existing regular file; unavailable referenced evidence is an error, not an implicit clean map.
 
-Images are limited to 4 MiB; metadata to 1 MiB; logs/provenance to 8 MiB; one disk to 256 attempts, and the Images inventory to 100,000 entries. Invalid/duplicate maps, foreign paths, floppy/device aliases and reparse/symlink files are refused. The inspector verifies a bounded image snapshot and rechecks image/selected metadata/log/provenance snapshots before returning. Run it while saved processing is idle if concurrent changes are reported. It never edits bytes, creates reports, launches tools, materializes captures or changes project state.
+Images are limited to 4 MiB; metadata to 1 MiB; logs to 8 MiB and catalog flux publication provenance to 4 MiB; one disk to 256 attempts, and the Images inventory to 100,000 entries. Invalid/duplicate maps, foreign paths, floppy/device aliases and reparse/symlink files are refused. The inspector verifies a bounded image snapshot and rechecks image/selected metadata/log/provenance snapshots before returning. Run it while saved processing is idle if concurrent changes are reported. It never edits bytes, creates reports, launches tools, materializes captures or changes project state. Replaying lineage hashes saved captures, so it can take longer than showing an ordinary USB sector.

@@ -192,7 +192,7 @@ pub struct FormatException {
 fn empty_path(path: &Path) -> bool {
     path.as_os_str().is_empty()
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SectorProvenance {
     lba: u64,
     capture_attempts: Vec<u32>,
@@ -210,6 +210,142 @@ fn unfinished(e: &Evidence) -> usize {
     e.missing.len() + e.conflicts.len()
 }
 
+#[derive(Deserialize)]
+struct CatalogProvenance {
+    schema_version: u32,
+    disk: u32,
+    profile: String,
+    policy: RecoveryPolicy,
+    stages: Vec<Stage>,
+    image_sha256: String,
+    sectors: Vec<SectorProvenance>,
+}
+
+/// Replay the immutable publication's own stages, not the latest mutable job.
+/// This verifies lineage/agreement only: vendor-reported good is NOT native CRC proof.
+pub(crate) fn verify_catalog_metadata(
+    images: &Path,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    if value["source_backend"] != "greaseweazle-derived" {
+        if value.get("flux_provenance").is_some() || value.get("flux_provenance_sha256").is_some() {
+            return Err("Flux lineage was relabelled as another acquisition backend".into());
+        }
+        return Ok(());
+    }
+    crate::cancellation::check()?;
+    let images = images.canonicalize().map_err(|e| e.to_string())?;
+    let root = images.parent().ok_or("Missing catalog project root")?;
+    let directory = root.join("Flux").join("Recovery");
+    if directory.canonicalize().map_err(|e| e.to_string())? != directory {
+        return Err("Flux lineage directory is redirected".into());
+    }
+    let provenance = crate::recovery_plan::resolve_image_path(
+        &directory,
+        value["flux_provenance"]
+            .as_str()
+            .ok_or("Missing flux lineage path")?,
+    )?;
+    let read = |path: &Path, limit: u64| -> Result<Vec<u8>, String> {
+        let info = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if info.file_attributes() & 0x400 != 0 {
+                return Err("Flux lineage contains a reparse point".into());
+            }
+        }
+        if !info.file_type().is_file() || info.len() > limit {
+            return Err("Flux lineage artifact exceeds its regular-file bound".into());
+        }
+        let mut bytes = Vec::new();
+        fs::File::open(path)
+            .map_err(|e| e.to_string())?
+            .take(limit + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > limit {
+            return Err("Flux lineage artifact grew beyond its bound".into());
+        }
+        Ok(bytes)
+    };
+    let proof_bytes = read(&provenance, 4 * 1024 * 1024)?;
+    let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+    if value["flux_provenance_sha256"] != hash(&proof_bytes) {
+        return Err("Catalog flux lineage hash changed".into());
+    }
+    let proof: CatalogProvenance = serde_json::from_slice(&proof_bytes)
+        .map_err(|e| format!("Invalid catalog flux lineage: {e}"))?;
+    proof.policy.validate()?;
+    if proof.schema_version != 1
+        || proof.disk == 0
+        || value["disk_number"] != proof.disk
+        || proof.stages.is_empty()
+        || proof.stages.len() > proof.policy.passes.len()
+        || proof
+            .stages
+            .iter()
+            .map(|s| s.capture_attempt)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != proof.stages.len()
+    {
+        return Err("Invalid catalog flux lineage identity/stage inventory".into());
+    }
+    for stage in &proof.stages {
+        stage.settings.validate()?;
+        if stage.capture_attempt == 0 || stage.decode_attempt == Some(0) {
+            return Err("Invalid catalog flux capture/decode identity".into());
+        }
+    }
+    let profile = GreaseweazleProfile::parse(&proof.profile)?;
+    let project = ProjectState::open_without_session(root.to_owned())?;
+    let replay = aggregate(&project, proof.disk, profile, &proof.stages)?;
+    let image = crate::recovery_plan::resolve_image_path(
+        &images,
+        value["image_file"]
+            .as_str()
+            .ok_or("Missing catalog image")?,
+    )?;
+    let image_bytes = read(&image, profile.expected_sector_image_bytes())?;
+    let bad = value["bad_sectors"]
+        .as_array()
+        .ok_or("Missing catalog flux map")?
+        .iter()
+        .map(|b| b["lba"].as_u64().ok_or("Invalid catalog flux LBA"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected_bad = replay
+        .missing
+        .iter()
+        .chain(&replay.conflicts)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let sectors = replay.bytes.len() / 512;
+    if image_bytes != replay.bytes
+        || proof.sectors != replay.sectors
+        || hash(&image_bytes) != proof.image_sha256
+        || value["sha256"] != proof.image_sha256
+        || bad.len() != expected_bad.len()
+        || bad.iter().copied().collect::<BTreeSet<_>>() != expected_bad
+        || value["total_sectors"] != sectors
+        || value["bytes_written"] != image_bytes.len()
+        || value["bad_sector_count"] != bad.len()
+        || value["status"] != if bad.is_empty() { "OK" } else { "PARTIAL" }
+        || value["geometry"]["cylinders"] != 80
+        || value["geometry"]["heads"] != 2
+        || value["geometry"]["sectors_per_track"] != sectors / 160
+        || value["geometry"]["bytes_per_sector"] != 512
+        || value["geometry"]["total_bytes"] != image_bytes.len()
+    {
+        return Err("Catalog flux image/map/origins disagree with saved capture replay".into());
+    }
+    crate::cancellation::check()?;
+    if read(&provenance, 4 * 1024 * 1024)? != proof_bytes {
+        return Err("Catalog flux lineage changed during replay".into());
+    }
+    Ok(())
+}
+
 fn aggregate(
     project: &ProjectState,
     disk: u32,
@@ -217,7 +353,7 @@ fn aggregate(
     stages: &[Stage],
 ) -> Result<Evidence, String> {
     let count = profile.expected_sector_image_bytes() as usize / 512;
-    let status = flux_capture::inspect_disk(project, disk)?;
+    let status = flux_capture::inspect_saved_decodes(project, disk)?;
     let mut sources = Vec::new();
     for stage in stages {
         if let Some(number) = stage.decode_attempt {
@@ -232,6 +368,12 @@ fn aggregate(
                 .ok_or("Saved recovery decode is missing")?;
             if d.profile != profile.argument() {
                 return Err("Recovery profile changed".to_owned());
+            }
+            if d.capture_settings
+                .as_ref()
+                .is_some_and(|settings| settings != &stage.settings)
+            {
+                return Err("Recovery stage settings disagree with saved capture/decode".into());
             }
             sources.push((d, flux_capture::verified_decode(project, d, count)?));
         }

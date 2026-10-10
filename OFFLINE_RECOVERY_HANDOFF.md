@@ -39,6 +39,14 @@ The handoff uses original completed acquisitions only, not its own derived outpu
 
 No missing file bytes are guessed. FAT redundancy is labeled reconstruction, not independent physical corroboration. Matching local controls do not prove authenticity if someone replaces the entire evidence set.
 
+### USB + catalogued GW evidence
+
+Completed GW image acquisitions can participate alongside USB attempts. Before standalone/automatic compositing, native extraction or explicit preferred-image selection uses a GW source, FluxVault now replays the source publication's immutable capture/decode stages. It verifies raw or losslessly packed source hashes, decode byte/map bindings and stage settings, compares every recorded sector origin and requires the exact published image/geometry/unresolved map. Composite publication/reuse also rechecks this lineage through its sealed source metadata. Missing, changed, relabelled, contradictory or oversized proofs refuse; they do not become clean donors through a matching final image hash alone.
+
+This strengthens the supported catalog handoff, **not arbitrary raw/decode promotion or independent MFM/CRC validation**. Existing single-capture/vendor-reported confidence stays visible; DERIVED composites remain attention. A later mutable job is not substituted for an older publication's stages. Verification reads saved captures and can add hashing time; it does not run `gw`, acquire new media or materialize packed sources.
+
+Five new routine mock-chain regressions cover complementary USB/GW gaps through exact payload extraction/audit and repeat reuse, packed retention, historical publication replay, changed raw/decode refusal before publication, semantic proof/map/settings/geometry tampering, missing/oversized proofs and preferred/sector-inspector guards. Saved actual 059/066 catalog lineage also replays with five/four unresolved sectors respectively; their original images, metadata and publication proofs remain unchanged. This is compatibility/integrity evidence, not newly recovered customer content.
+
 Current bounds: at most **16 original source attempts**, complete **512-byte sector images up to 4 MiB**, and complete corroborating acquisition geometry. A DMDE-only set without such geometry is conservatively declined. This is a handoff for catalogued acquisition images, not arbitrary raw captures, unsupported formats or a universal USB/flux donor certification system.
 
 Expert `recovery composite N` / `recovery fat N` still create standalone recovery artifacts. Automatic catalog publication is part of `process` and its scan/background callers. `extract all` alone does not run the composite-planning stage.

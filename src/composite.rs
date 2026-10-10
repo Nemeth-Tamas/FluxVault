@@ -125,6 +125,11 @@ pub(crate) fn run_composite(
         .map_err(|error| {
             format!("Composite source is outside this project's Images directory: {error}")
         })?;
+        crate::offline_images::verify_composite_source(
+            &request.images_directory,
+            request.disk_number,
+            source,
+        )?;
         if !attempt_numbers.insert(source.attempt_number) {
             return Err(format!(
                 "A(z) {:03} próbálkozás többször szerepel a kompozit forrásai között.",

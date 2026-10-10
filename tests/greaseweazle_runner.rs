@@ -335,13 +335,17 @@ fn seed_partial_recovery(project: &ProjectState, policy: &RecoveryPolicy, age_ms
     .unwrap()
     .with_stream_to_stderr(false)
     .with_env("MOCK_GW_BAD_LBAS", "24");
-    flux_capture::capture(
+    flux_capture::capture_with_settings(
         project,
         CaptureRequest {
             disk_number: 23,
             profile: GreaseweazleProfile::Ibm1440,
             drive: 'B',
             revolutions: 2,
+        },
+        &fluxvault::greaseweazle::CaptureSettings {
+            cylinders: None,
+            retries: 0,
         },
         &mut backend,
     )

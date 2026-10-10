@@ -935,8 +935,9 @@ SAVED-SECTOR INSPECTOR (ADVANCED)
     by this diagnostic only; their existing recovery commands remain available.
 
     Missing/conflicting placeholders and unknown maps are not recovered data.
-    Offline-derived donor/FAT-copy recipes replay; flux origins are recorded,
-    hash-bound entries, not independent raw-flux replay. Exit 0: selected range
+    Offline-derived donor/FAT-copy recipes replay; catalog flux origins now
+    replay against saved capture/decode lineage (not native CRC validation).
+    Changed or unbound claims refuse. Exit 0: selected range
     has readable saved evidence; 3: missing/unknown/derived range; 2: error.
     Never certifies the physical label, whole disk or customer completeness.
     More examples and limits: SECTOR_INSPECTION.md.

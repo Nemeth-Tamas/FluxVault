@@ -6,6 +6,9 @@ use crate::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "offline_flux_tests.rs"]
+mod flux_lineage;
+
 fn fixture(maps: &[Vec<u64>]) -> (ProjectState, Vec<u8>) {
     static SERIAL: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(

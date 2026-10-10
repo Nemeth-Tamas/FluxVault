@@ -75,6 +75,7 @@ fn directory(images: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 fn binding(images: &Path, a: &AttemptSummary) -> Result<Binding, String> {
+    crate::offline_images::verify_attempt(images, a)?;
     if !matches!(a.status.as_str(), "OK" | "PARTIAL" | "DERIVED") {
         return Err("Only completed evidence can be preferred".into());
     }

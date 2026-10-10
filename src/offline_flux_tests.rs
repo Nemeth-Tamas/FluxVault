@@ -1,0 +1,383 @@
+//! Actual in-process mock capture/decode -> USB/GW composite -> extraction/audit.
+use super::*;
+use crate::{
+    flux_capture, flux_recovery,
+    greaseweazle::{
+        BackendMode, GreaseweazleBackend, GreaseweazleCommand, GreaseweazleExecution,
+        GreaseweazleProfile,
+    },
+};
+
+struct Fixture {
+    project: ProjectState,
+    original: Vec<u8>,
+    result: flux_recovery::RecoveryResult,
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        fs::remove_dir_all(self.project.root()).unwrap();
+    }
+}
+struct Mock {
+    bytes: Vec<u8>,
+    reads: usize,
+}
+impl GreaseweazleBackend for Mock {
+    fn mode(&self) -> BackendMode {
+        BackendMode::MockNoHardware
+    }
+    fn execute(&mut self, command: &GreaseweazleCommand) -> Result<GreaseweazleExecution, String> {
+        let stdout = match command.subcommand() {
+            "info" => {
+                "Host Tools: 1.23\nDevice:\n  Model: Greaseweazle V4\n  Firmware: 1.23\n".into()
+            }
+            "read" => {
+                self.reads += 1;
+                fs::write(
+                    command.arguments().last().unwrap(),
+                    format!("SCP mock {}", self.reads),
+                )
+                .unwrap();
+                String::new()
+            }
+            "convert" => {
+                fs::write(command.arguments().last().unwrap(), &self.bytes).unwrap();
+                grid(34)
+            }
+            _ => panic!("Unexpected command; no hardware or writes authorized"),
+        };
+        Ok(GreaseweazleExecution {
+            mode: self.mode(),
+            command: command.clone(),
+            success: true,
+            exit_code: Some(0),
+            stdout,
+            stderr: String::new(),
+            timed_out: false,
+            host_version: Some("mock".into()),
+            started_unix_ms: 0,
+            duration_ms: 0,
+        })
+    }
+}
+fn grid(bad: usize) -> String {
+    let tens: String = (0..80)
+        .map(|c| {
+            if c % 10 == 0 {
+                char::from_digit(c / 10, 10).unwrap()
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    let units: String = (0..80)
+        .map(|c| char::from_digit(c % 10, 10).unwrap())
+        .collect();
+    let mut output = format!("Cyl-> {tens}\nH. S: {units}\n");
+    for head in 0..2 {
+        for sector in 0..18 {
+            let cells: String = (0..80)
+                .map(|c| {
+                    if (c * 2 + head) * 18 + sector == bad {
+                        'X'
+                    } else {
+                        '.'
+                    }
+                })
+                .collect();
+            output.push_str(&format!("{head}.{sector:>2}: {cells}\n"));
+        }
+    }
+    output.push_str("Found 2879 sectors of 2880 (99%)\n");
+    output
+}
+fn mixed() -> Fixture {
+    let (project, original) = fixture(&[vec![33]]);
+    // Initial fixture represents native USB acquisition, not a raw flux donor.
+    let usb = project.images_dir().join("001_attempt_001.json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&usb).unwrap()).unwrap();
+    value["source_backend"] = json!("windows-raw-sector");
+    fs::write(usb, serde_json::to_vec(&value).unwrap()).unwrap();
+    let mut bytes = original.clone();
+    bytes[34 * 512..35 * 512].fill(0);
+    let mut backend = Mock { bytes, reads: 0 };
+    let mut policy = flux_recovery::RecoveryPolicy::default();
+    policy.passes.truncate(1);
+    let result = flux_recovery::recover(
+        &project,
+        1,
+        GreaseweazleProfile::Ibm1440,
+        'B',
+        policy,
+        &mut backend,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(backend.reads, 1);
+    assert_eq!(result.missing_lbas, vec![34]);
+    assert_eq!(result.status, "partial");
+    Fixture {
+        project,
+        original,
+        result,
+    }
+}
+fn metadata(f: &Fixture) -> (PathBuf, Value) {
+    let path = f.result.image.with_extension("json");
+    let value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    (path, value)
+}
+fn verify(f: &Fixture) -> Result<(), String> {
+    flux_recovery::verify_catalog_metadata(&f.project.images_dir(), &metadata(f).1)
+}
+
+#[test]
+fn complementary_usb_and_gw_catalog_sources_replay_through_processing_and_reuse() {
+    let f = mixed();
+    verify(&f).unwrap();
+    let originals = [
+        fs::read(f.project.images_dir().join("001_attempt_001.img")).unwrap(),
+        fs::read(&f.result.image).unwrap(),
+    ];
+    let first = pipeline::run_pipeline(&request(&f.project), &|_| {}).unwrap();
+    assert_eq!(first.published_recovery_images, 1);
+    assert_eq!(files(&f.project), vec!["FIRST.TXT", "SECOND.TXT"]);
+    let attempts = imaging::load_attempts_for_disk(&f.project.images_dir(), 1).unwrap();
+    let best = imaging::best_attempt(&attempts).unwrap();
+    assert_eq!(best.status, "DERIVED");
+    assert_eq!(
+        fs::read(f.project.images_dir().join(&best.image_file)).unwrap(),
+        f.original
+    );
+    assert!(best.attention_required);
+    let audit: Value = serde_json::from_slice(&fs::read(first.audit.json_path).unwrap()).unwrap();
+    assert_eq!(audit["customer_delivery_certified"], false);
+    let again = pipeline::run_pipeline(&request(&f.project), &|_| {}).unwrap();
+    assert_eq!(again.reused_recovery_images, 1);
+    assert_eq!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001_attempt_001.img")).unwrap(),
+        originals[0]
+    );
+    assert_eq!(fs::read(&f.result.image).unwrap(), originals[1]);
+    let raw = f.project.root().join("Flux/001_attempt_001.scp");
+    let raw_bytes = fs::read(&raw).unwrap();
+    fs::write(&raw, b"changed after DERIVED publication").unwrap();
+    assert!(imaging::load_attempts_for_disk(&f.project.images_dir(), 1).is_err());
+    fs::write(raw, raw_bytes).unwrap();
+    assert_eq!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn packed_sources_and_historical_publications_do_not_depend_on_latest_job() {
+    let f = mixed();
+    crate::flux_archive::pack(&f.project, 1, 1, true).unwrap();
+    // A later job may replace this mutable controller; the original proof owns its stages.
+    fs::write(f.project.root().join("Flux/Recovery/001_job.json"), b"{}").unwrap();
+    verify(&f).unwrap();
+    let (attempts, composite) = composite(&f.project);
+    publish(&f.project, 1, &attempts, Some(&composite), None).unwrap();
+    assert!(!f.project.root().join("Flux/001_attempt_001.scp").exists());
+    let best = imaging::load_attempts_for_disk(&f.project.images_dir(), 1).unwrap();
+    assert_eq!(
+        fs::read(
+            f.project
+                .images_dir()
+                .join(&imaging::best_attempt(&best).unwrap().image_file)
+        )
+        .unwrap(),
+        f.original
+    );
+}
+
+#[test]
+fn changed_raw_or_decode_donor_is_refused_before_native_or_derived_publication() {
+    for raw in [true, false] {
+        let f = mixed();
+        let status = flux_capture::inspect_disk(&f.project, 1).unwrap();
+        let target = if raw {
+            status.captures[0].raw_flux.as_ref().unwrap()
+        } else {
+            &status.decodes[0].image
+        };
+        let original = fs::read(target).unwrap();
+        let mut changed = original.clone();
+        changed[0] ^= 1;
+        fs::write(target, changed).unwrap();
+        assert!(verify(&f).is_err());
+        let attempts = imaging::load_attempts_for_disk(&f.project.images_dir(), 1).unwrap();
+        let gw = attempts.iter().find(|a| a.attempt_number == 2).unwrap();
+        assert!(
+            fat12_recovery::recover_attempt(
+                &f.project.images_dir(),
+                &f.project.extracted_dir(),
+                &f.project.recovery_dir(),
+                1,
+                gw,
+                &|_| {}
+            )
+            .is_err()
+        );
+        let sources = attempts
+            .iter()
+            .map(|a| CompositeSource {
+                attempt_number: a.attempt_number,
+                image_path: f.project.images_dir().join(&a.image_file),
+                expected_sha256: Some(a.sha256.clone()),
+                total_sectors: a.total_sectors,
+                bad_sectors: a.bad_sectors.clone(),
+            })
+            .collect();
+        assert!(
+            composite::run_composite(
+                &CompositeRequest {
+                    images_directory: f.project.images_dir(),
+                    recovery_root: f.project.recovery_dir(),
+                    disk_number: 1,
+                    sources,
+                },
+                &|_| {}
+            )
+            .is_err()
+        );
+        assert!(!f.project.recovery_dir().join("001").exists());
+        assert_eq!(
+            imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
+                .unwrap()
+                .len(),
+            2
+        );
+        fs::write(target, original).unwrap();
+        verify(&f).unwrap();
+    }
+}
+
+#[test]
+fn rewritten_provenance_map_stage_and_geometry_cannot_pass_hash_only_validation() {
+    for fault in 0..10 {
+        let f = mixed();
+        let (path, mut meta) = metadata(&f);
+        let mut proof: Value =
+            serde_json::from_slice(&fs::read(&f.result.provenance).unwrap()).unwrap();
+        match fault {
+            0 => proof["sectors"][33]["confidence"] = json!("corroborated"),
+            1 => proof["stages"][0]["capture_attempt"] = json!(99),
+            2 => {
+                let first = proof["stages"][0].clone();
+                proof["stages"].as_array_mut().unwrap().push(first);
+            }
+            3 => proof["stages"][0]["settings"]["retries"] = json!(1),
+            4 => proof["disk"] = json!(2),
+            5 => proof["profile"] = json!("ibm.720"),
+            6 => meta["bad_sectors"][0]["lba"] = json!(33),
+            7 => meta["source_backend"] = json!("windows-raw-sector"),
+            8 => meta["geometry"]["heads"] = json!(1),
+            9 => meta["flux_provenance"] = json!("A:\\untrusted.json"),
+            _ => unreachable!(),
+        }
+        let bytes = serde_json::to_vec(&proof).unwrap();
+        fs::write(&f.result.provenance, &bytes).unwrap();
+        meta["flux_provenance_sha256"] = json!(hash(&bytes));
+        fs::write(path, serde_json::to_vec(&meta).unwrap()).unwrap();
+        assert!(verify(&f).is_err(), "fault {fault} escaped replay");
+    }
+}
+
+#[test]
+fn missing_oversized_or_inconsistent_flux_proofs_are_not_preferred_or_inspected() {
+    let f = mixed();
+    let (path, meta) = metadata(&f);
+    let original = fs::read(&f.result.provenance).unwrap();
+    fs::write(&f.result.provenance, vec![0; 4 * 1024 * 1024 + 1]).unwrap();
+    assert!(verify(&f).unwrap_err().contains("bound"));
+    fs::remove_file(&f.result.provenance).unwrap();
+    assert!(crate::preferred_image::set(&f.project, 1, Some(2)).is_err());
+    fs::write(&f.result.provenance, original).unwrap();
+    verify(&f).unwrap();
+    let mut wrong = meta.clone();
+    wrong["sha256"] = json!("00".repeat(32));
+    fs::write(&path, serde_json::to_vec(&wrong).unwrap()).unwrap();
+    assert!(verify(&f).is_err());
+    fs::write(path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    let attempts = imaging::load_attempts_for_disk(&f.project.images_dir(), 1).unwrap();
+    let mut false_map = attempts
+        .iter()
+        .find(|a| a.attempt_number == 2)
+        .unwrap()
+        .clone();
+    false_map.bad_sectors.clear();
+    assert!(verify_attempt(&f.project.images_dir(), &false_map).is_err());
+    assert!(
+        verify_composite_source(
+            &f.project.images_dir(),
+            1,
+            &CompositeSource {
+                attempt_number: 2,
+                image_path: f.result.image.clone(),
+                expected_sha256: Some(f.result.image_sha256.clone()),
+                total_sectors: 2880,
+                bad_sectors: vec![],
+            }
+        )
+        .is_err()
+    );
+    // The inspector now independently replays flux origins, not just the proof hash.
+    let result = crate::sector_inspection::inspect(&f.project, 1, 33, 1, Some(2)).unwrap();
+    assert_eq!(result["flux_lineage_replayed"], true);
+    assert_eq!(result["independent_flux_crc_verified"], false);
+    assert_eq!(
+        result["sectors"][0]["recorded_flux_origin"]["confidence"],
+        "single_capture_gw_reported_good"
+    );
+    let raw = f.project.root().join("Flux/001_attempt_001.scp");
+    fs::write(raw, b"changed raw").unwrap();
+    assert!(crate::sector_inspection::inspect(&f.project, 1, 33, 1, Some(2)).is_err());
+}
+
+#[test]
+#[ignore = "requires FV_LINEAGE_SOURCE; verifies saved 059/066 originals read-only, no tools or media"]
+fn saved_damaged_catalog_lineage_replays_without_changing_evidence() {
+    let project = ProjectState::open_without_session(PathBuf::from(
+        std::env::var_os("FV_LINEAGE_SOURCE").expect("Set FV_LINEAGE_SOURCE"),
+    ))
+    .unwrap();
+    for disk in [59, 66] {
+        let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk).unwrap();
+        let mut checked = 0;
+        for attempt in attempts {
+            if attempt.metadata_path.as_os_str().is_empty() {
+                continue;
+            }
+            let meta_bytes = fs::read(&attempt.metadata_path).unwrap();
+            let meta: Value = serde_json::from_slice(&meta_bytes).unwrap();
+            if meta["source_backend"] != "greaseweazle-derived" {
+                continue;
+            }
+            let provenance = PathBuf::from(meta["flux_provenance"].as_str().unwrap());
+            let proof_bytes = fs::read(&provenance).unwrap();
+            let image = project.images_dir().join(&attempt.image_file);
+            let image_bytes = fs::read(&image).unwrap();
+            flux_recovery::verify_catalog_metadata(&project.images_dir(), &meta).unwrap();
+            assert_eq!(fs::read(&attempt.metadata_path).unwrap(), meta_bytes);
+            assert_eq!(fs::read(provenance).unwrap(), proof_bytes);
+            assert_eq!(fs::read(image).unwrap(), image_bytes);
+            checked += 1;
+            eprintln!(
+                "Saved disk {disk:03}, image attempt {:03}: flux lineage replay passed; {} unresolved; original image/metadata/proof unchanged",
+                attempt.attempt_number,
+                attempt.bad_sectors.len()
+            );
+        }
+        assert!(checked > 0, "No GW catalog source for disk {disk}");
+    }
+}
