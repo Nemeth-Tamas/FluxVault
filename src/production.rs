@@ -699,6 +699,62 @@ impl Coordinator {
         self.commit(j)
     }
 
+    /// Exact-label operator confirmation that an idle, identity-rejected GW
+    /// transfer has been removed. Never releases active/saved/other failures.
+    pub fn release_identity_mismatch(&mut self, station: Station, disk: u32) -> Result<(), String> {
+        let (ticket, phase) = self
+            .held(station)
+            .ok_or("Station has no interrupted identity")?;
+        if ticket.disk != disk
+            || phase != "interrupted"
+            || station != Station::Greaseweazle
+            || ticket.work != Work::UsbRecovery
+        {
+            return Err(
+                "Release requires the exact interrupted GW USB-recovery label; no custody changed"
+                    .into(),
+            );
+        }
+        let mut j = self.journal.clone();
+        let d = Self::current(&mut j, &ticket, Phase::Interrupted)?;
+        if !d
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("USB/GW readable bytes disagree;"))
+        {
+            return Err(
+                "Only a USB/GW identity disagreement can be released; retry other failures".into(),
+            );
+        }
+        let usb = d.usb.as_ref().ok_or("Missing original USB receipt")?;
+        if receipt(&self.project, disk, usb.attempt, Station::Usb)?.0 != *usb {
+            return Err("USB receipt changed; release refused".into());
+        }
+        // Even a crash between image publication and job-result commit must
+        // not let this correction invalidate an already catalogued donor.
+        for attempt in imaging::load_attempts_for_disk(&self.project.images_dir(), disk)? {
+            if attempt.metadata_path.as_os_str().is_empty() {
+                continue;
+            }
+            let value: Value = serde_json::from_slice(&read(&attempt.metadata_path, 1024 * 1024)?)
+                .map_err(|e| e.to_string())?;
+            if value["source_backend"] == "greaseweazle-derived" {
+                return Err(
+                    "A GW image is already published for this label; identity release refused"
+                        .into(),
+                );
+            }
+        }
+        crate::flux_recovery::reject_identity_job(&self.project, disk, ticket.generation)?;
+        d.phase = Phase::AwaitGw;
+        d.ticket = None;
+        d.error = Some(format!(
+            "Operator released mistaken GW identity, ticket {}. Rejected flux retained and excluded; exact label must be read again.",
+            ticket.generation
+        ));
+        self.commit(j)
+    }
+
     /// Only completed, hash/map/log-verified saved acquisitions enter routing.
     /// Hardware adapters must stage/validate cross-station identity BEFORE they
     /// expose new artifacts to downstream processing; this core launches none.

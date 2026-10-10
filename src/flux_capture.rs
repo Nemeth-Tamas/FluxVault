@@ -618,6 +618,7 @@ fn inspect_disk_mode(
     let flux_dir = project_flux_dir(project)?;
     let prefix = format!("{disk_number:03}_attempt_");
     let mut captures = Vec::new();
+    let rejected = crate::flux_recovery::rejected_capture_attempts(project, disk_number)?;
     for entry in fs::read_dir(&flux_dir)
         .map_err(|error| format!("Cannot list raw-flux captures: {error}"))?
     {
@@ -630,6 +631,9 @@ fn inspect_disk_mode(
         let Some(attempt) = number_text.and_then(|number| number.parse::<u32>().ok()) else {
             continue;
         };
+        if rejected.contains(&attempt) {
+            continue;
+        }
         let metadata = entry.path();
         let record = fs::read(&metadata)
             .ok()
@@ -714,6 +718,9 @@ fn inspect_disk_mode(
                     metadata.display()
                 ));
             }
+            if rejected.contains(&record.capture_attempt) {
+                continue;
+            }
             let expected_name = format!(
                 "{disk_number:03}_flux_{:03}_{}_decode_{:03}.img",
                 record.capture_attempt,
@@ -791,6 +798,7 @@ fn inspect_disk_mode(
 
 pub fn latest_capture_attempt(project: &ProjectState, disk_number: u32) -> Result<u32, String> {
     let flux_dir = project_flux_dir(project)?;
+    let rejected = crate::flux_recovery::rejected_capture_attempts(project, disk_number)?;
     let prefix = format!("{disk_number:03}_attempt_");
     let mut latest = None;
     for entry in fs::read_dir(&flux_dir)
@@ -802,6 +810,7 @@ pub fn latest_capture_attempt(project: &ProjectState, disk_number: u32) -> Resul
             .strip_prefix(&prefix)
             .and_then(|name| name.strip_suffix(".json"))
             .and_then(|number| number.parse::<u32>().ok())
+            && !rejected.contains(&number)
         {
             latest = Some(latest.map_or(number, |old: u32| old.max(number)));
         }

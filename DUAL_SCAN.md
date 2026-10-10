@@ -58,6 +58,8 @@ Before publishing a transfer image into `Images`, USB source image/metadata/log 
 
 A damaged boot sector no longer prevents USB geometry/protection probing. If USB cannot produce a completed image at all, its identity remains interrupted rather than pretending partial success. A failed station asks for a same-label reseat/retry; the other remains usable.
 
+If you entered the wrong queued label and receive **USB/GW readable bytes disagree**, stop retrying it. After physical drive activity stops, remove the incorrectly labelled floppy and type **`g release N`** using the interrupted number (for example `g release 133`, not the number you intended). This explicit removal/identity-rejection confirmation frees GW without a read. The original USB image and queue remain; unpublished mismatched raw/decoded evidence stays intact, is excluded from donors, and its job is archived. Insert the actual next queued floppy, then its correct `gN`. The released label still needs its own correct floppy later. Release refuses active/saved/fresh reads, wrong labels/stations and unrelated failures. OUT remains saved-disk removal, not an evidence bypass.
+
 ## Resume and results
 
 ```powershell

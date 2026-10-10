@@ -313,6 +313,7 @@ fn concise_stage(message: &str) -> Option<String> {
 
 enum Command {
     Read(Station, u32),
+    Release(Station, u32),
     Out(Station),
     Status,
     Pause,
@@ -351,6 +352,11 @@ fn command(text: &str) -> Result<Command, String> {
     let suffix = chars.as_str().trim();
     if suffix == "OUT" {
         return Ok(Command::Out(station));
+    }
+    if let Some(number) = suffix.strip_prefix("RELEASE ") {
+        let disk = number.trim().parse::<u32>().ok().filter(|n| *n > 0 && *n < u32::MAX)
+            .ok_or("Use g release N with the exact interrupted label; first remove the disk after drive activity stops")?;
+        return Ok(Command::Release(station, disk));
     }
     if !suffix.bytes().all(|b| b.is_ascii_digit()) {
         return Err("Use digits after u/g, e.g. u1 / g2".into());
@@ -420,6 +426,16 @@ pub(super) fn next_action(state: &Value, station: Station, held: Option<(u32, &s
         match phase {
             "reading" => return format!("WAIT / DO NOT REMOVE {disk:03}"),
             "reserved" | "interrupted" => {
+                if phase == "interrupted"
+                    && station == Station::Greaseweazle
+                    && state["disks"][disk.to_string()]["error"]
+                        .as_str()
+                        .is_some_and(|e| e.starts_with("USB/GW readable bytes disagree;"))
+                {
+                    return format!(
+                        "CHECK IDENTITY {disk:03}; wrong label? Wait for drive idle, remove disk, then g release {disk}. Evidence kept; no automatic read"
+                    );
+                }
                 return format!(
                     "CHECK/RESEAT SAME {disk:03}, open tab, then {prefix}{disk}; QUIT stops new reads"
                 );
@@ -735,6 +751,25 @@ fn feed(
                         }
                         result.and_then(|_| display(&session, output, color, draining))
                     }
+                    Ok(Command::Release(station, disk)) => {
+                        if session.workers.contains_key(&(station as u8)) {
+                            Err(
+                                "Reader is active; do not remove the disk or release its identity"
+                                    .into(),
+                            )
+                        } else {
+                            session.coordinator.release_identity_mismatch(station, disk)
+                                .and_then(|_| {
+                                    if let Some(log) = telemetry.as_deref_mut() {
+                                        crate::dual_benchmark::record(log, "dual_identity_released",
+                                            json!({"disk":disk,"station":station_name(station),"rejected_evidence_preserved":true}))?;
+                                    }
+                                    terminal::banner(output, color, Cue::Action, "GW IDENTITY RELEASED / NO READ STARTED",
+                                        &format!("{disk:03} remains queued for its correct floppy. Rejected captures preserved, excluded from recovery. Check the next physical label, then gN."))?;
+                                    display(&session, output, color, draining)
+                                })
+                        }
+                    }
                     Ok(Command::Read(station, disk)) => {
                         let before = session.coordinator.status();
                         let priority = before["recovery_priorities"]
@@ -917,6 +952,11 @@ fn feed(
                             &if crate::cancellation::requested() {
                                 format!(
                                     "{error}\nSession stopping. Keep disks seated until the final STOPPED cue and drive activity has stopped. Pending labels remain resumable."
+                                )
+                            } else if error.starts_with("USB/GW readable bytes disagree;") {
+                                format!(
+                                    "{error}\nWrong label entered? After drive activity stops, remove that floppy and type g release {} (the interrupted number). Its correct disk stays queued; rejected evidence is preserved, not reused. Then insert the intended floppy and type its gN.",
+                                    ticket.disk
                                 )
                             } else {
                                 format!(

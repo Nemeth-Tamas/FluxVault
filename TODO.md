@@ -32,6 +32,8 @@ For operating the current build, start with [README](README.md), [the beginner/a
 
 ## 0. Development contract / project rules
 
+**136-disk pilot blocker (2026-10-10):** An accidentally entered GW transfer label (133 instead of 122) failed the USB/GW identity guard but left interrupted custody with no escape; OUT correctly refused non-saved evidence, and retry reused the mismatched capture. The targeted `g release N` escape now requires the exact interrupted USB-recovery identity disagreement and operator confirmation of removal/idle. It archives the unpublished job, preserves raw/decoded evidence and attempt slots, excludes rejected captures from donors, returns the label to the GW queue, and starts no read. Regression coverage checks wrong labels/stations/phases, stale tickets, durable queue restoration and exclusion; live completion of this pilot and a broader wrong-label correction UX/attribution review remain pending. Track follow-up under the existing all-decision provenance and production interruption/resume acceptance items; this note does not change the 473-item denominator.
+
 - [x] Rust stable, Windows-first application.
 - [x] CLI-only executable; remove the desktop window, file dialogs, GUI session state, and their dependencies without removing the shared workflow services.
 - [x] Keep long operations observable and interruptible from the terminal; physical reads, hashing, extraction, conversion, packaging, and Greaseweazle processes report progress on stderr and preserve logs.

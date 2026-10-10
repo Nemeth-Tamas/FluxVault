@@ -65,6 +65,60 @@ fn start(c: &mut Coordinator, station: Station, number: u32) -> Ticket {
 }
 
 #[test]
+fn identity_release_restores_exact_usb_queue_without_releasing_other_phases() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    let usb = start(&mut c, Station::Usb, 1);
+    evidence(&p, 1, 1, Station::Usb, &[2], 7);
+    c.complete(&usb, 1).unwrap();
+    c.removed(&usb, true).unwrap();
+    let original = fs::read(p.images_dir().join("001_attempt_001.img")).unwrap();
+    let gw = start(&mut c, Station::Greaseweazle, 1);
+    assert!(
+        c.release_identity_mismatch(Station::Greaseweazle, 1)
+            .is_err()
+    );
+    c.failed(&gw, "ordinary timeout").unwrap();
+    assert!(
+        c.release_identity_mismatch(Station::Greaseweazle, 1)
+            .is_err()
+    );
+    let gw = start(&mut c, Station::Greaseweazle, 1);
+    c.failed(
+        &gw,
+        "USB/GW readable bytes disagree; check disk identity. Queue unchanged, evidence preserved",
+    )
+    .unwrap();
+    assert!(c.release_identity_mismatch(Station::Usb, 1).is_err());
+    assert!(
+        c.release_identity_mismatch(Station::Greaseweazle, 2)
+            .is_err()
+    );
+    c.set_paused(true).unwrap();
+    c.release_identity_mismatch(Station::Greaseweazle, 1)
+        .unwrap();
+    assert!(c.held(Station::Greaseweazle).is_none());
+    assert_eq!(c.status()["usb_recovery_queue"], json!([1]));
+    assert_eq!(c.next_fresh_disk(), Some(2));
+    assert!(c.complete(&gw, 1).is_err());
+    assert_eq!(
+        fs::read(p.images_dir().join("001_attempt_001.img")).unwrap(),
+        original
+    );
+    drop(c);
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    c.set_paused(false).unwrap();
+    let fresh = start(&mut c, Station::Greaseweazle, 2);
+    c.failed(&fresh, "USB/GW readable bytes disagree;").unwrap();
+    assert!(
+        c.release_identity_mismatch(Station::Greaseweazle, 2)
+            .is_err()
+    );
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
 fn usb_triage_is_sealed_durable_and_clean_results_never_enter_recovery_priority() {
     let p = project();
     let mut c = Coordinator::open(p.clone(), Some(3), false).unwrap();

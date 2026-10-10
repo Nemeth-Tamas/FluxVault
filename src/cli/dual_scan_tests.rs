@@ -250,6 +250,75 @@ fn station_commands_require_positive_exact_labels_and_never_accept_blank_enter()
     assert!(matches!(command("quit"), Ok(Command::Quit)));
     assert!(matches!(command("p"), Ok(Command::Pause)));
     assert!(matches!(command("resume"), Ok(Command::Resume)));
+    assert!(matches!(
+        command("g release 133"),
+        Ok(Command::Release(Station::Greaseweazle, 133))
+    ));
+    for text in [
+        "g release",
+        "g release 0",
+        "g release -1",
+        "g release 4294967295",
+    ] {
+        assert!(command(text).is_err());
+    }
+}
+
+#[test]
+fn release_command_unblocks_another_label_without_reading_the_mistaken_one() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    let t = begin(&mut c, Station::Usb, 1).unwrap();
+    evidence(&p, &t, 1, &[1]);
+    c.complete(&t, 1).unwrap();
+    c.removed(&t, true).unwrap();
+    let t = begin(&mut c, Station::Greaseweazle, 1).unwrap();
+    c.failed(&t, "USB/GW readable bytes disagree; check disk identity")
+        .unwrap();
+    let (tx, rx) = mpsc::sync_channel(64);
+    let producer = tx.clone();
+    let fixture = p.clone();
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = reads.clone();
+    let reader: Reader = Arc::new(move |ticket, _, _| {
+        assert_eq!(ticket.disk, 2);
+        observed.fetch_add(1, Ordering::SeqCst);
+        evidence(&fixture, &ticket, 1, &[]);
+        Ok(ReadDone {
+            attempt: 1,
+            flux: None,
+        })
+    });
+    let worker = thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = feed(
+            session(c),
+            rx,
+            producer,
+            reader,
+            None,
+            None,
+            &mut output,
+            false,
+            None,
+            &Cues::start(false),
+        )
+        .unwrap();
+        (result, String::from_utf8(output).unwrap())
+    });
+    for text in ["g release 2", "g out", "g release 1", "g2"] {
+        tx.send(Event::Input(Some(text.into()))).unwrap();
+    }
+    wait_phase(&p, 2, "saved");
+    tx.send(Event::Input(Some("g out".into()))).unwrap();
+    tx.send(Event::Input(Some("QUIT".into()))).unwrap();
+    let (result, output) = worker.join().unwrap();
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(result["state"]["usb_recovery_queue"], json!([1]));
+    assert_eq!(result["state"]["disks"]["2"]["phase"], "complete");
+    assert!(output.contains("GW IDENTITY RELEASED / NO READ STARTED"));
+    assert!(output.contains("NO NEW READ"));
+    fs::remove_dir_all(p.root()).unwrap();
 }
 
 #[test]

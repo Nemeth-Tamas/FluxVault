@@ -122,6 +122,75 @@ fn mixed() -> Fixture {
         result,
     }
 }
+
+#[test]
+fn released_wrong_identity_recaptures_in_a_new_slot_and_never_reuses_wrong_bytes() {
+    let (project, mut original) = fixture(&[vec![33]]);
+    // The extraction fixture omits physical BPB geometry; auto-format tests
+    // need a coherent 80-cylinder, 2-head, 18-sector synthetic boot record.
+    original[24..26].copy_from_slice(&18u16.to_le_bytes());
+    original[26..28].copy_from_slice(&2u16.to_le_bytes());
+    let mut wrong = original.clone();
+    wrong[35 * 512..36 * 512].fill(0xEE);
+    wrong[34 * 512..35 * 512].fill(0);
+    let mut backend = Mock {
+        bytes: wrong,
+        reads: 0,
+    };
+    let mut policy = flux_recovery::RecoveryPolicy::default();
+    policy.passes.truncate(1);
+    let error = flux_recovery::recover_auto_checked(
+        &project,
+        1,
+        'B',
+        policy.clone(),
+        &mut backend,
+        &|_| {},
+        &|_, _| Err("USB/GW readable bytes disagree; wrong label".into()),
+    )
+    .unwrap_err();
+    assert!(
+        error.starts_with("USB/GW readable bytes disagree;"),
+        "{error}"
+    );
+    assert_eq!(backend.reads, 1);
+    let old_raw = fs::read(project.root().join("Flux/001_attempt_001.scp")).unwrap();
+    flux_recovery::reject_identity_job(&project, 1, 99).unwrap();
+    backend.bytes = original.clone();
+    backend.bytes[34 * 512..35 * 512].fill(0);
+    let result = flux_recovery::recover_auto_checked(
+        &project,
+        1,
+        'B',
+        policy,
+        &mut backend,
+        &|_| {},
+        &|bytes, bad| {
+            assert_eq!(bad, &[34]);
+            assert_eq!(&bytes[35 * 512..36 * 512], &original[35 * 512..36 * 512]);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(backend.reads, 2);
+    assert_eq!(result.physical_reads_this_run, 1);
+    assert_eq!(result.capture_attempts, vec![2]);
+    assert_eq!(
+        fs::read(project.root().join("Flux/001_attempt_001.scp")).unwrap(),
+        old_raw
+    );
+    let status = flux_capture::inspect_disk(&project, 1).unwrap();
+    assert_eq!(status.captures.len(), 1);
+    assert_eq!(status.captures[0].attempt, 2);
+    assert!(status.decodes.iter().all(|d| d.capture_attempt == 2));
+    flux_recovery::verify_completed_result(&project, &result).unwrap();
+    let meta: Value =
+        serde_json::from_slice(&fs::read(result.image.with_extension("json")).unwrap()).unwrap();
+    flux_recovery::verify_catalog_metadata(&project.images_dir(), &meta).unwrap();
+    // Completed catalog images cannot later be "released" as mistakes.
+    assert!(flux_recovery::reject_identity_job(&project, 1, 100).is_err());
+    fs::remove_dir_all(project.root()).unwrap();
+}
 fn metadata(f: &Fixture) -> (PathBuf, Value) {
     let path = f.result.image.with_extension("json");
     let value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();

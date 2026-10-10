@@ -115,6 +115,9 @@ struct Journal {
     policy: RecoveryPolicy,
     stages: Vec<Stage>,
     result: Option<RecoveryResult>,
+    /// Operator-rejected identity evidence stays on disk but is never a donor.
+    #[serde(default)]
+    rejected_capture_attempts: BTreeSet<u32>,
 }
 
 fn capture_remaining_ms(job: &Journal, index: usize, now: u64) -> u64 {
@@ -603,6 +606,7 @@ fn recover_impl(
             policy: policy.clone(),
             stages: Vec::new(),
             result: None,
+            rejected_capture_attempts: BTreeSet::new(),
         }
     };
     if j.schema_version != 1
@@ -627,6 +631,13 @@ fn recover_impl(
     }
     for stage in &j.stages {
         stage.settings.validate()?;
+    }
+    let rejected = rejected_capture_attempts(project, disk)?;
+    if j.stages
+        .iter()
+        .any(|s| rejected.contains(&s.capture_attempt))
+    {
+        return Err("Current recovery references identity-rejected captures; no read or publication authorized".into());
     }
     if j.stage_budget_version > 1 {
         return Err("Unsupported recovery stage budget version".to_owned());
@@ -1048,6 +1059,202 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .and_then(|_| file.sync_all())
         .map_err(|e| e.to_string())
+}
+
+fn identity_job(
+    project: &ProjectState,
+    disk: u32,
+) -> Result<Option<(std::path::PathBuf, Vec<u8>, Journal)>, String> {
+    let flux = flux_capture::project_flux_dir(project)?;
+    let dir = flux.join("Recovery");
+    if !dir.try_exists().map_err(|e| e.to_string())? {
+        return Ok(None);
+    }
+    let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+    if dir.parent() != Some(flux.as_path()) {
+        return Err("Recovery directory escapes Flux".into());
+    }
+    let path = dir.join(format!("{disk:03}_job.json"));
+    let info = match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+        Ok(info) => info,
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if info.file_attributes() & 0x400 != 0 {
+            return Err("Unsafe recovery journal reparse point".into());
+        }
+    }
+    if !info.is_file() || info.len() > 1048576 {
+        return Err("Unsafe or oversized recovery journal".into());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .map_err(|e| e.to_string())?
+        .take(1048577)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 1048576 {
+        return Err("Oversized recovery journal".into());
+    }
+    let job: Journal = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if job.schema_version != 1
+        || job.disk != disk
+        || job.rejected_capture_attempts.len() > 4096
+        || job.rejected_capture_attempts.contains(&0)
+    {
+        return Err("Invalid identity recovery journal".into());
+    }
+    Ok(Some((path, bytes, job)))
+}
+
+pub(crate) fn rejected_capture_attempts(
+    project: &ProjectState,
+    disk: u32,
+) -> Result<BTreeSet<u32>, String> {
+    // Immutable rejection archives, not the mutable current job, own this
+    // exclusion. Older catalog replay must not depend on a later job's schema.
+    let flux = flux_capture::project_flux_dir(project)?;
+    let dir = flux.join("Recovery");
+    if !dir.try_exists().map_err(|e| e.to_string())? {
+        return Ok(BTreeSet::new());
+    }
+    let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+    if dir.parent() != Some(flux.as_path()) {
+        return Err("Rejection directory escapes Flux".into());
+    }
+    let prefix = format!("{disk:03}_identity_rejected_");
+    let mut rejected = BTreeSet::new();
+    let mut count = 0;
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name
+            .strip_prefix(&prefix)
+            .and_then(|n| n.strip_suffix(".json"))
+            .and_then(|n| n.parse::<u64>().ok())
+            .is_none()
+        {
+            continue;
+        }
+        count += 1;
+        if count > 4096 {
+            return Err("Too many identity rejection records".into());
+        }
+        let info = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if info.file_attributes() & 0x400 != 0 {
+                return Err("Unsafe identity rejection reparse point".into());
+            }
+        }
+        if !info.is_file() || info.len() > 1048576 {
+            return Err("Unsafe identity rejection record".into());
+        }
+        let mut bytes = Vec::new();
+        fs::File::open(entry.path())
+            .map_err(|e| e.to_string())?
+            .take(1048577)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 1048576 {
+            return Err("Oversized identity rejection record".into());
+        }
+        let job: Journal = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if job.disk != disk
+            || job.schema_version != 1
+            || job.result.is_some()
+            || job.stages.len() > 8
+        {
+            return Err("Invalid identity rejection binding".into());
+        }
+        rejected.extend(job.stages.iter().map(|s| s.capture_attempt));
+        rejected.extend(job.rejected_capture_attempts);
+        if rejected.len() > 4096 || rejected.contains(&0) {
+            return Err("Invalid rejected capture inventory".into());
+        }
+    }
+    Ok(rejected)
+}
+
+/// Under the project owner, archive an UNPUBLISHED mismatched job and restart
+/// with fresh attempt slots. Original raw/decoded bytes and IDs remain intact.
+pub(crate) fn reject_identity_job(
+    project: &ProjectState,
+    disk: u32,
+    generation: u64,
+) -> Result<(), String> {
+    let Some((path, bytes, mut job)) = identity_job(project, disk)? else {
+        return Ok(());
+    };
+    if job.result.is_some() {
+        return Err("Cannot release a published recovery result as a mistaken identity".into());
+    }
+    job.policy.validate()?;
+    if job.stages.len() > job.policy.passes.len()
+        || job.stages.iter().any(|s| s.capture_attempt == 0)
+    {
+        return Err("Invalid recovery stages; identity release refused".into());
+    }
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.parent().unwrap().join(format!("{disk:03}.lock")))
+        .map_err(|e| e.to_string())?;
+    lock.try_lock()
+        .map_err(|_| "Recovery is still active; identity release refused".to_string())?;
+    let archive = path.with_file_name(format!("{disk:03}_identity_rejected_{generation}.json"));
+    if archive.try_exists().map_err(|e| e.to_string())? {
+        let info = fs::symlink_metadata(&archive).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if info.file_attributes() & 0x400 != 0 {
+                return Err("Unsafe rejection archive".into());
+            }
+        }
+        if !info.is_file() || info.len() > 1048576 {
+            return Err("Unsafe rejection archive".into());
+        }
+        let old = fs::read(&archive).map_err(|e| e.to_string())?;
+        let archived: Journal = serde_json::from_slice(&old).map_err(|e| e.to_string())?;
+        if archived.disk != disk || archived.schema_version != 1 || archived.result.is_some() {
+            return Err("Changed identity rejection archive; release refused".into());
+        }
+        if job.stages.is_empty()
+            && archived
+                .stages
+                .iter()
+                .all(|s| job.rejected_capture_attempts.contains(&s.capture_attempt))
+        {
+            // Journal reset committed, but production custody commit was interrupted.
+            return Ok(());
+        }
+        if old != bytes {
+            return Err("Changed identity rejection archive; release refused".into());
+        }
+    }
+    if fs::read(&path).map_err(|e| e.to_string())? != bytes {
+        return Err("Recovery job changed during identity release".into());
+    }
+    job.rejected_capture_attempts
+        .extend(job.stages.iter().map(|s| s.capture_attempt));
+    if job.rejected_capture_attempts.len() > 4096 {
+        return Err("Identity rejection history exceeds bound".into());
+    }
+    if !archive.try_exists().map_err(|e| e.to_string())? {
+        write_new(&archive, &bytes)?;
+    }
+    job.stages.clear();
+    job.started_unix_ms = external_tools::current_unix_ms();
+    job.empty_capture_budget_restarts.clear();
+    job.stage_budget_version = 1;
+    save_journal(&path, &job)
 }
 
 /// Read a completed job's selected format; this hint never replaces hash checks.
@@ -1653,6 +1860,59 @@ fn publish(
 mod tests {
     use super::*;
 
+    #[test]
+    fn identity_rejection_preserves_bytes_excludes_old_capture_and_keeps_slots() {
+        let p = ProjectState::create_without_session(std::env::temp_dir().join(format!(
+            "fv-identity-release-{}-{}",
+            std::process::id(),
+            external_tools::current_unix_ms()
+        )))
+        .unwrap();
+        let flux = flux_capture::project_flux_dir(&p).unwrap();
+        fs::create_dir_all(flux.join("Recovery")).unwrap();
+        let path = flux.join("Recovery/023_job.json");
+        let job = clock_job();
+        let bytes = serde_json::to_vec(&job).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        fs::write(
+            flux.join("023_attempt_001.scp"),
+            b"wrong disk flux retained",
+        )
+        .unwrap();
+        fs::write(flux.join("023_attempt_001.json"), b"{}").unwrap();
+        reject_identity_job(&p, 23, 8).unwrap();
+        reject_identity_job(&p, 23, 8).unwrap(); // Restart between the two commits.
+        assert_eq!(
+            fs::read(flux.join("Recovery/023_identity_rejected_8.json")).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            fs::read(flux.join("023_attempt_001.scp")).unwrap(),
+            b"wrong disk flux retained"
+        );
+        let restarted: Journal = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(restarted.stages.is_empty() && restarted.result.is_none());
+        assert_eq!(
+            rejected_capture_attempts(&p, 23).unwrap(),
+            BTreeSet::from([1])
+        );
+        assert!(flux_capture::latest_capture_attempt(&p, 23).is_err());
+        assert!(flux_capture::inspect_disk(&p, 23).is_err());
+        fs::write(flux.join("023_attempt_002.json"), b"{}").unwrap();
+        assert_eq!(flux_capture::latest_capture_attempt(&p, 23).unwrap(), 2);
+        let status = flux_capture::inspect_disk(&p, 23).unwrap();
+        assert_eq!(status.captures.len(), 1);
+        assert_eq!(status.captures[0].attempt, 2);
+        // A later mutable job cannot erase the exclusion ledger.
+        fs::write(&path, b"{}").unwrap();
+        assert_eq!(
+            rejected_capture_attempts(&p, 23).unwrap(),
+            BTreeSet::from([1])
+        );
+        assert!(reject_identity_job(&p, 23, 9).is_err());
+        fs::remove_dir_all(p.root()).unwrap();
+    }
+
     fn clock_job() -> Journal {
         Journal {
             schema_version: 1,
@@ -1665,6 +1925,7 @@ mod tests {
             stage_budget_version: 1,
             policy: RecoveryPolicy::default(),
             result: None,
+            rejected_capture_attempts: BTreeSet::new(),
             stages: vec![Stage {
                 capture_attempt: 1,
                 decode_attempt: None,
