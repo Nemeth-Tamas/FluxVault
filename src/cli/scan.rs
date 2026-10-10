@@ -1,375 +1,373 @@
-//! Guided, single-drive acquisition loop. Every media change requires an operator confirmation.
-
-use std::io::{self, BufRead, Write};
-
-use serde_json::json;
-
-use crate::{
-    project::ProjectState,
-    recovery_plan::{self, RecoveryAction},
-};
-
+//! USB feeding shares sealed production custody and the saved-file queue.
 use super::{
     CliResponse, acquire,
-    audible::{Cues, Outcome, Station},
+    audible::{self, Cues, Station},
     terminal::{self, Cue},
 };
+use crate::{
+    production::{Coordinator, Station as PhysicalStation, Ticket},
+    project::ProjectState,
+};
+use serde_json::{Value, json};
+use std::{
+    fs,
+    io::{self, BufRead, Write},
+};
 
-struct ScanConfig<'a> {
-    json_output: bool,
-    drive: Option<&'a str>,
-    count: Option<usize>,
-    write_blocker_verified: bool,
-    sound: bool,
+pub(super) struct Options {
+    pub json: bool,
+    pub drive: String,
+    pub retries: usize,
+    pub count: Option<usize>,
+    pub last: Option<u32>,
+    pub protected: bool,
+    pub workers: usize,
+    pub acquisition_only: bool,
+    pub sound: bool,
+    pub color: bool,
 }
-
-pub(super) fn run(
-    project: &mut ProjectState,
-    json_output: bool,
-    drive: Option<&str>,
-    retries: usize,
-    count: Option<usize>,
-    write_blocker_verified: bool,
-    sound: bool,
-) -> Result<CliResponse, String> {
-    let _control = crate::run_control::Session::start(project, "usb_scan")?;
-    let mut stderr = io::stderr().lock();
-    run_with_io(
-        project,
-        ScanConfig {
-            json_output,
-            drive,
-            count,
-            write_blocker_verified,
-            sound,
-        },
-        crate::run_control::Input::stdin(),
-        &mut stderr,
-        |project, disk| acquire::run(project, false, drive, Some(disk), retries, true),
-    )
-}
-
-fn run_with_io<
-    R: BufRead,
-    W: Write,
-    F: FnMut(&ProjectState, u32) -> Result<CliResponse, String>,
->(
-    project: &mut ProjectState,
-    config: ScanConfig<'_>,
-    mut input: R,
-    output: &mut W,
-    mut acquire_disk: F,
-) -> Result<CliResponse, String> {
-    if !config.write_blocker_verified {
-        return Err("Scan is blocked until the drive/write blocker has been independently verified with a known-good disposable disk. Do not validate using customer media.".to_owned());
-    }
-    let drive = config.drive.ok_or("scan requires --drive LETTER:")?;
-    if config.count == Some(0) {
-        return Err("--count must be positive".to_owned());
-    }
-    let mut scanned = 0usize;
-    let mut partial = 0usize;
-    let sounds = Cues::start(config.sound);
-    loop {
-        crate::cancellation::check()?;
-        if config.count.is_some_and(|limit| scanned >= limit) {
-            break;
+impl Options {
+    fn validate(&self) -> Result<(), String> {
+        if !self.protected {
+            return Err("Scan is blocked until the drive/write blocker has been independently verified with a known-good disposable disk. Do not validate using customer media.".into());
         }
-        let disk = project.current_disk_number();
-        let next = disk.checked_add(1).ok_or("Disk number overflow")?;
-        writeln!(
-            output,
-            "Insert floppy {disk:03} in USB {drive} with its write-protect tab set. Type {disk:03} to confirm its label (legacy READ also accepted), QUIT to drain, or STOP to cancel:"
-        )
-        .map_err(|error| format!("Cannot display scan prompt: {error}"))?;
-        output
-            .flush()
-            .map_err(|error| format!("Cannot flush scan prompt: {error}"))?;
-        let mut answer = String::new();
-        if input
-            .read_line(&mut answer)
-            .map_err(|error| format!("Cannot read scan confirmation: {error}"))?
-            == 0
+        if self.count == Some(0)
+            || self.retries > 10
+            || !(1..=16).contains(&self.workers)
+            || self.last.is_some_and(|n| n == 0 || n == u32::MAX)
         {
-            break;
+            return Err("Invalid USB scan count, endpoint, retry cap or worker count".into());
         }
-        match answer.trim().to_ascii_uppercase().as_str() {
-            "QUIT" | "Q" => break,
-            "READ" => {}
-            number if number.parse::<u32>().ok() == Some(disk) => {}
-            _ => {
-                writeln!(
-                    output,
-                    "No read started. Type {disk:03} or QUIT (legacy READ also accepted)."
-                )
-                .map_err(|error| format!("Cannot display scan prompt: {error}"))?;
-                continue;
-            }
+        Ok(())
+    }
+}
+
+pub(super) fn run(project: &mut ProjectState, options: Options) -> Result<CliResponse, String> {
+    options.validate()?;
+    crate::processing::validate_workspace(project)?;
+    let _control = crate::run_control::Session::start(project, "usb_scan")?;
+    let _device = super::media_reservation::UsbReservation::acquire(&options.drive)?;
+    // Preflight before insertion; acquisition-only explicitly opts out.
+    let request = if options.acquisition_only {
+        None
+    } else {
+        let settings = project.tool_settings()?;
+        let audit = project.logs_dir().join("external-tools.jsonl");
+        let mut paths = Vec::new();
+        for kind in [
+            crate::external_tools::ToolKind::SevenZip,
+            crate::external_tools::ToolKind::LibreOffice,
+        ] {
+            eprintln!(
+                "Before feeding USB disks: checking {}...",
+                kind.display_name()
+            );
+            paths.push(crate::external_tools::find_ready_tool(
+                kind,
+                settings.path(kind),
+                &audit,
+            )?);
         }
-        let response = match acquire_disk(project, disk) {
-            Ok(response) => response,
-            Err(error) => {
-                terminal::banner(
-                    output,
-                    false,
-                    Cue::Error,
-                    &format!("USB {drive} / READ FAILED {disk:03} / NUMBER NOT ADVANCED"),
-                    "Evidence retained. On cancellation wait for STOPPED and drive idle before moving the disk.",
-                )?;
-                if !crate::cancellation::requested() {
-                    sounds.notify(Station::Usb, Outcome::Failed);
-                }
-                return Err(error);
-            }
-        };
-        if response.exit_code != 0 && response.exit_code != 3 {
-            return Err(format!("Acquisition for floppy {disk:03} did not complete"));
-        }
-        project.set_current_disk_number_without_session(next)?;
-        partial += usize::from(response.exit_code == 3);
-        scanned += 1;
-        writeln!(output, "{}", response.output)
-            .map_err(|error| format!("Cannot display scan result: {error}"))?;
-        terminal::banner(
-            output,
-            false,
-            if response.exit_code == 0 {
-                Cue::Success
-            } else {
-                Cue::Error
-            },
-            &format!(
-                "USB {drive} / {} SAVED {disk:03} / REMOVE {disk:03}",
-                if response.exit_code == 0 {
-                    "OK"
-                } else {
-                    "PARTIAL"
-                }
-            ),
-            "Image and acquisition metadata saved. Safe to swap; follow the next prompt.",
-        )?;
-        sounds.notify(
-            Station::Usb,
-            if response.exit_code == 0 {
-                Outcome::Saved
-            } else {
-                Outcome::PartialSaved
-            },
+        Some(crate::pipeline::PipelineRequest {
+            project: project.clone(),
+            seven_zip_executable: paths.remove(0),
+            libreoffice_executable: paths.remove(0),
+            command_audit_path: audit,
+            conversion_workers: options.workers,
+        })
+    };
+    let last = options.last.or(crate::production::status(project)?["last"]
+        .as_u64()
+        .map(|n| n as u32));
+    let mut coordinator = Coordinator::open(project.clone(), last, false)?;
+    if coordinator.held(PhysicalStation::Greaseweazle).is_some() {
+        return Err(
+            "GW has recorded custody; resume dual mode to resolve it before USB-only feeding"
+                .into(),
         );
     }
-    let queue = recovery_plan::plan_project(&project.images_dir())?
-        .into_iter()
-        .filter(|plan| plan.action != RecoveryAction::Complete)
-        .map(|plan| plan.disk_number)
-        .collect::<Vec<_>>();
-    Ok(CliResponse {
-        output: if config.json_output {
-            json!({
-                "project": project.root(),
-                "scanned": scanned,
-                "partial_this_session": partial,
-                "next_disk": project.current_disk_number(),
-                "recovery_queue": queue,
-                "source_media_access": "read_only"
-            })
-            .to_string()
+    let queue = request
+        .as_ref()
+        .map(|r| crate::processing::Queue::start_shared(r.clone(), coordinator.owner()))
+        .transpose()?;
+    if let Some(queue) = &queue {
+        for (disk, attempt) in coordinator.saved_attempts() {
+            enqueue(project, queue, disk, attempt)?;
+        }
+        eprintln!(
+            "USB BACKGROUND PROCESSING ON / swap cues do not wait for conversions. `fv processing status` shows work."
+        );
+    }
+    let mut response = feed(
+        project,
+        &mut coordinator,
+        &options,
+        crate::run_control::Input::stdin(),
+        &mut io::stderr(),
+        |p, t| {
+            if t.retry {
+                let attempts = crate::imaging::load_attempts_for_disk(&p.images_dir(), t.disk)?;
+                if let Some(a) = attempts
+                    .iter()
+                    .rev()
+                    .find(|a| !a.legacy_image && matches!(a.status.as_str(), "OK" | "PARTIAL"))
+                {
+                    let meta: Value = serde_json::from_slice(
+                        &fs::read(&a.metadata_path).map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if meta["source_backend"] != "windows-raw-sector" {
+                        return Err(
+                            "Interrupted USB label has another backend; no reread started".into(),
+                        );
+                    }
+                    return Ok(a.attempt_number); // complete() verifies all artifacts.
+                }
+            }
+            acquire::image_reserved(p, &options.drive, t.disk, options.retries)
+                .map(|r| r.attempt_number)
+        },
+        |p, disk, attempt| {
+            if let Some(q) = &queue {
+                enqueue(p, q, disk, attempt)?;
+            }
+            Ok(())
+        },
+    )?;
+    let background = queue.map(|q| q.finish());
+    let mut value: Value = serde_json::from_str(&response.output).map_err(|e| e.to_string())?;
+    if let Some(request) = &request
+        && !coordinator.saved_attempts().is_empty()
+    {
+        eprintln!(
+            "USB FEEDING FINISHED / offline recovery, audit and reconciliation; no insertion requested."
+        );
+        let result = crate::pipeline::run_pipeline_incremental(request, &|s| eprintln!("{s}"))?;
+        let summary = crate::processing::summary(&result);
+        crate::processing::record_final(project, &summary)?;
+        if summary["exit_code"] != 0 {
+            response.exit_code = 3;
+        }
+        value["processing"] = summary;
+    }
+    if let Some(background) = background {
+        if !background.errors.is_empty() {
+            response.exit_code = 3;
+        }
+        value["background_processing"] =
+            serde_json::to_value(background).map_err(|e| e.to_string())?;
+    }
+    response.output = if options.json {
+        value.to_string()
+    } else {
+        format!(
+            "USB scan stopped: {} saved this session. Next disk: {:03}. Pending GW transfers: {}.\nSaved custody/removal stays explicit; `fv status` shows the next safe action. Files process automatically unless --acquisition-only was selected.",
+            value["scanned"],
+            project.current_disk_number(),
+            value["recovery_queue"]
+        )
+    };
+    Ok(response)
+}
+
+fn enqueue(
+    project: &ProjectState,
+    queue: &crate::processing::Queue,
+    disk: u32,
+    attempt: u32,
+) -> Result<(), String> {
+    let attempts = crate::imaging::load_attempts_for_disk(&project.images_dir(), disk)?;
+    let source = attempts
+        .iter()
+        .find(|a| a.attempt_number == attempt)
+        .ok_or("Sealed USB acquisition missing")?;
+    queue.enqueue_attempt(disk, attempt, &source.sha256)
+}
+
+fn sync_cursor(project: &mut ProjectState, coordinator: &Coordinator) -> Result<(), String> {
+    let _snapshot = crate::project_work::snapshot(project.root())?;
+    *project = ProjectState::open_without_session(project.root().to_owned())?;
+    let next = coordinator.resume_cursor();
+    let held = coordinator.held(PhysicalStation::Usb).map(|(t, _)| t.disk);
+    if project.current_disk_number() != next && held != Some(project.current_disk_number()) {
+        return Err("Project cursor was externally changed; sealed USB evidence retained, no cursor overwritten".into());
+    }
+    if project.current_disk_number() != next {
+        project.set_current_disk_number_without_session(next)?;
+    }
+    Ok(())
+}
+
+// Boundary injects physical read/publication callbacks without touching media in tests.
+#[allow(clippy::too_many_arguments)]
+fn feed<R: BufRead, W: Write, F, E>(
+    project: &mut ProjectState,
+    coordinator: &mut Coordinator,
+    options: &Options,
+    mut input: R,
+    output: &mut W,
+    mut read: F,
+    mut enqueued: E,
+) -> Result<CliResponse, String>
+where
+    F: FnMut(&ProjectState, &Ticket) -> Result<u32, String>,
+    E: FnMut(&ProjectState, u32, u32) -> Result<(), String>,
+{
+    options.validate()?;
+    let cues = Cues::start(options.sound);
+    let mut scanned = 0;
+    let mut partial = 0;
+    loop {
+        crate::cancellation::check()?;
+        if let Some((ticket, phase)) = coordinator.held(PhysicalStation::Usb)
+            && phase == "saved"
+        {
+            let state = coordinator.status();
+            let attempt = state["disks"][ticket.disk.to_string()]["usb"]["attempt"]
+                .as_u64()
+                .ok_or("Saved USB receipt missing")? as u32;
+            enqueued(project, ticket.disk, attempt)?;
+            sync_cursor(project, coordinator)?;
+        }
+        if options.count.is_some_and(|n| scanned >= n) {
+            break;
+        }
+        let held = coordinator.held(PhysicalStation::Usb);
+        let pending = held
+            .as_ref()
+            .filter(|(_, p)| p != "saved")
+            .map(|(t, _)| t.disk);
+        let offered = pending.or_else(|| coordinator.next_fresh_disk());
+        if offered.is_none() && held.is_none() {
+            break;
+        }
+        let removal = held
+            .as_ref()
+            .filter(|(_, p)| p == "saved")
+            .map(|(t, _)| t.disk);
+        if let Some(disk) = offered {
+            writeln!(output, "Insert floppy {disk:03} in USB {} with its write-protect hole OPEN. Type {disk:03} to confirm its label (legacy READ accepted), OUT after prior removal, PAUSE/RESUME, STATUS, QUIT to drain, or STOP:", options.drive).map_err(|e|e.to_string())?;
+            if let Some(old) = removal {
+                writeln!(output, "Confirming {disk:03} also confirms REMOVE {old:03}; partial disks must be set aside for GW.").map_err(|e|e.to_string())?;
+            }
         } else {
-            format!(
-                "Scan stopped: {scanned} disk(s) imaged, {partial} partial in this session. Next disk: {:03}. Recovery queue: {}.",
-                project.current_disk_number(),
-                queue.len()
+            writeln!(output, "USB BATCH FINISHED / REMOVE {:03}. Type OUT after removal, or QUIT (custody stays saved). No next insertion.", removal.unwrap()).map_err(|e|e.to_string())?;
+        }
+        output.flush().map_err(|e| e.to_string())?;
+        let mut answer = String::new();
+        if input.read_line(&mut answer).map_err(|e| e.to_string())? == 0 {
+            break;
+        }
+        let answer = answer.trim().to_ascii_uppercase();
+        match answer.as_str() {
+            "Q" | "QUIT" => break,
+            "STOP" => {
+                crate::cancellation::current().request();
+                crate::cancellation::check()?;
+            }
+            "STATUS" => {
+                writeln!(output, "{}", coordinator.status()).map_err(|e| e.to_string())?;
+                continue;
+            }
+            "PAUSE" | "RESUME" => {
+                coordinator.set_paused(answer == "PAUSE")?;
+                writeln!(output,"USB feeding {}; saved-file processing continues. STATUS, OUT, RESUME or QUIT remain available.",if coordinator.paused(){"paused"}else{"resumed"}).map_err(|e|e.to_string())?;
+                continue;
+            }
+            "OUT" => {
+                if let Some((t, p)) = &held
+                    && p == "saved"
+                {
+                    coordinator.removed(t, true)?;
+                } else {
+                    writeln!(output, "No saved USB disk can be removed; do not move interrupted/reading media until stopped.").map_err(|e|e.to_string())?;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        let Some(disk) =
+            offered.filter(|n| answer == "READ" || answer.parse::<u32>().ok() == Some(*n))
+        else {
+            writeln!(
+                output,
+                "No read started. Confirm the displayed exact label or QUIT."
             )
-        },
-        exit_code: if partial > 0 || !queue.is_empty() {
-            3
-        } else {
-            0
-        },
-    })
+            .map_err(|e| e.to_string())?;
+            continue;
+        };
+        if coordinator.paused() {
+            writeln!(
+                output,
+                "Feeding is paused. Type RESUME before confirming the next label."
+            )
+            .map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some((t, p)) = &held
+            && p == "saved"
+        {
+            coordinator.removed(t, true)?;
+        }
+        let ticket = coordinator.claim(PhysicalStation::Usb, disk)?;
+        coordinator.confirm(&ticket, &disk.to_string(), true)?;
+        let attempt = match read(project, &ticket) {
+            Ok(a) => a,
+            Err(e) => {
+                coordinator.failed(&ticket, &e.chars().take(1000).collect::<String>())?;
+                terminal::banner(
+                    output,
+                    options.color,
+                    Cue::Error,
+                    &format!("USB READ FAILED {disk:03} / NUMBER NOT ADVANCED"),
+                    "Evidence retained. Resume/reconfirm this SAME label; wait for STOPPED and drive idle on cancellation.",
+                )?;
+                if !crate::cancellation::requested() {
+                    cues.notify(Station::Usb, audible::Outcome::Failed);
+                }
+                return Err(e);
+            }
+        };
+        if let Err(error) = coordinator.complete(&ticket, attempt) {
+            coordinator.failed(&ticket, &error.chars().take(1000).collect::<String>())?;
+            return Err(format!(
+                "USB evidence verification failed; label {disk:03} NOT advanced: {error}"
+            ));
+        }
+        enqueued(project, disk, attempt)?; // Durable handoff BEFORE numbering.
+        sync_cursor(project, coordinator)?;
+        let state = coordinator.status();
+        let bad = state["disks"][disk.to_string()]["usb"]["bad"]
+            .as_array()
+            .ok_or("USB bad-sector map missing")?
+            .len();
+        partial += usize::from(bad > 0);
+        scanned += 1;
+        terminal::banner(
+            output,
+            options.color,
+            if bad == 0 { Cue::Success } else { Cue::Error },
+            &format!(
+                "USB / {} SAVED {disk:03} / REMOVE {disk:03}",
+                if bad == 0 { "OK" } else { "PARTIAL" }
+            ),
+            if bad == 0 {
+                "Durable image/log/map/metadata verified. Safe to swap after the written cue."
+            } else {
+                "Saved partial / SET ASIDE FOR GW. USB may continue. Transfer queue is durable; exact label required at GW."
+            },
+        )?;
+        cues.notify(Station::Usb, audible::saved_outcome(Station::Usb, bad > 0));
+    }
+    let state = coordinator.status();
+    let queue = state["usb_transfer_pending"].clone();
+    let attention = partial > 0 || queue.as_array().is_some_and(|a| !a.is_empty());
+    Ok(CliResponse { output: json!({"project":project.root(),"scanned":scanned,"partial_this_session":partial,
+        "next_disk":project.current_disk_number(),"recovery_queue":queue,"custody":state,
+        "retry_policy":{"maximum_usb_retry_passes":options.retries,"first_retry":"backward","second_retry":"forward","default":"speed_first_to_gw","missing_bytes":"image_only_zero_fill_with_explicit_map"},
+        "source_media_access":"read_only"}).to_string(), exit_code: if attention {3} else {0} })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{
-        fs,
-        io::Cursor,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    #[test]
-    fn guided_scan_requires_confirmation_and_persists_next_disk() {
-        let root = std::env::temp_dir().join(format!(
-            "fluxvault-cli-scan-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let mut project = ProjectState::create_without_session(root.clone()).unwrap();
-        let mut output = Vec::new();
-        let mut attempted = Vec::new();
-        let response = run_with_io(
-            &mut project,
-            ScanConfig {
-                json_output: true,
-                drive: Some("A:"),
-                count: Some(2),
-                write_blocker_verified: true,
-                sound: false,
-            },
-            Cursor::new(b"wrong\nREAD\nREAD\n"),
-            &mut output,
-            |_, disk| {
-                attempted.push(disk);
-                Ok(CliResponse {
-                    output: format!("synthetic disk {disk}"),
-                    exit_code: 0,
-                })
-            },
-        )
-        .unwrap();
-        assert_eq!(attempted, vec![1, 2]);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&response.output).unwrap()["next_disk"],
-            3
-        );
-        assert_eq!(
-            ProjectState::open_without_session(root.clone())
-                .unwrap()
-                .current_disk_number(),
-            3
-        );
-        assert!(
-            String::from_utf8(output)
-                .unwrap()
-                .contains("No read started")
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn usb_scan_accepts_exact_number_without_read_prefix_and_refuses_wrong_or_blank_labels() {
-        let root = std::env::temp_dir().join(format!(
-            "fv-usb-numbered-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let mut project = ProjectState::create_without_session(root.clone()).unwrap();
-        let mut attempted = Vec::new();
-        let response = run_with_io(
-            &mut project,
-            ScanConfig {
-                json_output: true,
-                drive: Some("A:"),
-                count: Some(2),
-                write_blocker_verified: true,
-                sound: false,
-            },
-            Cursor::new(b"\n002\n1\n001\n002\n"),
-            &mut Vec::new(),
-            |_, disk| {
-                attempted.push(disk);
-                Ok(CliResponse {
-                    output: "synthetic".into(),
-                    exit_code: 0,
-                })
-            },
-        )
-        .unwrap();
-        assert_eq!(attempted, vec![1, 2]);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&response.output).unwrap()["next_disk"],
-            3
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn guided_scan_rejects_unverified_hardware_before_reading_input_or_media() {
-        let root = std::env::temp_dir().join(format!(
-            "fluxvault-cli-scan-gate-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let mut project = ProjectState::create_without_session(root.clone()).unwrap();
-        let result = run_with_io(
-            &mut project,
-            ScanConfig {
-                json_output: false,
-                drive: Some("A:"),
-                count: None,
-                write_blocker_verified: false,
-                sound: false,
-            },
-            Cursor::new(b"READ\n"),
-            &mut Vec::new(),
-            |_, _| panic!("unverified hardware must never be acquired"),
-        );
-        assert!(result.unwrap_err().contains("independently verified"));
-        assert_eq!(project.current_disk_number(), 1);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn guided_scan_reports_partial_and_never_advances_after_failed_acquisition() {
-        let root = std::env::temp_dir().join(format!(
-            "fluxvault-cli-scan-partial-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let mut project = ProjectState::create_without_session(root.clone()).unwrap();
-        let partial = run_with_io(
-            &mut project,
-            ScanConfig {
-                json_output: true,
-                drive: Some("A:"),
-                count: Some(1),
-                write_blocker_verified: true,
-                sound: false,
-            },
-            Cursor::new(b"READ\n"),
-            &mut Vec::new(),
-            |_, _| {
-                Ok(CliResponse {
-                    output: "synthetic partial".to_owned(),
-                    exit_code: 3,
-                })
-            },
-        )
-        .unwrap();
-        assert_eq!(partial.exit_code, 3);
-        assert_eq!(project.current_disk_number(), 2);
-        let failed = run_with_io(
-            &mut project,
-            ScanConfig {
-                json_output: true,
-                drive: Some("A:"),
-                count: Some(1),
-                write_blocker_verified: true,
-                sound: false,
-            },
-            Cursor::new(b"READ\n"),
-            &mut Vec::new(),
-            |_, _| Err("synthetic read failure".to_owned()),
-        );
-        assert_eq!(failed.unwrap_err(), "synthetic read failure");
-        assert_eq!(
-            ProjectState::open_without_session(root.clone())
-                .unwrap()
-                .current_disk_number(),
-            2
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-}
+#[path = "scan_tests.rs"]
+mod tests;

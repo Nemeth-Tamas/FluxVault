@@ -8,6 +8,8 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 
 Developing FluxVault? `pwsh -NoProfile -File .\scripts\check.ps1` is the fail-fast format/build/strict-lint/routine-test gate. It does not scan hardware, install tools or modify user PATH. Environment-dependent acceptance tests remain explicit opt-ins.
 
+Latest development checkpoint: **426/473 TODOs (90.1%)**, with the same denominator. [What closed and what remains](CHECKLIST_90.md). USB-only feeding now has background recovery/audit and durable GW transfers; [project defaults and preferred images](PROJECT_SETTINGS.md) are optional expert controls. This is engineering checklist coverage, not a 90% customer recovery-rate claim.
+
 ## Start here
 
 | Your experience | Open this |

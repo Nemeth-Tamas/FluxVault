@@ -194,6 +194,8 @@ In PowerShell 7, load the [optional completion script](SHELL_COMPLETION.md), the
 
 ## Advanced: optional controls
 
+Optional [project defaults](PROJECT_SETTINGS.md) let you set worker count/operator/tool paths once. For example, `fv project settings set conversion-workers 12`; explicit command flags still override defaults. Preferred saved-image selection and its automatic native refresh are explained in the same guide. None of this is needed for ordinary default-GW scanning.
+
 USB-only: `fv scan --usb --write-blocker-verified` uses A: and asks for each number. The **opt-in two-drive pilot** is `fv scan --double --write-blocker-verified`: one console, `u1` / `g2`, and `gOLD` for an earlier USB partial. Both readers feed background processing. Exact label/open-tab and existing USB protection checks remain; dual rejects `--no-verify`. Start with the [small 007–010 test](DUAL_SCAN.md), not 136 disks. Ordinary `fv scan` remains GW-only.
 
 After a dual run, `fv production benchmark` exports the saved timing summary and receipt CSV without a floppy. New dual scans collect this automatically and show an approximate fresh-feed ETA after three fresh saves; remaining recovery transfers/file processing are separate. Older pilots have explicit timing gaps, not reconstructed measurements. [Details](DUAL_SCAN.md#pace-and-saved-timing-reports).

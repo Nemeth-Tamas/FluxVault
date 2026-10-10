@@ -7,8 +7,10 @@ use crate::{
     project::ProjectState,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
+    io::Read,
     io::Write,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -35,6 +37,89 @@ pub struct FormatDecision {
     pub reason: String,
     pub candidates: Vec<Candidate>,
     pub physical_media_access: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_profile_hint: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_profile_hint_error: Option<String>,
+}
+
+// This is only an ordering hint, never a format/CRC certificate. Flux/BPB
+// validation and competing interpretations still make the final decision.
+fn decode_priority(
+    project: &ProjectState,
+    disk: u32,
+) -> Result<([GreaseweazleProfile; 2], Option<serde_json::Value>), String> {
+    crate::processing::validate_workspace(project)?;
+    let all = crate::imaging::load_attempts_for_disk(&project.images_dir(), disk)?;
+    let mut usb = Vec::new();
+    for a in all {
+        if !matches!(a.status.as_str(), "OK" | "PARTIAL") || !matches!(a.total_sectors, 1440 | 2880)
+        {
+            continue;
+        }
+        if !a.legacy_image {
+            let metadata = bounded_read(&a.metadata_path, 1024 * 1024)?;
+            let value: serde_json::Value =
+                serde_json::from_slice(&metadata).map_err(|e| e.to_string())?;
+            if value["source_backend"] != "windows-raw-sector" {
+                continue;
+            }
+        }
+        usb.push(a);
+    }
+    let default = [GreaseweazleProfile::Ibm1440, GreaseweazleProfile::Ibm720];
+    let Some(a) = crate::imaging::best_attempt(&usb) else {
+        return Ok((default, None));
+    };
+    let path = crate::recovery_plan::resolve_image_path(&project.images_dir(), &a.image_file)?;
+    crate::safety::workstation_path(&path.canonicalize().map_err(|e| e.to_string())?)?;
+    if fs::metadata(&path).map_err(|e| e.to_string())?.len() != a.total_sectors as u64 * 512 {
+        return Err("USB geometry hint image extent changed".into());
+    }
+    let bytes = bounded_read(&path, a.total_sectors as u64 * 512)?;
+    if format!("{:x}", Sha256::digest(&bytes)) != a.sha256 {
+        return Err("USB geometry hint image hash changed".into());
+    }
+    crate::fat12_recovery::validate_sector_evidence(a, a.total_sectors, &a.sha256)?;
+    let order = if a.total_sectors == 1440 {
+        [default[1], default[0]]
+    } else {
+        default
+    };
+    Ok((
+        order,
+        Some(
+            serde_json::json!({"attempt":a.attempt_number,"image_sha256":a.sha256,"total_sectors":a.total_sectors,"first_profile":order[0].argument(),"scope":"Verified saved USB size/map guides decode order only; flux/BPB decides format"}),
+        ),
+    ))
+}
+
+fn bounded_read(path: &std::path::Path, limit: u64) -> Result<Vec<u8>, String> {
+    crate::cancellation::check()?;
+    crate::safety::workstation_path(path)?;
+    crate::safety::workstation_path(&path.canonicalize().map_err(|e| e.to_string())?)?;
+    let m = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !m.is_file() || m.file_type().is_symlink() || m.len() > limit {
+        return Err("USB hint requires bounded regular evidence".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if m.file_attributes() & 0x400 != 0 {
+            return Err("USB hint refuses reparse evidence".into());
+        }
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .map_err(|e| e.to_string())?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err("USB hint evidence grew beyond bounds".into());
+    }
+    crate::cancellation::check()?;
+    Ok(bytes)
 }
 
 /// Require coherent DOS geometry, not an arbitrary string or output image size.
@@ -117,7 +202,16 @@ pub fn identify(
         );
     }
     let mut candidates = Vec::new();
-    for profile in [GreaseweazleProfile::Ibm1440, GreaseweazleProfile::Ibm720] {
+    let (profiles, initial_profile_hint, initial_profile_hint_error) =
+        match decode_priority(project, disk) {
+            Ok((order, hint)) => (order, hint, None),
+            Err(error) => (
+                [GreaseweazleProfile::Ibm1440, GreaseweazleProfile::Ibm720],
+                None,
+                Some(error),
+            ),
+        };
+    for profile in profiles {
         progress(&format!(
             "Identifying disk {disk:03}: offline {} decode (no extra physical read)",
             profile.argument()
@@ -182,12 +276,12 @@ pub fn identify(
             boot_geometry_matches: false,
             error: Some(error),
         });
-        // A coherent almost-complete HD image needs no second decoder invocation.
-        let confident_hd = candidate.error.is_none()
+        // A coherent almost-complete first profile needs no second invocation.
+        let confident_first = candidate.error.is_none()
             && candidate.boot_geometry_matches
             && candidate.good_sectors * 100 >= candidate.total_sectors * 98;
         candidates.push(candidate);
-        if confident_hd {
+        if confident_first {
             break;
         }
     }
@@ -201,6 +295,8 @@ pub fn identify(
         reason,
         candidates,
         physical_media_access: false,
+        initial_profile_hint,
+        initial_profile_hint_error,
     };
     let flux = flux_capture::project_flux_dir(project)?;
     let directory = flux.join("Formats");
@@ -231,6 +327,64 @@ pub fn identify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn usb_fixture(spt: usize) -> ProjectState {
+        let p = ProjectState::create_without_session(std::env::temp_dir().join(format!(
+                "fv-format-hint-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            )))
+        .unwrap();
+        let count = 160 * spt;
+        let bytes = vec![0x42; count * 512];
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let log = p.logs_dir().join("001_attempt_001.log");
+        fs::write(p.images_dir().join("001_attempt_001.img"), bytes).unwrap();
+        fs::write(&log,format!("BEGIN | disk=1 | attempt=1\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track={spt} | bytes_per_sector=512 | total_sectors={count} | total_bytes={}\nEND | status=OK | bytes={} | sha256={sha}\n",count*512,count*512)).unwrap();
+        let metadata = serde_json::json!({"fluxvault_version":"fixture","status":"OK","disk_number":1,"attempt_number":1,"source_backend":"windows-raw-sector","source_device":"fixture","image_file":"001_attempt_001.img","log_file":log,"timestamp_unix_ms":1,"geometry":{"cylinders":80,"heads":2,"sectors_per_track":spt,"bytes_per_sector":512,"total_bytes":count*512,"format_guess":"fixture"},"sector_retries":0,"total_sectors":count,"bytes_written":count*512,"retry_recovered_sectors":0,"bad_sector_count":0,"bad_sectors":[],"sha256":sha});
+        fs::write(
+            p.images_dir().join("001_attempt_001.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+        p
+    }
+    #[test]
+    fn verified_usb_size_guides_first_decode_but_not_final_format() {
+        for (spt, expected) in [
+            (9, GreaseweazleProfile::Ibm720),
+            (18, GreaseweazleProfile::Ibm1440),
+        ] {
+            let p = usb_fixture(spt);
+            let (order, hint) = decode_priority(&p, 1).unwrap();
+            assert_eq!(order[0], expected);
+            assert_ne!(order[0], order[1]);
+            assert_eq!(hint.unwrap()["first_profile"], expected.argument());
+            assert_eq!(
+                select(&[
+                    c(order[0].argument(), 0, 1440, false),
+                    c(order[1].argument(), 2880, 2880, true)
+                ])
+                .0
+                .as_deref(),
+                Some(order[1].argument())
+            );
+            fs::write(p.images_dir().join("001_attempt_001.img"), b"changed").unwrap();
+            assert!(decode_priority(&p, 1).is_err());
+        }
+    }
+    #[test]
+    fn absent_usb_uses_normal_order_and_old_decisions_remain_compatible() {
+        let p = usb_fixture(9);
+        let (order, hint) = decode_priority(&p, 2).unwrap();
+        assert_eq!(order[0], GreaseweazleProfile::Ibm1440);
+        assert!(hint.is_none());
+        let old = serde_json::json!({"schema_version":1,"disk":1,"capture_attempt":1,"source_sha256":"hash","selected_profile":null,"reason":"unknown","candidates":[],"physical_media_access":false});
+        let decision: FormatDecision = serde_json::from_value(old).unwrap();
+        assert!(decision.initial_profile_hint.is_none());
+    }
     fn c(profile: &str, good: usize, total: usize, boot: bool) -> Candidate {
         Candidate {
             profile: profile.to_owned(),

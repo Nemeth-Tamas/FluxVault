@@ -247,6 +247,7 @@ mod tests {
 
     fn attempt(number: u32, image_file: &str, sha256: String, bad: Vec<u64>) -> AttemptSummary {
         AttemptSummary {
+            preferred: false,
             attempt_number: number,
             status: "PARTIAL".to_owned(),
             timestamp_unix_ms: 0,

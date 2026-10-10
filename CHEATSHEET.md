@@ -180,6 +180,18 @@ Native generation 5 / Word-text engine 2 automatically adds evidenced lost-direc
 
 ### Settings and diagnostics
 
+Optional defaults for this project (no need to repeat the worker flag):
+
+```powershell
+fv project settings set conversion-workers 12
+fv project settings set operator 'Archive team'
+fv project settings
+```
+
+Advanced saved-image choice: `fv disk prefer 7 2` pins image attempt 002 for disk 007; `fv disk prefer 7 auto` restores quality ranking. Native extraction/inventory/audit refresh automatically; `fv process` reconciles Office outputs. Earlier evidence stays. [Tool overrides and limits](PROJECT_SETTINGS.md).
+
+USB-only scanning now also runs saved-file processing in the background. Default: one forward pass, then set partials aside for GW. `--last-disk N` persists the endpoint; `--count N` only caps this invocation. `OUT` confirms final removal; switching to dual retains the transfer queue. Use `--acquisition-only` explicitly to skip processing. Never run competing scans in the same project.
+
 `fv diagnose 59` inspects saved raw/packed captures and decode passes, replays final sector provenance and exports a short recovery note plus track/sector CSV and JSON. No floppy or host tool needed; exit `3` means attention/partial. [How to read it](FLUX_DIAGNOSTICS.md).
 
 USB-only: `fv scan --usb --count 20 --write-blocker-verified` (default A:, same protection checks; type the number). Two-drive **pilot**: `fv scan --double --write-blocker-verified --last-disk 10`, then `u7` / `g8` for USB/GW labels, `gOLD` for a queued USB partial, `u out` / `g out` after the last saved disks, `QUIT` to drain. Use a small new project first; dual rejects `--no-verify`. Ordinary scan stays GW-only. [Copyable 007–010 test](DUAL_SCAN.md).

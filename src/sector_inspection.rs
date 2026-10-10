@@ -207,7 +207,11 @@ pub fn inspect(
     let selected = if let Some(number) = attempt {
         candidates.iter().find(|c| c.meta.attempt_number == number)
     } else {
-        candidates.iter().min_by_key(|c| (c.meta.status != "OK" || !c.meta.bad_sectors.is_empty(), c.meta.bad_sectors.len(), std::cmp::Reverse(c.meta.attempt_number)))
+        if let Some(number)=crate::preferred_image::preferred_number(&images,disk)? {
+            candidates.iter().find(|c| c.meta.attempt_number==number)
+        } else {
+            candidates.iter().min_by_key(|c|(c.meta.status!="OK"||!c.meta.bad_sectors.is_empty(),c.meta.bad_sectors.len(),std::cmp::Reverse(c.meta.attempt_number)))
+        }
     }.ok_or("No completed native acquisition for this disk/attempt; legacy bare images are unsupported by this diagnostic")?;
     let m = &selected.meta;
     let end = lba
@@ -284,6 +288,7 @@ pub fn inspect(
         log_path = Some(path);
     }
     let summary = AttemptSummary {
+        preferred: false,
         attempt_number: m.attempt_number,
         status: m.status.clone(),
         timestamp_unix_ms: m.timestamp_unix_ms,

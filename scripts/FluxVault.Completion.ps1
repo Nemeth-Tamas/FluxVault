@@ -11,8 +11,11 @@ $fluxVaultCompleter = {
 
     $children = @{
         '' = @('init','status','start','stop','scan','acquire','disk','project','drive','tools','greaseweazle','diagnose','extract','recovery','conversion','files','audit','report','process','processing','storage','benchmark','production','finalize','package','run','completions','help')
-        'disk' = @('list','show','note','select','next')
-        'project' = @('show','import')
+        'disk' = @('list','show','note','select','next','prefer')
+        'project' = @('show','import','settings')
+        'project settings' = @('set','clear')
+        'project settings set' = @('operator','conversion-workers','sevenzip','libreoffice','greaseweazle')
+        'project settings clear' = @('operator','conversion-workers','sevenzip','libreoffice','greaseweazle')
         'drive' = @('list','probe')
         'tools' = @('check','show','set','clear')
         'greaseweazle' = @('preview','info','capture','decode','identify','status','diagnose','compare','consensus','plan','recover','scan')
@@ -122,7 +125,7 @@ $fluxVaultCompleter = {
             $options[$context] = @('--drive','--gw-drive','--last-disk','--write-blocker-verified','--conversion-workers','--acquisition-only','--color','--sound','--plan')
             if ($flags -contains '--plan') { $options[$context] = @('--drive','--gw-drive','--last-disk') }
         } elseif ($flags -contains '--usb' -or $flags -contains '--drive' -or $flags -contains '--write-blocker-verified') {
-            $options[$context] = @('--drive','--count','--retries','--write-blocker-verified','--sound')
+            $options[$context] = @('--drive','--count','--last-disk','--retries','--write-blocker-verified','--sound','--color','--conversion-workers','--acquisition-only')
         }
     }
     if ($expectValue) {

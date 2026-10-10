@@ -345,6 +345,20 @@ pub(super) fn run_advanced(
                 },
                 &|stage| eprintln!("{stage}"),
             )?;
+            // The imported managed inventory is already the new extraction state.
+            // Refresh integrity/report association immediately, without launching
+            // Office or treating a legacy manual folder as verified recovery.
+            let audit_refresh = {
+                let _snapshot = crate::project_work::snapshot(project.root())?;
+                let mut audit = crate::audit::run_audit(project, &|s| eprintln!("{s}"))?;
+                let report = crate::final_report::export(
+                    project,
+                    &audit,
+                    crate::final_report::Language::Hungarian,
+                )?;
+                crate::final_report::reconcile_audit(&mut audit, &report);
+                json!({"audit_json":audit.json_path,"audit_csv":audit.csv_path,"workbook":report.workbook,"attention":audit.attention_disks,"customer_delivery_certified":false})
+            };
             Ok(CliResponse {
                 output: if json_output {
                     json!({
@@ -353,13 +367,14 @@ pub(super) fn run_advanced(
                         "copied_log": result.copied_log_path,
                         "import_manifest": result.manifest_path,
                         "project_manifest": manifest.path,
+                        "audit_refresh":audit_refresh,
                         "files": result.file_count, "bytes": result.total_bytes,
                         "customer_delivery_certified": false
                     })
                     .to_string()
                 } else {
                     format!(
-                        "Disk {disk_number:03}: imported {} files ({} bytes).\nEvidence: {}\nProject manifest: {}",
+                        "Disk {disk_number:03}: imported {} files ({} bytes).\nEvidence: {}\nProject manifest: {}\nIntegrity audit/report refreshed automatically; legacy recovery remains attention, not certified.",
                         result.file_count,
                         result.total_bytes,
                         result.evidence_directory.display(),
@@ -506,6 +521,12 @@ mod tests {
         let output: serde_json::Value = serde_json::from_str(&result.output).unwrap();
         assert_eq!(result.exit_code, 3);
         assert_eq!(output["files"], 1);
+        assert!(Path::new(output["audit_refresh"]["audit_json"].as_str().unwrap()).is_file());
+        assert!(Path::new(output["audit_refresh"]["workbook"].as_str().unwrap()).is_file());
+        assert_eq!(
+            output["audit_refresh"]["customer_delivery_certified"],
+            false
+        );
         assert!(Path::new(output["project_manifest"].as_str().unwrap()).is_file());
         assert!(
             run_advanced(

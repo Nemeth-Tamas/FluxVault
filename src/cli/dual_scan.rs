@@ -94,7 +94,12 @@ fn settings(project: &ProjectState, options: &Options) -> Result<Settings, Strin
         gw: options
             .gw
             .unwrap_or_else(|| old.as_ref().map_or('B', |s| s.gw)),
-        last: options.last.or_else(|| old.as_ref().and_then(|s| s.last)),
+        last: options
+            .last
+            .or_else(|| old.as_ref().and_then(|s| s.last))
+            .or(crate::production::status(project)?["last"]
+                .as_u64()
+                .map(|n| n as u32)),
     };
     if selected.usb.len() != 2
         || !selected.usb.as_bytes()[0].is_ascii_uppercase()
@@ -988,7 +993,7 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
     )?;
     let usb_reservation = UsbReservation::acquire(&selected.usb)?;
     let gw_reservation = GreaseweazleReservation::acquire()?;
-    let tools = external_tools::load_settings()?;
+    let tools = project.tool_settings()?;
     let audit = project.logs_dir().join("external-tools.jsonl");
     let gw = external_tools::find_ready_tool(
         ToolKind::Greaseweazle,

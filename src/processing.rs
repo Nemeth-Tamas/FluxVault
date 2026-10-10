@@ -623,7 +623,7 @@ pub(crate) fn resume(project: &ProjectState, workers: usize) -> Result<Outcome, 
         return Err("Conversion workers must be from 1 to 16".into());
     }
     let owner = crate::project_work::reserve(project.root())?;
-    let settings = crate::external_tools::load_settings()?;
+    let settings = project.tool_settings()?;
     let audit = project.logs_dir().join("external-tools.jsonl");
     let seven = crate::external_tools::ToolKind::SevenZip;
     let office = crate::external_tools::ToolKind::LibreOffice;

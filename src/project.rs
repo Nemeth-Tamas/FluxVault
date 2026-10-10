@@ -213,6 +213,35 @@ impl ProjectState {
         &self.metadata.project_name
     }
 
+    pub(crate) fn extension(&self, key: &str) -> Option<&serde_json::Value> {
+        self.metadata.extensions.get(key)
+    }
+
+    // Caller must hold project ownership and its short metadata snapshot guard.
+    pub(crate) fn save_extension(
+        &mut self,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), String> {
+        let previous = self.metadata.clone();
+        self.metadata.extensions.insert(key.to_owned(), value);
+        if let Err(error) = self.save_metadata() {
+            self.metadata = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn tool_settings(&self) -> Result<crate::external_tools::ToolSettings, String> {
+        crate::project_settings::effective_tools(self)
+    }
+
+    pub(crate) fn default_workers(&self) -> Result<usize, String> {
+        Ok(crate::project_settings::get(self)?
+            .conversion_workers
+            .unwrap_or(crate::conversion_run::DEFAULT_CONVERSION_WORKERS))
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }

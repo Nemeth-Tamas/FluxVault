@@ -264,19 +264,22 @@ pub fn inspect(
     };
     Ok(
         json!({"schema_version":1,"disk":disk,"label":label,"note":note(project,disk)?,
-        "preferred_image":{"selection":"automatic evidence ranking","attempt":preferred.attempt_number,"image":preferred.image_file,
+        "preferred_image":{"selection":if preferred.preferred { "operator hash-bound preference" } else { "automatic evidence ranking" },"attempt":preferred.attempt_number,"image":preferred.image_file,
             "sha256":preferred.sha256,"bad_sectors":preferred.bad_sectors,"attention_required":preferred.attention_required},
         "extraction":extraction,"recovery":recovery,"conversion":conversion,"audit":audit,"processing_jobs":jobs,
         "automated_decisions":{"records":decisions,"path":decisions_path,"historical_only":true,"fresh_source_bindings_verified":false},
         "physical_media_access":false,"customer_delivery_certified":false,
-        "scope":"Read-only lifecycle projection; automatic ranking is not an explicit operator preference. Historical audit/conversion states do not certify present integrity."}),
+        "scope":"Read-only lifecycle projection. Historical audit/conversion states do not certify present integrity."}),
     )
 }
 
 pub fn human(value: &Value) -> String {
     format!(
-        "Note: {}\nPreferred (automatic): #{} / {}\nExtraction: {} | recovery: {}\nConversion: {} recorded jobs (historical) | audit matches preferred image: {} (historical)\nProcessing jobs: {}\nNo physical media accessed; recorded reports are not fresh integrity certificates.",
+        "Note: {}\nPreferred ({}): #{} / {}\nExtraction: {} | recovery: {}\nConversion: {} recorded jobs (historical) | audit matches preferred image: {} (historical)\nProcessing jobs: {}\nNo physical media accessed; recorded reports are not fresh integrity certificates.",
         value["note"]["text"].as_str().unwrap_or(""),
+        value["preferred_image"]["selection"]
+            .as_str()
+            .unwrap_or("unknown"),
         value["preferred_image"]["attempt"],
         value["preferred_image"]["image"],
         value["extraction"]["state"].as_str().unwrap_or("unknown"),

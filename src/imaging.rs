@@ -90,6 +90,7 @@ struct GeometryMetadata {
 
 #[derive(Debug, Clone)]
 pub struct AttemptSummary {
+    pub preferred: bool,
     pub attempt_number: u32,
     pub status: String,
     pub timestamp_unix_ms: u128,
@@ -902,6 +903,15 @@ pub fn load_attempts_for_disk(
     directory: &Path,
     disk_number: u32,
 ) -> Result<Vec<AttemptSummary>, String> {
+    let mut attempts = load_unselected_attempts(directory, disk_number)?;
+    crate::preferred_image::apply(directory, disk_number, &mut attempts)?;
+    Ok(attempts)
+}
+
+pub(crate) fn load_unselected_attempts(
+    directory: &Path,
+    disk_number: u32,
+) -> Result<Vec<AttemptSummary>, String> {
     if !directory.exists() {
         return Ok(Vec::new());
     }
@@ -964,6 +974,7 @@ pub fn load_attempts_for_disk(
             !metadata.status.eq_ignore_ascii_case("OK") || !metadata.bad_sectors.is_empty();
 
         attempts.push(AttemptSummary {
+            preferred: false,
             attempt_number: metadata.attempt_number,
             status: metadata.status,
             timestamp_unix_ms: metadata.timestamp_unix_ms,
@@ -1107,6 +1118,7 @@ fn load_legacy_attempt(
         .to_owned();
 
     Ok(Some(AttemptSummary {
+        preferred: false,
         attempt_number: 0,
         status,
         timestamp_unix_ms,
@@ -1207,6 +1219,9 @@ pub fn compare_latest_attempts(attempts: &[AttemptSummary]) -> Option<AttemptCom
 }
 
 pub(crate) fn best_attempt(attempts: &[AttemptSummary]) -> Option<&AttemptSummary> {
+    if let Some(selected) = attempts.iter().find(|a| a.preferred) {
+        return Some(selected);
+    }
     attempts.iter().min_by(|left, right| {
         left.attention_required
             .cmp(&right.attention_required)

@@ -27,7 +27,7 @@ pub(super) struct RecoveryOptions {
 }
 
 pub(super) fn process_saved(project: &ProjectState) -> Result<CliResponse, String> {
-    process_saved_with_workers(project, crate::conversion_run::DEFAULT_CONVERSION_WORKERS)
+    process_saved_with_workers(project, project.default_workers()?)
 }
 
 pub(super) fn process_saved_with_workers(
@@ -87,7 +87,7 @@ pub(super) fn recover_reserved(
         std::io::stderr(),
         super::read_progress::interactive(),
     );
-    let settings = external_tools::load_settings()?;
+    let settings = project.tool_settings()?;
     let audit = project.logs_dir().join("external-tools.jsonl");
     let executable = external_tools::find_ready_tool(
         ToolKind::Greaseweazle,
@@ -195,7 +195,7 @@ pub(super) fn capture(
         Some(profile) => profile,
         None => infer_profile(project, disk_number)?,
     };
-    let settings = external_tools::load_settings()?;
+    let settings = project.tool_settings()?;
     let audit_path = project.logs_dir().join("external-tools.jsonl");
     let executable = external_tools::find_ready_tool(
         ToolKind::Greaseweazle,
@@ -278,7 +278,7 @@ pub(super) fn decode(
         Some(attempt) => attempt,
         None => flux_capture::latest_capture_attempt(project, disk_number)?,
     };
-    let settings = external_tools::load_settings()?;
+    let settings = project.tool_settings()?;
     let audit_path = project.logs_dir().join("external-tools.jsonl");
     let executable =
         external_tools::find_offline_greaseweazle(settings.path(ToolKind::Greaseweazle))?;

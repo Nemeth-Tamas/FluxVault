@@ -779,6 +779,7 @@ mod tests {
 
     fn attempt() -> AttemptSummary {
         AttemptSummary {
+            preferred: false,
             attempt_number: 1,
             status: "OK".to_owned(),
             timestamp_unix_ms: 0,

@@ -501,6 +501,111 @@ fn cooperative_office_stop_retains_partial_and_retries_saved_issue_without_publi
     assert!(state["issues"].as_array().unwrap().is_empty());
     fs::remove_dir_all(temporary).unwrap(); // Only this fixture's own retained scratch.
 }
+
+#[test]
+fn mixed_size_same_stem_parallel_office_outputs_are_unique_and_reuse_is_hash_bound() {
+    let f = Fixture::new();
+    fs::write(
+        f.appdata.join("FluxVault/settings.json"),
+        json!({"libreoffice_path":env!("CARGO_BIN_EXE_mock_gw")}).to_string(),
+    )
+    .unwrap();
+    let mut sources = Vec::new();
+    for n in 0..12 {
+        let folder = if n == 0 {
+            "$Root".into()
+        } else {
+            format!("$Noname {n}")
+        };
+        let path = f
+            .project
+            .extracted_dir()
+            .join("001")
+            .join(folder)
+            .join("docs/shared.rtf");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = format!(
+            "{{\\rtf1\\ansi {n} {}}}",
+            "x".repeat(if n < 3 { 512 * 1024 } else { 100 + n })
+        )
+        .into_bytes();
+        fs::write(&path, &bytes).unwrap();
+        sources.push((path, bytes));
+    }
+    let first = f
+        .command()
+        .args(["conversion", "run", "--conversion-workers", "12", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let state_path = f.project.reports_dir().join("ConversionState.json");
+    let state: Value = serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+    // Inspect whichever wrapper owns the stable conversion result.
+    let result = state.get("result").unwrap_or(&state);
+    let rows = result["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 12);
+    let mut outputs = std::collections::BTreeSet::new();
+    for row in rows {
+        for key in ["modern_path", "pdf_path"] {
+            let path = row["job"][key].as_str().unwrap();
+            assert!(
+                outputs.insert(path.to_ascii_lowercase()),
+                "duplicate target {path}"
+            );
+        }
+    }
+    assert_eq!(outputs.len(), 24);
+    let second = f
+        .command()
+        .args(["conversion", "run", "--conversion-workers", "12", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    for (path, bytes) in sources {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    let audit = fs::read_to_string(f.project.logs_dir().join("external-tools.jsonl")).unwrap();
+    let audits: Vec<Value> = audit
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let conversions: Vec<_> = audits
+        .iter()
+        .filter(|v| {
+            v["arguments"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == "--convert-to"))
+        })
+        .collect();
+    assert_eq!(
+        conversions.len(),
+        24,
+        "second run must reuse both hash-bound outputs"
+    );
+    let profiles: std::collections::BTreeSet<_> = conversions
+        .iter()
+        .flat_map(|v| v["arguments"].as_array().unwrap())
+        .filter_map(|v| {
+            v.as_str()
+                .filter(|s| s.starts_with("-env:UserInstallation="))
+        })
+        .collect();
+    assert_eq!(
+        profiles.len(),
+        24,
+        "each host conversion needs its own profile"
+    );
+}
 fn interrupted_finalization(cooperative: bool) {
     let f = Fixture::new();
     let rtf = b"{\\rtf1\\ansi Disposable end-to-end FluxVault document}";

@@ -858,11 +858,22 @@ fn enter_only_scan_is_explicit_colored_json_clean_and_saved_workers_survive_rest
             &project,
             &app_data,
             &[
-                "tools",
+                "project",
+                "settings",
                 "set",
                 "greaseweazle",
                 env!("CARGO_BIN_EXE_mock_gw")
             ],
+            false
+        )
+        .status
+        .success()
+    );
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &["project", "settings", "set", "conversion-workers", "12"],
             false
         )
         .status
@@ -876,8 +887,6 @@ fn enter_only_scan_is_explicit_colored_json_clean_and_saved_workers_survive_rest
             "--last-disk",
             "2",
             "--no-verify",
-            "--conversion-workers",
-            "12",
             "--color",
             "always",
             "--acquisition-only",
@@ -906,6 +915,17 @@ fn enter_only_scan_is_explicit_colored_json_clean_and_saved_workers_survive_rest
     // Even forced color must not animate into redirected stderr or JSON.
     assert!(!output.contains('\r'));
     assert!(!first.stdout.contains(&0x1b));
+    // A saved scan's bound worker setting outranks changed project defaults.
+    assert!(
+        invoke_with_mock_gw(
+            &project,
+            &app_data,
+            &["project", "settings", "set", "conversion-workers", "4"],
+            false
+        )
+        .status
+        .success()
+    );
     let second = invoke_mock_with_input(
         &project,
         &app_data,
@@ -2266,6 +2286,7 @@ fn executable_discovers_project_and_guards_guided_scan_without_hardware() {
             "--drive",
             "A:",
             "--write-blocker-verified",
+            "--acquisition-only",
             "--json",
         ],
         Some(b"QUIT\n"),

@@ -11,7 +11,7 @@ use std::path::Path;
 
 pub(super) fn request(project: &ProjectState, workers: usize) -> Result<PipelineRequest, String> {
     crate::cancellation::check()?;
-    let settings = external_tools::load_settings()?;
+    let settings = project.tool_settings()?;
     let command_audit_path = project.logs_dir().join("external-tools.jsonl");
     let seven_zip_executable = external_tools::find_ready_tool(
         ToolKind::SevenZip,

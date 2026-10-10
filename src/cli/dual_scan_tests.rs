@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn switching_from_usb_inherits_its_sealed_endpoint() {
+    let p = project();
+    drop(Coordinator::open(p.clone(), Some(6), false).unwrap());
+    let options = Options {
+        usb: None,
+        gw: None,
+        last: None,
+        workers: 4,
+        verified: true,
+        acquisition_only: true,
+        json: true,
+        color: false,
+        sound: false,
+    };
+    let selected = settings(&p, &options).unwrap();
+    assert_eq!(selected.last, Some(6));
+    save_settings(&p, &selected).unwrap();
+    assert_eq!(settings(&p, &options).unwrap(), selected);
+    drop(Coordinator::open(p.clone(), selected.last, false).unwrap());
+}
+
+#[test]
 fn stop_cancels_both_active_mock_stations_without_receipts_and_reopens_same_labels() {
     let p = project();
     let c = Coordinator::open(p.clone(), Some(2), false).unwrap();

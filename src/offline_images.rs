@@ -229,6 +229,7 @@ fn replay(root: &Path, recipe: &Recipe) -> Result<(Vec<u8>, Vec<u64>), String> {
             None
         };
         let attempt = AttemptSummary {
+            preferred: false,
             attempt_number: s.attempt,
             status: s.status.clone(),
             timestamp_unix_ms: 0,

@@ -403,7 +403,7 @@ pub(super) fn run(mut project: ProjectState, options: ScanOptions) -> Result<Cli
     let _control = crate::run_control::Session::start(&project, "scan")?;
     crate::flux_capture::project_flux_dir(&project)?;
     let reservation = GreaseweazleReservation::acquire()?;
-    let settings = crate::external_tools::load_settings()?;
+    let settings = project.tool_settings()?;
     let audit = project.logs_dir().join("external-tools.jsonl");
     let mut seven_zip = None;
     let mut libreoffice = None;

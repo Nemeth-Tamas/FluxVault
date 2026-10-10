@@ -28,7 +28,6 @@ use serde_json::json;
 use crate::{
     audit,
     batch_extraction::{self, BatchExtractionRequest},
-    conversion_run::DEFAULT_CONVERSION_WORKERS,
     external_tools::{self, ToolHealth, ToolKind},
     floppy::{self, FloppyDrive, WriteProtectionStatus},
     greaseweazle::{
@@ -67,6 +66,12 @@ Usage:
   fluxvault disk show N [--details] [--project PATH]
                                     Inspect attempts, notes and saved recovery/processing lifecycle
   fluxvault disk note N "TEXT"       Save an optional note (empty text clears; history retained)
+  fluxvault disk prefer N ATTEMPT|auto
+                                    Pin saved evidence, or restore automatic image ranking
+  fluxvault project settings        Show optional project defaults / historical tool versions
+  fluxvault project settings set KEY VALUE
+  fluxvault project settings clear KEY
+                                    Keys: operator, conversion-workers, sevenzip, libreoffice, greaseweazle
   fluxvault disk select N [--project PATH]
   fluxvault disk next [--project PATH]
                                     Select the current/next disk number (no drive access)
@@ -172,7 +177,7 @@ Usage:
   fluxvault --help                  Show this help
   fluxvault completions powershell Generate static PowerShell 7+ Tab completion
 Options:
-  --usb                             scan: existing USB-only loop, default Windows A:
+  --usb                             scan: durable USB feeding + background files, default Windows A:
   --double                         scan: opt-in simultaneous USB/GW pilot; exact labels
   --plan                           scan --double / project import: offline preview, no writes
   --json                            Output machine-readable JSON
@@ -181,9 +186,9 @@ Options:
   --allow-attention                 finalize: explicitly archive partial results with warnings (exit 3)
   --drive LETTER:                   Enumerated removable drive for read-only probe
   --disk N                          Disk number for acquisition
-  --retries N                       Bad-sector retry passes for acquisition (0-10; default 2)
+  --retries N                       USB retry passes (0-10; acquire default 2, scan default 0)
   --count N                         Stop guided scan after N disks (default: until QUIT)
-  --last-disk N                     Stop GW scan after this numbered disk, across restarts
+  --last-disk N                     Stop scan after this numbered disk, across restarts
   --write-blocker-verified          Operator asserts separate hardware protection test
   --source PATH                     DMDE recovery folder, or script ZIP for project import
   --baseline ZIP                    Script archive for recovered-payload comparison
@@ -204,7 +209,7 @@ Options:
   --policy FILE                    JSON recovery policy (default: 10 minutes PER STAGE)
   --acquisition-only               Skip downstream processing after recovery
   --no-verify                      GW scan: Enter confirms displayed disk; skips label typing ONLY
-  --color auto|always|never         GW scan cues (default auto; respects NO_COLOR)
+  --color auto|always|never         Scan cues (default auto; respects NO_COLOR)
   --sound on|off                   Optional scan swap/error tones (default off; terminal only)
 During scanning: QUIT drains; STOP cancels active work. Windows Ctrl+C requests safe stop.
 Keep disks seated until STOPPED and drive activity has stopped. Resume the same command/project.
@@ -719,13 +724,15 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 return Err("Dual pilot accepts --project, --drive, --gw-drive, --last-disk, --write-blocker-verified, --conversion-workers, --acquisition-only, --color, --sound and --json; recovery/format/storage defaults are automatic".into());
             }
             let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let default_workers =
+                ProjectState::open_without_session(root.clone())?.default_workers()?;
             return dual_scan::run(
                 ProjectState::open_without_session(root)?,
                 dual_scan::Options {
                     usb: drive_override,
                     gw: gw_drive,
                     last: last_disk,
-                    workers: conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                    workers: conversion_workers.unwrap_or(default_workers),
                     verified: write_blocker_verified,
                     acquisition_only,
                     json: json_output,
@@ -825,14 +832,18 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if retire_raw && !storage_pack {
         return Err("--retire-raw is only valid with storage pack".to_owned());
     }
-    if (no_verify || color_mode.is_some()) && !gw_scan {
+    if no_verify && !gw_scan {
         return Err("--no-verify and --color are only valid with Greaseweazle scan".to_owned());
+    }
+    if color_mode.is_some() && !gw_scan && positional != ["scan"] {
+        return Err("--color is only valid with Greaseweazle scan or USB scan".into());
     }
     if sound_mode.is_some() && !gw_scan && positional != ["scan"] {
         return Err("--sound is only valid with scan or start".into());
     }
     if conversion_workers.is_some()
         && !gw_scan
+        && positional != ["scan"]
         && positional.first().map(String::as_str) != Some("process")
         && !(positional.len() == 2 && positional[0] == "processing" && positional[1] == "resume")
         && positional.first().map(String::as_str) != Some("finalize")
@@ -848,11 +859,14 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if background_processing.is_some() && !gw_scan {
         return Err("--processing-mode is only valid with Greaseweazle scan".into());
     }
-    if (recovery_policy.is_some() || acquisition_only) && !(gw_recover || gw_scan) {
+    if recovery_policy.is_some() && !(gw_recover || gw_scan) {
         return Err(
             "--policy and --acquisition-only are only valid with greaseweazle recover/scan"
                 .to_owned(),
         );
+    }
+    if acquisition_only && !(gw_recover || gw_scan || positional == ["scan"]) {
+        return Err("--acquisition-only requires recover or scan".into());
     }
     if gw_revolutions.is_some() && !gw_capture {
         return Err("--revs is only valid with greaseweazle capture".to_owned());
@@ -892,7 +906,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if scan_count.is_some() && !(gw_scan || (positional.len() == 1 && positional[0] == "scan")) {
         return Err("--count is only valid with scan or greaseweazle scan".to_owned());
     }
-    if last_disk.is_some() && !gw_scan {
+    if last_disk.is_some() && !gw_scan && positional != ["scan"] {
         return Err("--last-disk is only valid with greaseweazle scan".to_owned());
     }
     if (import_source.is_some() || import_log.is_some())
@@ -921,7 +935,6 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("process" | "extract" | "files" | "audit" | "report" | "package" | "acquire")
     ) || (positional.first().is_some_and(|s| s == "conversion")
         && positional.get(1).is_some_and(|s| s != "issues"))
-        || (positional.first().is_some_and(|s| s == "scan") && drive_override.is_some())
         || (positional.first().is_some_and(|s| s == "recovery")
             && positional
                 .get(1)
@@ -929,7 +942,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         || (positional.first().is_some_and(|s| s == "disk")
             && positional
                 .get(1)
-                .is_some_and(|s| matches!(s.as_str(), "next" | "select")));
+                .is_some_and(|s| matches!(s.as_str(), "next" | "select" | "prefer")));
     let _workstation_owner = if workstation_write {
         Some(crate::project_work::reserve(&resolve_project_root(
             cwd,
@@ -1060,7 +1073,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let _control = crate::run_control::Session::start(&project, "processing_resume")?;
             let outcome = crate::processing::resume(
                 &project,
-                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                conversion_workers.unwrap_or(project.default_workers()?),
             )?;
             needs_attention = !outcome.errors.is_empty()
                 || outcome
@@ -1244,15 +1257,21 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             if positional.len() == 2 && positional[1] == "info" && destination.is_none() =>
         {
             let _reservation = media_reservation::GreaseweazleReservation::acquire()?;
-            let settings = external_tools::load_settings()?;
-            let audit_path = if project_override.is_some() || discover_project(cwd).is_some() {
+            let project = if project_override.is_some() || discover_project(cwd).is_some() {
                 let root = resolve_project_root(cwd, project_override.as_deref())?;
-                ProjectState::open_without_session(root)?
-                    .logs_dir()
-                    .join("external-tools.jsonl")
+                Some(ProjectState::open_without_session(root)?)
             } else {
-                external_tools::default_audit_path()
+                None
             };
+            let settings = match &project {
+                Some(project) => project.tool_settings()?,
+                None => external_tools::load_settings()?,
+            };
+            let audit_path = project
+                .as_ref()
+                .map_or_else(external_tools::default_audit_path, |project| {
+                    project.logs_dir().join("external-tools.jsonl")
+                });
             let executable = external_tools::find_ready_tool(
                 ToolKind::Greaseweazle,
                 settings.path(ToolKind::Greaseweazle),
@@ -1328,6 +1347,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 None => saved.as_ref().map(|s| s.policy.clone()).unwrap_or_default(),
             };
             if gw_scan {
+                let default_workers = project.default_workers()?;
                 return flux_scan::run(
                     project,
                     flux_scan::ScanOptions {
@@ -1371,7 +1391,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                         conversion_workers: conversion_workers.unwrap_or_else(|| {
                             saved
                                 .as_ref()
-                                .map_or(DEFAULT_CONVERSION_WORKERS, |s| s.conversion_workers)
+                                .map_or(default_workers, |s| s.conversion_workers)
                         }),
                     },
                 );
@@ -1407,7 +1427,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 || crate::flux_capture::latest_capture_attempt(&project, disk),
                 Ok,
             )?;
-            let settings = crate::external_tools::load_settings()?;
+            let settings = project.tool_settings()?;
             let executable = crate::external_tools::find_offline_greaseweazle(
                 settings.path(ToolKind::Greaseweazle),
             )?;
@@ -1595,17 +1615,28 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("scan") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let mut project = ProjectState::open_without_session(root)?;
+            let default_workers = project.default_workers()?;
             return scan::run(
                 &mut project,
-                json_output,
-                drive_override.as_deref(),
-                acquisition_retries.unwrap_or(2),
-                scan_count,
-                write_blocker_verified,
-                sound_mode.unwrap_or_default().enabled(
-                    std::io::stderr().is_terminal(),
-                    env::var("TERM").is_ok_and(|term| term == "dumb"),
-                ),
+                scan::Options {
+                    json: json_output,
+                    drive: drive_override.ok_or("scan requires --drive LETTER:")?,
+                    retries: acquisition_retries.unwrap_or(0),
+                    count: scan_count,
+                    last: last_disk,
+                    protected: write_blocker_verified,
+                    workers: conversion_workers.unwrap_or(default_workers),
+                    acquisition_only,
+                    color: color_mode.unwrap_or_default().enabled(
+                        std::io::stderr().is_terminal(),
+                        env::var_os("NO_COLOR").is_some(),
+                        env::var("TERM").is_ok_and(|term| term == "dumb"),
+                    ),
+                    sound: sound_mode.unwrap_or_default().enabled(
+                        std::io::stderr().is_terminal(),
+                        env::var("TERM").is_ok_and(|term| term == "dumb"),
+                    ),
+                },
             );
         }
         Some("stop") if positional.len() == 1 && destination.is_none() => {
@@ -1700,6 +1731,28 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             }
         }
         Some("project")
+            if destination.is_none() && positional.get(1).is_some_and(|s| s == "settings") =>
+        {
+            let project = ProjectState::open_without_session(resolve_project_root(
+                cwd,
+                project_override.as_deref(),
+            )?)?;
+            let value=match positional.as_slice() {
+                [_,_] => serde_json::to_value(crate::project_settings::get(&project)?).map_err(|e|e.to_string())?,
+                [_,_,verb,key,value] if verb=="set" =>crate::project_settings::update(&project,key,Some(value))?,
+                [_,_,verb,key] if verb=="clear" =>crate::project_settings::update(&project,key,None)?,
+                _=>return Err("Use project settings, project settings set KEY VALUE, or project settings clear KEY".into()),
+            };
+            Ok(if json_output {
+                value.to_string()
+            } else {
+                format!(
+                    "Project defaults (CLI overrides win; tool versions are historical only):\n{}",
+                    serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?
+                )
+            })
+        }
+        Some("project")
             if destination.is_none() && positional.len() == 2 && positional[1] == "show" =>
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
@@ -1721,6 +1774,52 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     project.reports_dir().display()
                 ))
             }
+        }
+        Some("disk")
+            if destination.is_none() && positional.len() == 4 && positional[1] == "prefer" =>
+        {
+            let number = positional[2]
+                .parse::<u32>()
+                .map_err(|_| "disk prefer requires a positive disk label")?;
+            let attempt = if positional[3].eq_ignore_ascii_case("auto") {
+                None
+            } else {
+                Some(
+                    positional[3]
+                        .parse::<u32>()
+                        .map_err(|_| "Use an existing attempt number or auto")?,
+                )
+            };
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let mut value = crate::project_work::with_owner(
+                project.root(),
+                _workstation_owner
+                    .as_ref()
+                    .ok_or("Preferred selection needs project ownership")?,
+                || {
+                    let mut value = crate::preferred_image::set(&project, number, attempt)?;
+                    value["automatic_refresh"] = crate::preferred_image::refresh(&project, number)?;
+                    Ok::<_, String>(value)
+                },
+            )??;
+            value["processing_refresh_required"] = json!(true);
+            value["native_refresh_completed"] = json!(true);
+            return Ok(CliResponse {
+                output: if json_output {
+                    value.to_string()
+                } else {
+                    format!(
+                        "Disk {number:03}: preferred selection saved ({}). Prior evidence preserved. Native extraction, inventory and audit refreshed automatically; Office conversions were not run. `process` can reconcile conversions if needed.",
+                        value["mode"]
+                    )
+                },
+                exit_code: if value["automatic_refresh"]["attention_required"] == true {
+                    3
+                } else {
+                    0
+                },
+            });
         }
         Some("disk")
             if destination.is_none() && positional.len() == 4 && positional[1] == "note" =>
@@ -1959,15 +2058,25 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("tools")
             if positional.len() == 2 && positional[1] == "check" && destination.is_none() =>
         {
-            let settings = external_tools::load_settings()?;
-            let audit_path = if project_override.is_some() || discover_project(cwd).is_some() {
+            let project = if project_override.is_some() || discover_project(cwd).is_some() {
                 let root = resolve_project_root(cwd, project_override.as_deref())?;
-                ProjectState::open_without_session(root)?
-                    .logs_dir()
-                    .join("external-tools.jsonl")
+                Some(ProjectState::open_without_session(root)?)
             } else {
-                external_tools::default_audit_path()
+                None
             };
+            let project_owner = project
+                .as_ref()
+                .map(|project| crate::project_work::reserve(project.root()))
+                .transpose()?;
+            let settings = match &project {
+                Some(p) => p.tool_settings()?,
+                None => external_tools::load_settings()?,
+            };
+            let audit_path = project
+                .as_ref()
+                .map_or_else(external_tools::default_audit_path, |p| {
+                    p.logs_dir().join("external-tools.jsonl")
+                });
             let statuses = ToolKind::ALL
                 .map(|kind| external_tools::check_tool(kind, settings.path(kind), &audit_path));
             for status in &statuses {
@@ -1981,6 +2090,11 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             needs_attention = statuses
                 .iter()
                 .any(|status| status.health != ToolHealth::Ready);
+            if let (Some(project), Some(owner)) = (&project, &project_owner) {
+                crate::project_work::with_owner(project.root(), owner, || {
+                    crate::project_settings::record_versions(project, &statuses)
+                })??;
+            }
             if json_output {
                 Ok(
                     json!({"audit_log": audit_path, "tools": statuses.iter().map(|status| json!({
@@ -2237,7 +2351,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 &positional[1],
                 &project,
                 json_output,
-                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                conversion_workers.unwrap_or(project.default_workers()?),
                 positional.get(2).map(Path::new),
                 cwd,
             );
@@ -2308,7 +2422,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
-            let settings = external_tools::load_settings()?;
+            let settings = project.tool_settings()?;
             let command_audit_path = project.logs_dir().join("external-tools.jsonl");
             let seven_zip_executable = external_tools::find_ready_tool(
                 ToolKind::SevenZip,
@@ -2366,7 +2480,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .ok_or("extract disk requires a positive disk number")?;
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
-            let settings = external_tools::load_settings()?;
+            let settings = project.tool_settings()?;
             let command_audit_path = project.logs_dir().join("external-tools.jsonl");
             let seven_zip_executable = external_tools::find_ready_tool(
                 ToolKind::SevenZip,
@@ -2450,7 +2564,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let project = ProjectState::open_without_session(root)?;
             return process::run(
                 &project,
-                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                conversion_workers.unwrap_or(project.default_workers()?),
                 json_output,
             );
         }
@@ -2475,11 +2589,13 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("finalize") if positional.len() == 1 => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let destination = destination.ok_or("finalize requires --destination PATH")?;
+            let default_workers =
+                ProjectState::open_without_session(root.clone())?.default_workers()?;
             return finalize::run(
                 cwd,
                 root,
                 destination,
-                conversion_workers.unwrap_or(DEFAULT_CONVERSION_WORKERS),
+                conversion_workers.unwrap_or(default_workers),
                 allow_attention,
                 json_output,
             );

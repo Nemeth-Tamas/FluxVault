@@ -16,9 +16,10 @@ pub(super) fn inspect(project: &ProjectState, processing: &Value) -> Result<Valu
     let single_timing = benchmark::report(project)?;
     let dual_timing = dual_benchmark::report(project)?;
     let mode = mode(&control, &flow, &dual, &single);
-    let stations = if mode == "dual" {
+    let stations = if matches!(mode, "dual" | "usb") {
         [Station::Usb, Station::Greaseweazle]
             .into_iter()
+            .filter(|station| mode != "usb" || *station == Station::Usb)
             .map(|station| {
                 let held = dual_scan::held_in_state(&dual, station);
                 json!({"station":station,"disk":held.map(|(n,_)|n),
@@ -99,6 +100,7 @@ fn mode(control: &Value, flow: &Value, dual: &Value, single: &Value) -> &'static
     if control["active"] == true {
         match control["record"]["operation"].as_str() {
             Some("dual_scan") => return "dual",
+            Some("usb_scan") => return "usb",
             Some("scan") => return "single_gw",
             Some("production_start") => {
                 return if flow["record"]["dual"] == true {
@@ -111,6 +113,7 @@ fn mode(control: &Value, flow: &Value, dual: &Value, single: &Value) -> &'static
         }
     }
     match (dual["initialized"] == true, single["initialized"] == true) {
+        (true, false) if control["record"]["operation"] == "usb_scan" => "usb",
         (true, false) => "dual",
         (false, true) => "single_gw",
         (true, true) => "ambiguous_saved_modes",

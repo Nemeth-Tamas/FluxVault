@@ -37,7 +37,7 @@ OPTIONAL SOUND CUES
     Default off; per invocation, not remembered on resume. Single-GW, USB-only
     and dual scans support it. A clean saved result uses one tone; partial or
     raw-only saved results use two descending tones; read/reseat errors use
-    three ending low. In dual mode a USB partial uses three rising tones for
+    three ending low. In USB feeding a partial uses three rising tones for
     transfer/set-aside to GW; GW partials stay descending. USB starts lower
     than GW. Progress and cancellation do not sound.
 
@@ -46,7 +46,35 @@ OPTIONAL SOUND CUES
     and shutdown cues can be dropped. Read the written station/label/swap cue
     before moving a floppy; sound does not authorize removal.
 
+PROJECT DEFAULTS AND PREFERRED IMAGES
+    Optional project defaults:
+        fv project settings
+        fv project settings set conversion-workers 12
+        fv project settings set operator 'Archive team'
+        fv project settings clear conversion-workers
+    Tool keys: sevenzip, libreoffice, greaseweazle; set an existing absolute
+    executable path. Project paths override per-user settings. tools check
+    records historical versions (and can probe GW); show never probes tools.
+
+    Preferred saved image:
+        fv disk prefer 7 2
+        fv disk prefer 7 auto
+    Image attempt, not raw capture. Image/log/metadata hashes are pinned;
+    older evidence/history stays. Changed pins never silently fall back.
+    Native extraction, inventory and audit refresh automatically; Office
+    reconciliation remains process. Partial/DERIVED evidence stays attention.
+
+    USB-only feeding now shares durable production custody and background
+    saved-file recovery/audit. Default one forward pass, zero extra USB
+    retries; partials get red SET ASIDE FOR GW cues and durable transfers.
+    --last-disk persists; --count caps this invocation. Exact labels, OUT,
+    PAUSE/RESUME, STATUS, QUIT and STOP work. --acquisition-only opts out of
+    downstream processing. --no-verify stays GW-only. After stopping and
+    confirming removals, scan --double --write-blocker-verified can use the
+    saved transfers/endpoint. Never run competing scans in one project.
+
 READING THIS FILE ON WINDOWS
+
     In PowerShell, from the repository folder:
         Get-Content .\FLUXVAULT-MANUAL.txt | Out-Host -Paging
 
@@ -416,9 +444,10 @@ USB ACQUISITION: OPTIONAL ADVANCED PATH
 
     fv scan --usb [--drive A:] --write-blocker-verified selects the existing
     USB-only scan (default A:). It now accepts the displayed number without a
-    READ prefix; legacy READ still works. Protection checks and session-count
-    semantics remain. This does not enable GW background processing or dual
-    mode.
+    READ prefix; legacy READ still works. Protection checks remain. Saved
+    images enter background recovery/conversion/audit by default; partials
+    become durable GW transfers after confirmed removal. USB scan does not
+    physically run GW or enable dual mode. --acquisition-only skips finishing.
 
     fv scan --double --write-blocker-verified [--last-disk N] starts the opt-in
     two-drive pilot in one console: u1 reads USB 001, g2 reads GW 002, and g1
