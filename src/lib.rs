@@ -29,6 +29,7 @@ pub mod flux_storage;
 pub mod fragments;
 pub mod greaseweazle;
 pub mod imaging;
+pub(crate) mod legacy_import;
 pub mod legacy_logs;
 pub mod manifest;
 pub mod manual_recovery_import;

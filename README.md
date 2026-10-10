@@ -21,6 +21,7 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 | Check benchmark readiness | [Single-GW gates](SINGLE_GW_READINESS.md) |
 | Less typing in PowerShell 7 | [Tab completion](SHELL_COMPLETION.md): optional one-line setup |
 | Want development status | [Progress](PROGRESS.md) and [TODO](TODO.md) |
+| Bring an original script ZIP into a fresh project | [Archive import](LEGACY_IMPORT.md): `fv project import --source ZIP --destination NEW_FOLDER` |
 
 ## Beginner: the usual workflow
 

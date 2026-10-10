@@ -226,6 +226,10 @@ The built-in Fast/Normal/Recovery/Detective stages each allow up to **ten minute
 
 New scans discover supported IBM 720 KB/1.44 MB formats. `--profile ibm.720` or `--profile ibm.1440` pins a known format; maps handle known mixed batches. Expert single-disk `greaseweazle recover` has different defaults: explicitly use `--profile auto --gw-drive B` for automatic discovery on this station. Do not change pending-job format, policy, selector or endpoint.
 
+### Bring an old script archive into a new project
+
+No scanning or coding needed. `fv project import --source 'C:\archives\old.zip' --destination 'C:\archives\Imported' --plan` previews without creating files; omit `--plan` to copy and verify it. The parent must exist and the destination must be a fresh folder outside existing projects; do not run `init` first. Read `Reports\LegacyImport.txt` afterwards, then use normal status/disk inspection. Exit 3 is expected historical attention. Old logs, hashes, recovered files and conversions stay legacy claims; this does not certify recovery or rerun tools. [Complete examples and interruption behavior](LEGACY_IMPORT.md).
+
 ### Saved-evidence tools
 
 No inserted floppy needed:

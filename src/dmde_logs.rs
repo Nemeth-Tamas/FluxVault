@@ -64,6 +64,12 @@ pub fn parse_dmde_log_file(path: &Path) -> Result<ParsedDmdeLog, String> {
 }
 
 pub fn parse_dmde_log(content: &str) -> Result<ParsedDmdeLog, String> {
+    // Legacy ZIPs/logs are untrusted. A tiny C/E record must not expand into
+    // billions of map entries; these bounds comfortably cover floppy retries.
+    if content.len() > 8 * 1024 * 1024 {
+        return Err("DMDE log exceeds 8 MiB parser bound".into());
+    }
+    let mut expanded_sectors = 0u64;
     let mut sector_size = None;
     let mut start_count = 0usize;
     let mut stop_count = 0usize;
@@ -74,6 +80,7 @@ pub fn parse_dmde_log(content: &str) -> Result<ParsedDmdeLog, String> {
     let mut highest_sector_exclusive = 0u64;
 
     for raw_line in content.lines() {
+        crate::cancellation::check()?;
         let line = raw_line.trim().trim_start_matches('\u{feff}').trim();
 
         if line.is_empty() {
@@ -115,9 +122,18 @@ pub fn parse_dmde_log(content: &str) -> Result<ParsedDmdeLog, String> {
             .start_lba
             .checked_add(record.sector_count)
             .ok_or_else(|| "DMDE szektortartomány túlcsordulás.".to_owned())?;
+        expanded_sectors = expanded_sectors
+            .checked_add(record.sector_count)
+            .ok_or("DMDE expansion overflow")?;
+        if record_count > 65_536 || end_lba > 1_048_576 || expanded_sectors > 2_097_152 {
+            return Err("DMDE sector map exceeds bounded floppy-log work".into());
+        }
         highest_sector_exclusive = highest_sector_exclusive.max(end_lba);
 
         for lba in record.start_lba..end_lba {
+            if lba % 4096 == 0 {
+                crate::cancellation::check()?;
+            }
             latest_states.insert(lba, record.state);
         }
     }
@@ -166,6 +182,29 @@ pub fn parse_dmde_log(content: &str) -> Result<ParsedDmdeLog, String> {
         start_count,
         stop_count,
     })
+}
+
+#[cfg(test)]
+mod bounded_import_tests {
+    #[test]
+    fn tiny_logs_cannot_expand_to_unbounded_maps() {
+        for record in [
+            "C 1 > > 0 : 18446744073709551615",
+            "C 1 > > 1048576 : 1",
+            "C 1 > > 0 : 2097153",
+        ] {
+            assert!(super::parse_dmde_log(record).is_err());
+        }
+    }
+    #[test]
+    fn requested_stop_precedes_map_expansion() {
+        let token = crate::cancellation::Token::default();
+        let _scope = crate::cancellation::enter(token.clone());
+        token.request();
+        assert!(crate::cancellation::stopped(
+            &super::parse_dmde_log("C 1 > > 0 : 100").unwrap_err()
+        ));
+    }
 }
 
 fn parse_map_record(line: &str) -> Result<Option<MapRecord>, String> {

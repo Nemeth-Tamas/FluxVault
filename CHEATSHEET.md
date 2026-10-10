@@ -94,6 +94,19 @@ fv finalize --destination 'C:\Users\User\Desktop\FluxVault-Delivery'
 
 Destination must exist outside the project, never on a floppy. Default finalize blocks attention; add `--allow-attention` to explicitly archive partial results with their warnings (still exit 3). Use `fv finalize status` and `fv finalize resume` after a stop/crash; saved products are rechecked offline. Ctrl+C or second-console `fv stop` stops finishing. [Guide](FINALIZATION.md). Keep the project; a ZIP is not proof of complete recovery.
 
+### Optional: bring in an old script ZIP
+
+Choose a new folder whose parent exists; **do not run init first**:
+
+```powershell
+fv project import --source 'C:\archives\old-script-archive.zip' --destination 'C:\archives\Imported' --plan
+fv project import --source 'C:\archives\old-script-archive.zip' --destination 'C:\archives\Imported'
+Set-Location 'C:\archives\Imported'
+Get-Content .\Reports\LegacyImport.txt | Out-Host -Paging
+```
+
+Exit 3 means successfully copied legacy evidence with attention. Source bytes/logs/short images stay intact; old files are not newly certified. Existing destinations are refused; interrupted staging is retained, not resumed. No floppy/tools needed. [Guide](LEGACY_IMPORT.md).
+
 ## Beginner: read the banner
 
 | Cue | Meaning |

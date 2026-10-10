@@ -60,6 +60,8 @@ Usage:
   fluxvault storage resume          Finish durable scan packing tasks without hardware
   fluxvault project show [--project PATH]
                                     Show saved project metadata
+  fluxvault project import --source ZIP --destination NEW_FOLDER [--plan]
+                                    Preserve a script archive in a fresh project; no re-imaging
   fluxvault disk list [--project PATH]
   fluxvault disk show N [--details] [--project PATH]
                                     Inspect saved disk attempts and evidence paths
@@ -170,7 +172,7 @@ Usage:
 Options:
   --usb                             scan: existing USB-only loop, default Windows A:
   --double                         scan: opt-in simultaneous USB/GW pilot; exact labels
-  --plan                           scan --double: offline preview only
+  --plan                           scan --double / project import: offline preview, no writes
   --json                            Output machine-readable JSON
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
@@ -181,7 +183,7 @@ Options:
   --count N                         Stop guided scan after N disks (default: until QUIT)
   --last-disk N                     Stop GW scan after this numbered disk, across restarts
   --write-blocker-verified          Operator asserts separate hardware protection test
-  --source DIR                      External recovered-files folder for DMDE import
+  --source PATH                     DMDE recovery folder, or script ZIP for project import
   --baseline ZIP                    Script archive for recovered-payload comparison
   --include-deleted                  Opt-in forensic deleted recovery (recovery extract), or baseline comparison scope
   --dmde-log FILE                   Matching DMDE log for recovery import
@@ -562,6 +564,60 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
 
     if positional == ["production", "start"] || positional == ["production", "resume"] {
         return production_flow::run(args, cwd);
+    }
+    if positional == ["project", "import"] {
+        let mut i = 0;
+        let mut seen = std::collections::BTreeSet::new();
+        while i < args.len() {
+            if args[i].starts_with("--") && !seen.insert(args[i].as_str()) {
+                return Err("Duplicate project import option".into());
+            }
+            match args[i].as_str() {
+                "--source"|"--destination" => {i+=1;},
+                "--plan"|"--json"|"project"|"import" => {},
+                _ => return Err("project import accepts only --source ZIP, --destination NEW_FOLDER, --plan and --json".into()),
+            }
+            i += 1;
+        }
+        let value = crate::legacy_import::run(
+            cwd,
+            import_source
+                .as_deref()
+                .ok_or("project import requires --source ZIP")?,
+            destination
+                .as_deref()
+                .ok_or("project import requires --destination NEW_FOLDER")?,
+            dual_plan,
+            &|m| eprintln!("{m}"),
+        )?;
+        return Ok(CliResponse {
+            exit_code: if dual_plan { 0 } else { 3 },
+            output: if json_output {
+                value.to_string()
+            } else {
+                format!(
+                    "IMPORT {} / {} images / {} files / {} bytes\nProject: {}\nLegacy files/logs remain historical, not newly certified recovery.{}",
+                    if dual_plan {
+                        "PLAN (no writes)"
+                    } else {
+                        "PUBLISHED WITH LEGACY ATTENTION"
+                    },
+                    value["images"],
+                    value["files"],
+                    value["source_bytes"],
+                    value["destination"].as_str().unwrap_or(""),
+                    if dual_plan {
+                        String::new()
+                    } else {
+                        format!(
+                            "\nSummary: {}\nReport: {}",
+                            value["summary"].as_str().unwrap_or(""),
+                            value["report"].as_str().unwrap_or("")
+                        )
+                    }
+                )
+            },
+        });
     }
     let sector_inspector =
         positional.len() == 3 && positional[0] == "recovery" && positional[1] == "sector";

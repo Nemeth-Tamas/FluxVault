@@ -56,6 +56,25 @@ READING THIS FILE ON WINDOWS
 
 REFERENCE
 
+LEGACY SCRIPT ARCHIVE IMPORT
+    fv project import --source ZIP --destination NEW_FOLDER [--plan] [--json]
+
+    Optional migration: original images/logs/recovered folders/conversions and
+    reports copied into a fresh project without rescanning or invoking tools.
+    Parent must exist; destination must not. Do not init it first or nest it in
+    an existing project. Preview creates nothing, not full payload verification.
+    Apply verifies ZIP CRCs, synced member copies and source/copied SHA-256
+    before publication. Partial images stay incomplete; short images stay short.
+
+    Exit 3 is expected legacy attention, not copy failure. Historical statuses,
+    recorded hashes, old files and conversions are not newly certified recovery.
+    Read Reports\LegacyImport.txt; JSON contains claims/discrepancies and CSV
+    inventories copied members. Existing status/disk commands remain available.
+    No physical flags or --project; duplicate options are rejected. Ctrl+C or
+    fv stop targeting the printed staging project stops copying. Incomplete
+    staging remains for inspection, not automatic resume/merge. Existing targets
+    never overwrite. See LEGACY_IMPORT.md for bounds and the 136-image check.
+
 PRODUCTION WORKFLOW
     fv production start --last-disk 136
     fv production resume

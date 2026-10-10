@@ -12,7 +12,7 @@ $fluxVaultCompleter = {
     $children = @{
         '' = @('init','status','start','stop','scan','acquire','disk','project','drive','tools','greaseweazle','diagnose','extract','recovery','conversion','files','audit','report','process','processing','storage','benchmark','production','finalize','package','run','completions','help')
         'disk' = @('list','show','select','next')
-        'project' = @('show')
+        'project' = @('show','import')
         'drive' = @('list','probe')
         'tools' = @('check','show','set','clear')
         'greaseweazle' = @('preview','info','capture','decode','identify','status','diagnose','compare','consensus','plan','recover','scan')
@@ -43,6 +43,7 @@ $fluxVaultCompleter = {
     $scan = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--sound','--usb','--double','--plan','--drive','--retries','--write-blocker-verified')
     $production = @('--last-disk','--destination','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--no-verify','--color','--sound','--double')
     $options = @{
+        'project import' = @('--source','--destination','--plan')
         'scan' = $scan
         'start' = $scan
         'production start' = $production
@@ -138,7 +139,7 @@ $fluxVaultCompleter = {
         $candidates = @()
         if (-not $prefix.StartsWith('-')) { $candidates += @($children[$context]) }
         if (-not $prefix -or $prefix.StartsWith('-')) {
-            $globalOptions = if ($context -eq 'greaseweazle preview') { @('--json','--help') } else { @('--project','--json','--help') }
+            $globalOptions = if ($context -in @('greaseweazle preview','project import')) { @('--json','--help') } else { @('--project','--json','--help') }
             $candidates += $globalOptions + @($options[$context])
             $candidates = @($candidates | Where-Object { $flags -notcontains $_ })
         }

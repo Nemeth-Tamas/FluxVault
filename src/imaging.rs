@@ -1063,6 +1063,12 @@ fn load_legacy_attempt(
         .and_then(|log| log.geometry.bytes_per_sector)
         .or_else(|| parsed_dmde_log.as_ref().and_then(|log| log.sector_size))
         .unwrap_or(512) as u64;
+    if sector_size == 0 {
+        return Err(
+            "Legacy image log declares zero-byte sectors; geometry cannot be inferred safely"
+                .into(),
+        );
+    }
     let total_sectors = parsed_log
         .as_ref()
         .and_then(|log| log.geometry.total_sectors)

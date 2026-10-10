@@ -77,7 +77,7 @@ For operating the current build, start with [README](README.md), [the beginner/a
 - [x] Model acquisition attempts as immutable records: source backend, timestamp, geometry/format, output artifacts, hashes, bad-sector map, status, and log path.
 - [ ] Allow one attempt to be marked **preferred/current** without deleting older attempts.
 - [ ] Preserve enough provenance to answer: “Which read/pass produced this sector/file?”
-- [ ] Import an existing script-created archive as a project without forcing re-imaging.
+- [x] Import an existing script-created archive as a project without forcing re-imaging. `project import --source ZIP --destination NEW_FOLDER` preserves every original member, checks CRC/copied/source hashes, creates metadata/cursor and publishes only into a fresh destination; offline preview, exclusive destination ownership and retained failed stages are tested. Original 136-image ZIP passes independent member comparison. Legacy claims remain attention; no managed recovery/Office provenance is invented. [Usage and limits](LEGACY_IMPORT.md).
 
 ## 3. CLI operator experience
 
@@ -155,8 +155,8 @@ This is the first “we can actually use FluxVault on customer media” target. 
 - [x] Preserve statuses for unfinished logs as **IN PROGRESS**, not “broken”.
 - [x] Exact `NNN.log` must outrank auxiliary `NNN_scan.log`, retry-note logs, etc.
 - [x] Import existing `.bin`, `.img`, `.ima` images and ignore `.partial.*` files as completed acquisitions.
-- [ ] Import existing hashes and current archive index where possible.
-- [ ] Display legacy/manual recovery state without requiring the old Excel workbook.
+- [x] Import existing hashes and current archive index where possible. Original CSV/log bytes are retained; indexed/logged image hashes are compared with independently measured copied bytes, and unmatched rows/status totals/discrepancies remain explicit in LegacyImport.json. No old hash/claim is silently rewritten or newly certified.
+- [x] Display legacy/manual recovery state without requiring the old Excel workbook. Plain-text LegacyImport.txt and detailed JSON report each saved image's old status/size/bad-sector claim, extracted/converted/recovery folder counts and discrepancies. Counts include auxiliary files, not certified recovered-file yield; ordinary legacy disk/status inspection remains compatible.
 
 ## 7. Extraction pipeline
 
@@ -523,10 +523,10 @@ Reproduce `Make-FloppyCustomerPackage_v1.ps1` in the CLI.
 
 Use the supplied `FloppyFinalReport.xlsx` and existing archive as regression truth while porting functionality.
 
-- [ ] Import/represent all 136 floppy records.
-- [ ] Current reference summary: 136 images present; 94 imaging OK; 42 imaging not OK; 86 floppies fully OK; 50 need attention/are partial.
+- [x] Import/represent all 136 floppy records. Original script ZIP passes an isolated CLI import with 136 discovered legacy attempts and next cursor 137; all 6,261 original members/683,329,461 bytes independently match the ZIP, source hash unchanged. Per-disk historical status/hash/extent/folder counts are reported; old aggregate reconciliation and automated recovery yield remain separate.
+- [ ] Current reference summary: previously documented 136 images present; 94 imaging OK; 42 imaging not OK; 86 floppies fully OK; 50 need attention/are partial. The 2026-10-10 exact archive import discovers 136 images; current primary-log parsing reports 102 OK / 28 PARTIAL / 6 MISSING LOG, while the archived index has 126 rows / 88 OK / 38 PARTIAL. There are 38 historical discrepancies (three log hashes, 34 index hashes, one log extent), not failed copied-member checks. Reconcile original workbook/index/log aggregates before asserting equal classifications or full-file yield; original claims are preserved, not overwritten.
 - [ ] Reproduce 1,667 recovered source-file records and the current conversion/audit counts when pointed at the same archive contents.
-- [ ] Correctly represent severe cases rather than assuming every image is 1.44 MB; current data includes manually recovered/high-error cases and at least one 417,792-byte image.
+- [x] Correctly represent severe cases rather than assuming every image is 1.44 MB. Actual original-ZIP CLI import independently verifies every member, preserves 009 at 737,280 bytes and 133 at 417,792 bytes, and flags the latter's inconsistent reported log extent without padding or inferred recovery. No new intact-file/yield certificate follows.
 - [ ] Regression-test examples with 1 bad sector, tens of bad sectors, hundreds of bad sectors, conversion-only failures, no-recovered-file cases, manual recovery, and signature recovery.
 - [ ] Measure automated recovery yield against the existing manual DMDE/script results; FluxVault must match or exceed recovered verified files wherever the same evidence is available.
 - [ ] Track operator interventions required for all 136 disks and drive the normal technical-decision count toward zero.

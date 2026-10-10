@@ -22,6 +22,10 @@ For a **fresh full-chain batch**, use `fv production start --last-disk N`. One o
 
 The installer provides both `fluxvault.exe` and the identical short alias `fv.exe`. `fv init`, `fv status`, and `fv scan` work from the project folder. Plain `scan` uses Greaseweazle; explicit `scan --drive A:` (or USB protection/retry flags) retains the existing guarded USB workflow.
 
+## Import an original script archive
+
+`fv project import --source ZIP --destination NEW_FOLDER [--plan] [--json]` creates a fresh project from saved script images/logs/recovered folders/reports; no re-imaging, external tools or automatic processing. Parent must exist, destination must not; do not initialize it first or nest it in an existing project. Preview writes nothing and does not certify member payloads. Apply CRC-checks/hashes every member and independently verifies copied bytes before publication. Original hashes/index/logs and short images are preserved; legacy claims/files remain attention, not newly managed recovery or Office certification. Normal status/disk inspection works after import. Exit 0 preview / 3 imported legacy attention / 2 error / 130 stop. Partial staging is retained but not resumable/mergeable yet. [Beginner commands, bounds and measured 136-image validation](LEGACY_IMPORT.md).
+
 ## Saved-flux diagnostics
 
 `fv diagnose N` (also `fv greaseweazle diagnose N`) exports saved raw/packed SCP track/revolution measurements, per-track vendor-reported sector counts, pass improvements/losses/conflicts and independently replayed committed sector provenance. The human response prints recovery-note, CSV and JSON paths under `Reports/FluxDiagnostics`; `--json` returns paths/hash/counts/attention. No device or host tool is invoked, and no recovery/delivery choice changes. Code `3` indicates partial/standalone/diagnostic attention; committed hash/provenance mismatches are errors. Physical flags are rejected. [Interpretation, bounds and saved validation](FLUX_DIAGNOSTICS.md).
