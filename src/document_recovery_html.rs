@@ -31,6 +31,14 @@ pub(super) fn render(doc: &Document, source: &str, sha: &str) -> Result<String, 
     );
     write!(html,"<h1>{}</h1><p>Readable main-text segments from an incomplete Word document.</p><div class=\"meta\">Source image: {}<br>SHA-256: <code>{}</code><br>Declared main-text positions: {} · Readable: {} · Missing/invalid: {}</div></header>",escaped(&doc.parent.path),escaped(source),escaped(sha),doc.main_characters.unwrap_or(0),doc.segments.iter().map(|s|s.cp_count).sum::<usize>(),doc.missing_text.iter().map(|g|g.cp_count).sum::<usize>()).unwrap();
     html.push_str("<aside class=\"warning\"><h2>Generated edition — not the original document</h2><p>Only source-mapped readable text is shown. Missing positions are marked, never guessed. Segment boundaries remain visible. Formatting, tables, pictures, fields, revisions and original meaning are not reconstructed or certified. This HTML is a new presentation of forensic text, not a repaired DOC.</p><p class=\"meta\">CP ranges are zero-based Word character positions (UTF-16 code units). Non-whitespace control characters are displayed as literal Unicode escape labels. Consult word-text.json and the separate text files for original decoded characters and exact source extents.</p></aside>");
+    if let Some(detection) = &doc.content_detection {
+        write!(
+            html,
+            "<aside class=\"warning\"><h2>Content-based format detection</h2><p>{}</p></aside>",
+            escaped(detection)
+        )
+        .unwrap();
+    }
     if let Some(evidence) = &doc.cfb_recovery {
         write!(html,"<aside class=\"warning\"><h2>Partial compound-file metadata</h2><p>{}</p><p class=\"meta\">{} unavailable directory entries; {} unrelated allocation exceptions. Entire original container remains unverified.</p></aside>",escaped(&evidence.warning),evidence.missing_directory_stream_ids.len(),evidence.allocation_issues.len()).unwrap();
         if !evidence.ignored_storage_fields.is_empty() {

@@ -874,11 +874,12 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     tail association remains unproven; competing candidates are retained, not
     silently certified. recovery documents N [--json] invokes the same native
     service and focuses output on forensic Word main-text salvage. Word-text
-    engine 3 can selectively map surviving root Word/table regular/mini streams
+    engine 4 can also detect misnamed compound Word content and selectively map
+    surviving root Word/table regular/mini streams
     past unrelated missing CFB directory entries; missing required
     metadata/encryption/unsupported formats remain refusals. Exact CP/source
     extents, UTF-8 segments, generated offline readable HTML and the report
-    live under Recovery/NNN/attempt_NNN_word_text_v3; old v1/v2 evidence stays
+    live under Recovery/NNN/attempt_NNN_word_text_v4; old v1/v2/v3 evidence stays
     intact. Human output prints edition paths; JSON returns
     readable_edition_paths, readable_editions, selectively_mapped_documents and
     engine_version. Editions show explicit gaps and do not execute field
@@ -887,11 +888,15 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     physical media/external tools. Full bounds and examples (DEEP_RECOVERY.md).
 
     The same recovery documents N command and automatic native processing also
-    try damaged RTF readable prefixes. Engine 1 writes separate UTF-8/HTML and
-    rtf-text.json under Recovery/NNN/attempt_NNN_rtf_text_v1. JSON adds
-    rtf_salvage, readable_utf16_positions and edition paths. Parsing stops at
-    the first unknown byte, unsupported visible control/font/encoding or bad
-    structure. No state is guessed across holes; remaining text length is
+    try damaged RTF readable prefixes, including misnamed RTF1 content.
+    Engine 2 writes separate UTF-8 segments/HTML and rtf-text.json under
+    Recovery/NNN/attempt_NNN_rtf_text_v2; old v1 evidence stays intact.
+    Unsupported single-byte symbol glyphs get explicit gap panels and separate
+    text files on either side, never guessed icons/letters or a silently joined
+    text file. JSON adds rtf_salvage, readable_utf16_positions, text_segments,
+    unsupported_font_glyphs and edition paths. Parsing still stops at the first
+    unknown acquisition byte, unsupported control/encoding or bad structure.
+    No state is guessed across holes; remaining text length is
     UNKNOWN. Hidden/deleted and non-body destinations are excluded. Outputs
     are immutable warned evidence, not repaired RTFs, extra whole files or
     normal Office jobs. Example: recovery documents 22. Exit 3 is expected.

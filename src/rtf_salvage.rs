@@ -9,9 +9,20 @@ use std::{
 };
 #[path = "rtf_text.rs"]
 mod text;
-const ENGINE_VERSION: u32 = 1;
+const ENGINE_VERSION: u32 = 2;
 const MAX_PREFIX: usize = 256 * 1024;
-const WARNING: &str = "FORENSIC RTF PREFIX TEXT, NOT A REPAIRED ORIGINAL. Only a source-mapped readable prefix is decoded; parsing stops at the first unreadable/unmapped byte, unsupported encoding/control or malformed structure. No state is guessed across holes and no later fragments are silently joined. Remaining text length, original formatting, tables, objects and semantics are unknown. Hidden/deleted text, fields and non-body destinations are excluded. UTF-8/HTML are separate generated evidence, not whole-file counts, normal Office conversions or customer-certified documents.";
+const WARNING_V1: &str = "FORENSIC RTF PREFIX TEXT, NOT A REPAIRED ORIGINAL. Only a source-mapped readable prefix is decoded; parsing stops at the first unreadable/unmapped byte, unsupported encoding/control or malformed structure. No state is guessed across holes and no later fragments are silently joined. Remaining text length, original formatting, tables, objects and semantics are unknown. Hidden/deleted text, fields and non-body destinations are excluded. UTF-8/HTML are separate generated evidence, not whole-file counts, normal Office conversions or customer-certified documents.";
+const WARNING: &str = "FORENSIC RTF PREFIX TEXT, NOT A REPAIRED ORIGINAL. Only a source-mapped readable prefix is decoded. Known single-byte symbol-font glyphs with unsupported meanings are explicit gaps; later readable text uses continuously verified RTF state, not parser resynchronization or guessed glyphs. Separate UTF-8 segments are never silently joined across these gaps. Parsing still stops at the first acquisition-unreadable/unmapped byte, unknown encoding/control or malformed structure. Remaining text length, original formatting, tables, objects and semantics are unknown. Hidden/deleted text, fields and non-body destinations are excluded. UTF-8/HTML are separate generated evidence, not whole-file counts, normal Office conversions or customer-certified documents.";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TextSegment {
+    path: String,
+    decoded_utf8_start: usize,
+    decoded_utf8_end: usize,
+    bytes: usize,
+    sha256: String,
+    readable_utf16_positions: usize,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Document {
@@ -32,6 +43,12 @@ struct Document {
     edition_sha256: String,
     repaired_original: bool,
     customer_delivery_certified: bool,
+    #[serde(default)]
+    unsupported_font_gaps: Vec<text::GlyphGap>,
+    #[serde(default)]
+    text_segments: Vec<TextSegment>,
+    #[serde(default)]
+    content_detection: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Report {
@@ -52,6 +69,8 @@ pub struct SalvageResult {
     pub documents_examined: usize,
     pub documents_with_text: usize,
     pub readable_utf16_positions: usize,
+    pub unsupported_font_glyphs: usize,
+    pub text_segments: usize,
     pub readable_edition_paths: Vec<PathBuf>,
     pub output_directory: PathBuf,
     pub report_path: PathBuf,
@@ -143,7 +162,26 @@ fn escaped(value: &str) -> String {
     }
     out
 }
-fn edition(doc: &Document, body: &str, source: &str, sha: &str) -> String {
+fn presentation(doc: &Document, body: &str) -> String {
+    if doc.unsupported_font_gaps.is_empty() {
+        return escaped(body);
+    }
+    let mut html = String::new();
+    let mut start = 0;
+    for gap in &doc.unsupported_font_gaps {
+        html.push_str(&escaped(&body[start..gap.output_utf8_offset]));
+        html.push_str(&format!("</pre></section><aside><h2>UNINTERPRETED SYMBOL-FONT GLYPH</h2><p>Readable file bytes {}–{} (end exclusive), font {}, encoded byte 0x{:02X}. Glyph meaning unknown; no replacement character or word has been invented.</p></aside><section><h2>Next independently retained text segment</h2><pre>",gap.input_start,gap.input_end,gap.font_id,gap.encoded_byte));
+        start = gap.output_utf8_offset;
+    }
+    html.push_str(&escaped(&body[start..]));
+    html
+}
+fn edition(doc: &Document, body: &str, source: &str, sha: &str, engine: u32) -> String {
+    let warning = if engine == 1 { WARNING_V1 } else { WARNING };
+    let warning = doc
+        .content_detection
+        .as_ref()
+        .map_or_else(|| warning.to_string(), |d| format!("{warning} {d}"));
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\"><title>FluxVault — recovered RTF prefix</title><style>body{{background:#f1f4f8;color:#203047;font:16px/1.7 system-ui,Segoe UI,sans-serif;margin:0}}main{{max-width:940px;margin:32px auto;padding:0 20px 40px}}header,aside,section{{padding:22px;background:white;border:1px solid #d6dfeb;border-radius:10px;margin-bottom:18px}}aside{{border-left:5px solid #b23336;background:#fff4f3}}h1{{font-size:26px;overflow-wrap:anywhere}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}}.meta{{font-size:13px;overflow-wrap:anywhere}}@media(max-width:600px){{main{{padding:0 12px}}header,aside,section{{padding:16px}}}}</style></head><body><main><header><p>FLUXVAULT / FORENSIC RTF PREFIX EDITION</p><h1>{}</h1><p class=\"meta\">Source: {}<br>SHA-256: {}<br>{} readable UTF-16 positions · {} input prefix bytes · decoded through file byte {}</p></header><aside><h2>Generated partial text — not a repaired RTF</h2><p>{}</p></aside><section><h2>Readable prefix text</h2><pre>{}</pre></section><aside><h2>STOPPED / REMAINDER NOT INTERPRETED</h2><p>{}</p><p>{} file bytes remain uninterpreted. Their text length is unknown; no replacement words or formatting state have been guessed.</p></aside></main></body></html>",
         escaped(&doc.parent.record.path),
@@ -152,8 +190,8 @@ fn edition(doc: &Document, body: &str, source: &str, sha: &str) -> String {
         doc.readable_utf16_positions,
         doc.readable_prefix_bytes,
         doc.decoded_through_file_byte,
-        escaped(WARNING),
-        escaped(body),
+        escaped(&warning),
+        presentation(doc, body),
         escaped(&doc.stop_reason),
         doc.remaining_file_bytes_uninterpreted
     )
@@ -178,10 +216,22 @@ pub(crate) fn preserve(
     let mut limits = false;
     let mut input_bytes = 0;
     let mut text_bytes = 0;
+    let mut edition_bytes = 0;
     for parent in &a.unrecovered_files {
-        if !parent.record.path.to_ascii_lowercase().ends_with(".rtf")
-            || !fat12::partial_file_safe(parent, a)
-        {
+        if !fat12::partial_file_safe(parent, a) {
+            continue;
+        }
+        let named_rtf = parent.record.path.to_ascii_lowercase().ends_with(".rtf");
+        let signature = parent.record.bytes >= 6
+            && parent
+                .record
+                .data_lbas
+                .first()
+                .filter(|lba| !bad.contains(lba))
+                .and_then(|lba| usize::try_from(*lba).ok()?.checked_mul(512))
+                .and_then(|at| image.get(at..at.saturating_add(6)))
+                .is_some_and(|bytes| bytes == b"{\\rtf1");
+        if !named_rtf && !signature {
             continue;
         }
         if docs.len() >= 64 || input_bytes >= fat12::MAX_IMAGE_BYTES || text_bytes >= 500_000 {
@@ -205,6 +255,7 @@ pub(crate) fn preserve(
                 text: String::new(),
                 through: 0,
                 stop: reason,
+                gaps: Vec::new(),
             },
         );
         if text_bytes + decoded.text.len() > 500_000 {
@@ -232,6 +283,9 @@ pub(crate) fn preserve(
             edition_sha256: String::new(),
             repaired_original: false,
             customer_delivery_certified: false,
+            unsupported_font_gaps: decoded.gaps,
+            text_segments: Vec::new(),
+            content_detection: (!named_rtf).then(|| "Readable RTF1 signature selected the text decoder despite the filename extension. Original name/bytes remain unchanged; complete RTF/document semantics remain unverified.".into()),
         };
         if !decoded.text.is_empty() {
             let name = format!(
@@ -239,22 +293,65 @@ pub(crate) fn preserve(
                 parent.record.directory_entry_offset,
                 &sha[..12]
             );
-            doc.text_path = Some(name.clone());
+            if doc.unsupported_font_gaps.is_empty() {
+                doc.text_path = Some(name.clone());
+                payloads.push((name, decoded.text.as_bytes().to_vec()));
+            } else {
+                // Do not publish an apparently continuous text file with glyphs
+                // silently deleted. Every gap separates the UTF-8 payloads.
+                let mut start = 0;
+                for end in doc
+                    .unsupported_font_gaps
+                    .iter()
+                    .map(|g| g.output_utf8_offset)
+                    .chain(std::iter::once(decoded.text.len()))
+                {
+                    if end > start {
+                        let bytes = &decoded.text.as_bytes()[start..end];
+                        let sha = hash(bytes);
+                        let path = format!(
+                            "rtf_{:08x}_segment_{:04}_{}.txt",
+                            parent.record.directory_entry_offset,
+                            doc.text_segments.len() + 1,
+                            &sha[..12]
+                        );
+                        doc.text_segments.push(TextSegment {
+                            path: path.clone(),
+                            decoded_utf8_start: start,
+                            decoded_utf8_end: end,
+                            bytes: bytes.len(),
+                            sha256: sha,
+                            readable_utf16_positions: decoded.text[start..end]
+                                .encode_utf16()
+                                .count(),
+                        });
+                        payloads.push((path, bytes.to_vec()));
+                    }
+                    start = end;
+                }
+            }
             let html = edition(
                 &doc,
                 &decoded.text,
                 &native.source_image,
                 &native.source_sha256,
+                ENGINE_VERSION,
             );
-            doc.edition_sha256 = hash(html.as_bytes());
-            let edition_name = format!(
-                "rtf_{:08x}_readable_{}.html",
-                parent.record.directory_entry_offset,
-                &doc.edition_sha256[..12]
-            );
-            doc.edition_path = Some(edition_name.clone());
-            payloads.push((name, decoded.text.into_bytes()));
-            payloads.push((edition_name, html.into_bytes()));
+            if html.len() <= fat12::MAX_IMAGE_BYTES
+                && edition_bytes + html.len() <= fat12::MAX_IMAGE_BYTES * 2
+            {
+                edition_bytes += html.len();
+                doc.edition_sha256 = hash(html.as_bytes());
+                let edition_name = format!(
+                    "rtf_{:08x}_readable_{}.html",
+                    parent.record.directory_entry_offset,
+                    &doc.edition_sha256[..12]
+                );
+                doc.edition_path = Some(edition_name.clone());
+                payloads.push((edition_name, html.into_bytes()));
+            } else {
+                limits = true;
+            }
         }
         docs.push(doc);
     }
@@ -327,12 +424,28 @@ pub(crate) fn preserve(
         documents_with_text: report
             .documents
             .iter()
-            .filter(|d| d.text_path.is_some())
+            .filter(|d| d.readable_utf16_positions > 0)
             .count(),
         readable_utf16_positions: report
             .documents
             .iter()
             .map(|d| d.readable_utf16_positions)
+            .sum(),
+        unsupported_font_glyphs: report
+            .documents
+            .iter()
+            .map(|d| d.unsupported_font_gaps.len())
+            .sum(),
+        text_segments: report
+            .documents
+            .iter()
+            .map(|d| {
+                if d.text_path.is_some() {
+                    1
+                } else {
+                    d.text_segments.len()
+                }
+            })
             .sum(),
         readable_edition_paths: report
             .documents

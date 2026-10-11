@@ -14,7 +14,7 @@ use std::{
 const MAX_CHARACTERS: usize = 200_000;
 const MAX_SEGMENTS: usize = 4096;
 const MAX_WORK: usize = 64 * 1024 * 1024;
-pub const ENGINE_VERSION: u32 = 3;
+pub const ENGINE_VERSION: u32 = 4;
 #[path = "document_cfb.rs"]
 mod cfb_recovery;
 pub use cfb_recovery::Evidence as CfbEvidence;
@@ -82,6 +82,8 @@ pub struct Document {
     pub edition_refusal: Option<String>,
     #[serde(default)]
     pub incomplete_fib: Option<FibPrefixEvidence>,
+    #[serde(default)]
+    pub content_detection: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Report {
@@ -534,6 +536,7 @@ fn decode_streams(
         readable_edition: None,
         edition_refusal: None,
         incomplete_fib,
+        content_detection: None,
     };
     for i in 0..pieces {
         if cps[i] >= main {
@@ -668,6 +671,21 @@ fn decode_streams(
     Ok(doc)
 }
 
+// A filename is not a format signature. Only readable, allocated source bytes
+// may dispatch a misnamed compound file to the Word metadata validator.
+fn compound_signature(image: &[u8], parent: &fat12::FileRecord, bad: &BTreeSet<u64>) -> bool {
+    if parent.bytes < 8 || parent.bytes > fat12::MAX_IMAGE_BYTES {
+        return false;
+    }
+    let Some(lba) = parent.data_lbas.first().filter(|lba| !bad.contains(lba)) else {
+        return false;
+    };
+    let Some(at) = usize::try_from(*lba).ok().and_then(|l| l.checked_mul(512)) else {
+        return false;
+    };
+    image.get(at..at.saturating_add(8)) == Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+}
+
 pub(crate) fn preserve(
     image: &[u8],
     source: &Path,
@@ -690,7 +708,8 @@ pub(crate) fn preserve(
             continue;
         }
         let name = parent.record.path.to_ascii_lowercase();
-        if !name.ends_with(".doc") && !name.ends_with(".dot") {
+        let named_word = name.ends_with(".doc") || name.ends_with(".dot");
+        if !named_word && !compound_signature(image, &parent.record, &bad) {
             continue;
         }
         if documents.len() >= 64 || positions >= 500_000 {
@@ -715,8 +734,12 @@ pub(crate) fn preserve(
                 readable_edition: None,
                 edition_refusal: None,
                 incomplete_fib: None,
+                content_detection: None,
             },
         };
+        if !named_word {
+            d.content_detection = Some("Readable compound-file signature dispatched to Word validation despite the filename extension. Root WordDocument/table streams and FIB/CLX mappings must still validate; the original name and bytes are unchanged.".into());
+        }
         if positions + d.main_characters.unwrap_or(0) > 500_000 {
             limits = true;
             break;

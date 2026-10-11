@@ -1,14 +1,26 @@
 //! Conservative RTF prefix decoding. Never resume state across an unknown byte.
 //! MSFT-RTF syntax/group state; this bounded subset is not a rendering engine.
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const MAX_TEXT: usize = 200_000;
 const MAX_DEPTH: usize = 128;
+const MAX_GAPS: usize = 4096;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct GlyphGap {
+    pub input_start: usize,
+    pub input_end: usize,
+    pub output_utf8_offset: usize,
+    pub font_id: i32,
+    pub encoded_byte: u8,
+}
 
 pub(super) struct Decoded {
     pub text: String,
     pub through: usize,
     pub stop: String,
+    pub gaps: Vec<GlyphGap>,
 }
 #[derive(Clone)]
 struct State {
@@ -117,7 +129,7 @@ fn destination(word: &str) -> bool {
 // Known nontext formatting only. Unknown visible controls STOP, rather than
 // treating an unrecognized destination/encoding switch as body text.
 fn formatting(word: &str) -> bool {
-    if word == "rsidroot" {
+    if word == "rsidroot" || word == "brdrtbl" {
         return true;
     } // Revision identity metadata, no text.
     const WORDS: &str = "stshfdbch stshfloch stshfhich stshfbi deflang deflangfe deftab fet aenddoc ftntj ftnbj ftnlytwnine sftnbj sftnlytwnine revprop revbar viewkind viewscale viewzk horzdoc paperh paperw margb margl margr margt gutter headery footery colsx sectd sectdefaultcl sectlinegrid sectrsid linex endnhere pgbrdrfoot pgbrdrhead dghorigin dgvorigin dghspace dgvspace dghshow dgvshow dgmargin hyphcaps hyphhotz grfdocevents formshade noxlattoyen nowidctlpar nospaceforul noultrlspc dntblnsbdb expshrtn wrapdefault lytcalctblwd lyttblrtgr lnbrkrule splytwnine htmautsp useltbaln alntblind jexpand aspalpha aspnum nolnhtadjtbl wgrffmtfilter adjustedright adjustright pard s cs ls outlinelevel ql qr qc qj fi li ri lin rin sb sa sl slmult keep keepn widowctrl widctlpar faauto fbias lang langfe langnp langfenp insrsid charrsid pararsid rsid b i ul ulnone ulw uldb uld ulwave strike striked scaps caps cf cb highlight fs expnd expndtw up dn kerning nosupersub super sub chbrdr brdrnone brdrs brdrw brdrcf brsp tx tqc tqr tql tldot tlhyph tlul intbl itap cellx trowd trgaph trleft trrh trftsWidth trftsWidthA trftsWidthB trpaddfb trpaddfl trpaddfr trpaddft trpaddl trpaddr trpaddt trpaddb trbrdrb trbrdrh trbrdrl trbrdrr trbrdrt trbrdrv trkeep trqc trql trqr trhdr lastrow irow irowband clbrdrb clbrdrl clbrdrr clbrdrt clcbpat clcbpatraw clftsWidth clwWidth clvertalt clvertalc clvertalb cltxlrtb clshdrawnil clmgf clmrg clvmgf clvmrg tblind tblindtype ts tsrowd tsvertalt tscellwidthfts tsbrdrb tsbrdrdgl tsbrdrdgr tsbrdrh tsbrdrl tsbrdrr tsbrdrt tsbrdrv chhres hres cgrid nofchars nofcharsws nofpages nofwords vern version red green blue fprq fnil froman fswiss fmodern fscript fdecor ftech fbidi cchs loch hich dbch ltrch rtlch ltrpar rtlpar ltrdoc rtldoc rtlsect ltrsect rtlrow ltrrow deleted revised revdttm revauth revrsid pndec pnhang pnindent pnlcltr pnlcrm pnseclvl pnstart pnucltr pnucrm";
@@ -166,10 +178,20 @@ fn byte_character(byte: u8, page: Option<i32>) -> Result<char, String> {
 }
 
 pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
+    decode_with_gaps(prefix, boundary, true)
+}
+
+#[cfg(test)]
+pub(super) fn decode_v1(prefix: &[u8], boundary: &str) -> Decoded {
+    decode_with_gaps(prefix, boundary, false)
+}
+
+fn decode_with_gaps(prefix: &[u8], boundary: &str, symbol_gaps: bool) -> Decoded {
     let mut out = Decoded {
         text: String::new(),
         through: 0,
         stop: boundary.into(),
+        gaps: Vec::new(),
     };
     if !prefix.starts_with(b"{\\rtf1") {
         out.stop = "Readable RTF1 header unavailable".into();
@@ -225,7 +247,7 @@ pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
                 out.through = at;
                 continue;
             }
-            let t = if byte == b'\\' {
+            let mut t = if byte == b'\\' {
                 token(prefix, &mut at)?
             } else {
                 Token::Byte(byte)
@@ -239,6 +261,12 @@ pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
                 }
                 out.through = at;
                 continue;
+            }
+            // Escaped literal bytes also use the selected font. Charset 2 is
+            // explicitly single-byte SYMBOL: syntax/state remains readable,
+            // but its glyph meaning is not an ANSI character or a guessed name.
+            if symbol_gaps && let Token::Symbol(c @ (b'{' | b'}' | b'\\')) = t {
+                t = Token::Byte(c);
             }
             let emit = match t {
                 Token::Word(word, number) => {
@@ -259,7 +287,10 @@ pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
                         if !state.start {
                             return Err("RTF destination outside group start".into());
                         }
-                        if word == "fonttbl" && !state.skip && !out.text.is_empty() {
+                        if word == "fonttbl"
+                            && !state.skip
+                            && (!out.text.is_empty() || !out.gaps.is_empty())
+                        {
                             return Err("RTF font table outside header".into());
                         }
                         state.fonts = word == "fonttbl" && !state.skip;
@@ -283,8 +314,18 @@ pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
                                 .get_mut(&state.font.ok_or("RTF font properties without identity")?)
                                 .ok_or("Missing RTF font")?;
                             if word == "cpg" {
+                                if f.cpg.is_some() {
+                                    return Err(
+                                        "Duplicate RTF font code page; binding not guessed".into(),
+                                    );
+                                }
                                 f.cpg = Some(n);
                             } else {
+                                if f.charset.is_some() {
+                                    return Err(
+                                        "Duplicate RTF font charset; binding not guessed".into()
+                                    );
+                                }
                                 f.charset = Some(n);
                             }
                         }
@@ -296,7 +337,8 @@ pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
                             "rtf" if number == Some(1) && stack.len() == 1 && start == 1 => None,
                             "ansi" => None,
                             "ansicpg" => {
-                                if stack.len() != 1 || !out.text.is_empty() {
+                                if stack.len() != 1 || !out.text.is_empty() || !out.gaps.is_empty()
+                                {
                                     return Err("RTF default code page outside header".into());
                                 }
                                 default_page = number
@@ -305,7 +347,8 @@ pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
                                 None
                             }
                             "deff" => {
-                                if stack.len() != 1 || !out.text.is_empty() {
+                                if stack.len() != 1 || !out.text.is_empty() || !out.gaps.is_empty()
+                                {
                                     return Err("RTF default font outside header".into());
                                 }
                                 default_font = Some(
@@ -387,6 +430,29 @@ pub(super) fn decode(prefix: &[u8], boundary: &str) -> Decoded {
                     if state.skip || state.hidden || state.deleted {
                         None
                     } else {
+                        if b < 32 && b != b'\t' {
+                            return Err("Unexpected RTF text control byte".into());
+                        }
+                        if symbol_gaps
+                            && let Some(id) = state.font
+                            && font_map
+                                .get(&id)
+                                .is_some_and(|f| f.charset == Some(2) && f.cpg.is_none())
+                        {
+                            if out.gaps.len() >= MAX_GAPS {
+                                return Err("RTF unsupported-glyph gap ceiling".into());
+                            }
+                            out.gaps.push(GlyphGap {
+                                input_start: start,
+                                input_end: at,
+                                output_utf8_offset: out.text.len(),
+                                font_id: id,
+                                encoded_byte: b,
+                            });
+                            state.start = false;
+                            out.through = at;
+                            continue;
+                        }
                         let page = match state.font {
                             None => Some(default_page),
                             Some(id) => font_map

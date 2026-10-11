@@ -155,6 +155,38 @@ fn compressed_text_regular_table_and_unused_missing_sector_are_supported() {
     assert!(d.missing_text.is_empty());
     assert_eq!(d.status, "text_salvaged_original_still_incomplete");
 }
+
+#[test]
+fn signature_dispatch_is_readable_bounded_and_does_not_certify_non_word_containers() {
+    let (image, mut parent, _) = fixture(false, false);
+    parent.path = "Misnamed.rtf".into();
+    assert!(compound_signature(&image, &parent, &BTreeSet::new()));
+    let doc = extract(&image, &parent, &BTreeSet::new()).unwrap();
+    assert_eq!(doc.main_characters, Some(900));
+    assert!(!compound_signature(
+        &image,
+        &parent,
+        &BTreeSet::from([parent.data_lbas[0]])
+    ));
+    parent.data_lbas[0] = u64::MAX;
+    assert!(!compound_signature(&image, &parent, &BTreeSet::new()));
+    let (mut image, parent, _) = fixture(false, false);
+    let at = parent.data_lbas[0] as usize * 512;
+    image[at] ^= 1;
+    assert!(!compound_signature(&image, &parent, &BTreeSet::new()));
+    let mut c =
+        cfb::CompoundFile::create_with_version(cfb::Version::V3, Cursor::new(Vec::new())).unwrap();
+    c.create_stream("/Workbook")
+        .unwrap()
+        .write_all(&[0; 4096])
+        .unwrap();
+    let payload = c.into_inner().into_inner();
+    let mut parent = parent;
+    parent.bytes = payload.len();
+    parent.data_lbas = (0..payload.len().div_ceil(512) as u64).collect();
+    assert!(compound_signature(&payload, &parent, &BTreeSet::new()));
+    assert!(extract(&payload, &parent, &BTreeSet::new()).is_err());
+}
 #[test]
 fn missing_header_fib_or_piece_metadata_is_refused_instead_of_using_placeholders() {
     let (image, parent, lbas) = fixture(false, true);
@@ -292,6 +324,15 @@ fn extended_fib_version_is_bound_to_field_count_and_unencrypted_obfuscation_flag
 
 #[test]
 fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_counts() {
+    native_service_case(b"BROKEN  DOC");
+}
+
+#[test]
+fn native_service_detects_misnamed_word_and_keeps_original_name_and_evidence() {
+    native_service_case(b"BROKEN  RTF");
+}
+
+fn native_service_case(short_name: &[u8; 11]) {
     let (source, parent, _) = fixture(false, true);
     let word = word_mapping(&source, &parent);
     let physical = word.sources[1536].unwrap();
@@ -308,7 +349,7 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
     fat12::tests::entry(
         &mut image,
         19 * 512,
-        b"BROKEN  DOC",
+        short_name,
         clusters[0],
         payload.len() as u32,
         false,
@@ -378,9 +419,31 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
         .with_file_name("attempt_001_word_text_v2");
     fs::create_dir(&previous).unwrap();
     fs::write(previous.join("word-text.json"), b"old v2 evidence").unwrap();
+    let v3 = text
+        .output_directory
+        .with_file_name("attempt_001_word_text_v3");
+    fs::create_dir(&v3).unwrap();
+    fs::write(v3.join("word-text.json"), b"old v3 evidence").unwrap();
+    let report: Report = serde_json::from_slice(&fs::read(&text.report_path).unwrap()).unwrap();
+    assert_eq!(
+        report.documents[0].content_detection.is_some(),
+        short_name.ends_with(b"RTF")
+    );
+    assert_eq!(
+        report.documents[0].parent.path,
+        if short_name.ends_with(b"RTF") {
+            "BROKEN.RTF"
+        } else {
+            "BROKEN.DOC"
+        }
+    );
     let repeated = run().unwrap();
     assert!(repeated.reused);
     assert!(repeated.document_salvage.unwrap().reused);
+    assert_eq!(
+        fs::read(v3.join("word-text.json")).unwrap(),
+        b"old v3 evidence"
+    );
     assert_eq!(
         fs::read(legacy.join("word-text.json")).unwrap(),
         b"old forensic report"

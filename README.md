@@ -6,6 +6,8 @@ FluxVault is a Windows-first command-line floppy archiving and recovery tool. Th
 
 There is no GUI. Both `fv` and `fluxvault` run the same program.
 
+Saved damaged documents also get automatic content-based Word/RTF text salvage. `fv recovery documents 22` or `fv recovery documents 128` prints a readable offline HTML edition with explicit missing-text/symbol gaps. These are separate forensic derivatives, not repaired originals or inflated whole-file counts. [Examples and limits](DEEP_RECOVERY.md).
+
 Developing FluxVault? `pwsh -NoProfile -File .\scripts\check.ps1` is the fail-fast format/build/strict-lint/routine-test gate. It does not scan hardware, install tools or modify user PATH. Environment-dependent acceptance tests remain explicit opt-ins.
 
 Latest development checkpoint: **433/479 TODOs (90.4%), 46 open**. [Current progress](PROGRESS.md) and [the measured 136-disk review](BATCH_136_REVIEW.md) separate delivery readiness, historical file differences and remaining recovery work. USB-only feeding has background recovery/audit and durable GW transfers; [project defaults and preferred images](PROJECT_SETTINGS.md) are optional expert controls. This is engineering checklist coverage, not a customer recovery-rate claim; the earlier [90% checkpoint](CHECKLIST_90.md) is historical.

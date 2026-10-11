@@ -16,12 +16,75 @@ fn escaped_text_group_state_and_unicode_fallback_are_source_deterministic() {
 fn font_code_pages_are_scoped_and_symbol_fonts_are_never_guessed() {
     let d=text::decode(br"{\rtf1\ansi\ansicpg1250\deff0{\fonttbl{\f0\fcharset238 Hungarian;}{\f1\fcharset0 Western;}{\f2\fcharset2 Symbol;}}\f0\'f5{\f1\'f5}\'f5\f2 A}","boundary");
     assert_eq!(d.text, "őõő");
-    assert!(d.stop.contains("selected font code page"));
+    assert!(d.stop.starts_with("Readable root"));
+    assert_eq!(d.gaps.len(), 1);
+    assert_eq!(d.gaps[0].encoded_byte, b'A');
     let d = text::decode(
         br"{\rtf1\deff0{\fonttbl{\f0\fcharset2\cpg1250 Explicit;}}\'f5}",
         "boundary",
     );
     assert_eq!(d.text, "ő");
+}
+
+#[test]
+fn unsupported_symbol_glyphs_are_explicit_and_known_font_state_continues() {
+    let input = br"{\rtf1\ansicpg1250\deff0{\fonttbl{\f0\fcharset238 Known;}{\f10\fcharset2 Wingdings;}}A{\f10\'a1\{\\}\'f5Z}";
+    let d = text::decode(input, "boundary");
+    assert_eq!(d.text, "AőZ");
+    assert_eq!(d.gaps.len(), 3);
+    for (g, byte) in d.gaps.iter().zip([0xa1, b'{', b'\\']) {
+        assert_eq!(g.font_id, 10);
+        assert_eq!(g.output_utf8_offset, 1);
+        assert_eq!(g.encoded_byte, byte);
+        assert!(g.input_end > g.input_start && g.input_end <= d.through);
+    }
+    assert_eq!(&input[d.gaps[0].input_start..d.gaps[0].input_end], br"\'a1");
+    assert!(d.stop.starts_with("Readable root"));
+    // Unknown encodings, missing font definitions and explicit unsupported
+    // code pages still STOP: they may be multibyte or hide structural meaning.
+    for definition in [
+        br"\fcharset128".as_slice(),
+        br"\fcharset2\cpg932",
+        br"\fcharset99",
+    ] {
+        let input = [
+            br"{\rtf1{\fonttbl{\f0 Known;}{\f1".as_slice(),
+            definition,
+            br" Unknown;}}A\f1\'a1\f0 BAD}",
+        ]
+        .concat();
+        let d = text::decode(&input, "boundary");
+        assert_eq!(d.text, "A");
+        assert!(d.gaps.is_empty() && d.stop.contains("code page"));
+    }
+    let d = text::decode(br"{\rtf1 A\f99 B}", "boundary");
+    assert_eq!(d.text, "A");
+    assert!(d.gaps.is_empty());
+    let hidden = text::decode(
+        br"{\rtf1{\fonttbl{\f1\fcharset2 Symbol;}}A{\f1\v BAD}{\f1\deleted BAD}Z}",
+        "boundary",
+    );
+    assert_eq!(hidden.text, "AZ");
+    assert!(hidden.gaps.is_empty());
+}
+
+#[test]
+fn symbol_gaps_are_bounded_and_never_cross_an_unreadable_boundary() {
+    let prefix = br"{\rtf1{\fonttbl{\f0 Known;}{\f1\fcharset2 Symbol;}}A{\f1\'a1}";
+    let d = text::decode(prefix, "First acquisition-unreadable byte");
+    assert_eq!(d.text, "A");
+    assert_eq!(d.gaps.len(), 1);
+    assert_eq!(d.through, prefix.len());
+    assert!(d.stop.contains("acquisition-unreadable"));
+    let prefix = [
+        br"{\rtf1{\fonttbl{\f1\fcharset2 Symbol;}}\f1 ".as_slice(),
+        &vec![b'A'; 4097],
+    ]
+    .concat();
+    let d = text::decode(&prefix, "boundary");
+    assert!(d.text.is_empty());
+    assert_eq!(d.gaps.len(), 4096);
+    assert!(d.stop.contains("gap ceiling"));
 }
 
 #[test]
@@ -45,6 +108,16 @@ fn unknown_ignorable_metadata_and_duplicate_definitions_cannot_rebind_fonts() {
         "boundary",
     );
     assert!(d.text.is_empty() && d.stop.contains("Duplicate RTF font"));
+    for props in [br"\fcharset0\fcharset2".as_slice(), br"\cpg1250\cpg932"] {
+        let input = [
+            br"{\rtf1{\fonttbl{\f0".as_slice(),
+            props,
+            br" Unknown;}}\f0 BAD}",
+        ]
+        .concat();
+        let d = text::decode(&input, "boundary");
+        assert!(d.text.is_empty() && d.gaps.is_empty() && d.stop.contains("Duplicate RTF font"));
+    }
 }
 
 #[test]
@@ -101,11 +174,32 @@ fn fixture() -> (
         br" LOST THEN LATER SECRET}",
     ]
     .concat();
+    fixture_with_prefix(prefix)
+}
+
+fn fixture_with_prefix(
+    prefix: Vec<u8>,
+) -> (
+    crate::project::ProjectState,
+    crate::imaging::AttemptSummary,
+    Vec<u8>,
+) {
+    fixture_with_name(prefix, b"BROKEN  RTF")
+}
+
+fn fixture_with_name(
+    prefix: Vec<u8>,
+    short_name: &[u8; 11],
+) -> (
+    crate::project::ProjectState,
+    crate::imaging::AttemptSummary,
+    Vec<u8>,
+) {
     let mut image = fat12::tests::image();
     fat12::tests::entry(
         &mut image,
         19 * 512,
-        b"BROKEN  RTF",
+        short_name,
         100,
         prefix.len() as u32,
         false,
@@ -206,7 +300,11 @@ fn native_pipeline_cli_reuse_tamper_and_archival_evidence_keep_zero_whole_files(
         p.root(),
     )
     .unwrap();
-    assert!(human.output.contains("RTF prefix text engine v1"));
+    assert!(
+        human
+            .output
+            .contains(&format!("RTF prefix text engine v{ENGINE_VERSION}"))
+    );
     assert!(human.output.contains("Open readable edition:"));
     let manifest = crate::manifest::build_manifest(
         &crate::manifest::ManifestRequest {
@@ -295,9 +393,129 @@ fn html_escapes_all_source_names_text_and_stop_reasons() {
         "<img src=x onerror=evil()> &\0",
         "<script>",
         &"a".repeat(64),
+        ENGINE_VERSION,
     );
     assert!(!html.contains("<img ") && !html.contains("<script>"));
     assert!(html.contains("&lt;img") && html.contains("\\u{0000}"));
+}
+
+#[test]
+fn glyph_gaps_publish_separate_hash_bound_text_segments_and_tamper_refuses_reuse() {
+    let prefix = [br"{\rtf1\ansicpg1250\deff0{\fonttbl{\f0\fcharset238 Known;}{\f1\fcharset2 Wingdings;}}FIRST{\f1\'a1}SECOND ".as_slice(), &vec![b'x';1200]].concat();
+    let (p, attempt, image) = fixture_with_prefix(prefix);
+    let run = || {
+        crate::fat12_recovery::recover_attempt(
+            &p.images_dir(),
+            &p.extracted_dir(),
+            &p.recovery_dir(),
+            1,
+            &attempt,
+            &|_| {},
+        )
+    };
+    let result = run().unwrap();
+    assert_eq!(result.files, 0);
+    let salvage = result.rtf_salvage.unwrap();
+    assert_eq!(salvage.unsupported_font_glyphs, 1);
+    assert_eq!(salvage.text_segments, 2);
+    assert_eq!(salvage.documents_with_text, 1);
+    let report: Report = serde_json::from_slice(&fs::read(&salvage.report_path).unwrap()).unwrap();
+    let d = &report.documents[0];
+    assert!(d.text_path.is_none());
+    assert_eq!(d.unsupported_font_gaps[0].encoded_byte, 0xa1);
+    let mut joined_for_test = Vec::new();
+    for s in &d.text_segments {
+        let bytes = fs::read(salvage.output_directory.join(&s.path)).unwrap();
+        assert_eq!(hash(&bytes), s.sha256);
+        assert_eq!(bytes.len(), s.bytes);
+        assert_eq!(s.decoded_utf8_end - s.decoded_utf8_start, s.bytes);
+        joined_for_test.extend(bytes);
+    }
+    assert!(joined_for_test.starts_with(b"FIRSTSECOND "));
+    assert_eq!(hash(&joined_for_test), d.text_sha256);
+    assert_eq!(
+        fs::read_to_string(salvage.output_directory.join(&d.text_segments[0].path)).unwrap(),
+        "FIRST"
+    );
+    let html = fs::read_to_string(&salvage.readable_edition_paths[0]).unwrap();
+    assert!(html.contains("UNINTERPRETED SYMBOL-FONT GLYPH"));
+    assert!(!html.contains("FIRSTSECOND"));
+    assert!(run().unwrap().rtf_salvage.unwrap().reused);
+    let destination = p.root().with_extension("rtf-segments-package");
+    fs::create_dir(&destination).unwrap();
+    let packed = crate::package::build_package(
+        &crate::package::PackageRequest {
+            project_root: p.root().to_path_buf(),
+            destination,
+            project_name: "rtf-segments-fixture".into(),
+        },
+        &|_| {},
+    )
+    .unwrap();
+    let mut archive = zip::ZipArchive::new(fs::File::open(packed.zip_path).unwrap()).unwrap();
+    for name in d
+        .text_segments
+        .iter()
+        .map(|s| s.path.as_str())
+        .chain([d.edition_path.as_ref().unwrap().as_str(), "rtf-text.json"])
+    {
+        assert!(
+            archive
+                .by_name(&format!(
+                    "Recovery/001/{}/{name}",
+                    salvage
+                        .output_directory
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                ))
+                .is_ok()
+        );
+    }
+    drop(archive);
+    let legacy = salvage
+        .output_directory
+        .with_file_name("attempt_001_rtf_text_v1");
+    fs::create_dir(&legacy).unwrap();
+    fs::write(legacy.join("rtf-text.json"), b"old v1 report").unwrap();
+    assert!(run().unwrap().rtf_salvage.unwrap().reused);
+    assert_eq!(
+        fs::read(legacy.join("rtf-text.json")).unwrap(),
+        b"old v1 report"
+    );
+    let segment = salvage.output_directory.join(&d.text_segments[1].path);
+    fs::write(&segment, b"operator changed segment").unwrap();
+    assert!(run().unwrap_err().contains("preserved"));
+    assert_eq!(fs::read(segment).unwrap(), b"operator changed segment");
+    assert_eq!(fs::read(p.images_dir().join("001.img")).unwrap(), image);
+}
+
+#[test]
+fn readable_rtf_signature_selects_decoder_despite_doc_extension() {
+    let prefix = [br"{\rtf1 Misnamed source ".as_slice(), &vec![b'x'; 1200]].concat();
+    let (p, attempt, image) = fixture_with_name(prefix, b"BROKEN  DOC");
+    let result = crate::fat12_recovery::recover_attempt(
+        &p.images_dir(),
+        &p.extracted_dir(),
+        &p.recovery_dir(),
+        1,
+        &attempt,
+        &|_| {},
+    )
+    .unwrap();
+    assert_eq!(result.files, 0);
+    assert_eq!(result.document_salvage.unwrap().documents_with_text, 0);
+    let salvage = result.rtf_salvage.unwrap();
+    assert_eq!(salvage.documents_with_text, 1);
+    let report: Report = serde_json::from_slice(&fs::read(&salvage.report_path).unwrap()).unwrap();
+    assert_eq!(report.documents[0].parent.record.path, "BROKEN.DOC");
+    assert!(report.documents[0].content_detection.is_some());
+    assert!(
+        fs::read_to_string(&salvage.readable_edition_paths[0])
+            .unwrap()
+            .contains("despite the filename extension")
+    );
+    assert_eq!(fs::read(p.images_dir().join("001.img")).unwrap(), image);
 }
 
 #[test]
@@ -407,44 +625,77 @@ fn saved_damaged_rtf_prefixes_replay_acquisition_bytes_and_published_editions() 
                 decoded.through,
                 decoded.stop
             );
-            let published = project.recovery_dir().join(format!(
-                "{label:03}/attempt_{attempt:03}_rtf_text_v1/rtf-text.json"
-            ));
-            if published.exists() {
-                let report: Report =
-                    serde_json::from_slice(&fs::read(&published).unwrap()).unwrap();
-                let d = report
-                    .documents
-                    .iter()
-                    .find(|d| d.parent.record.path == parent.record.path)
-                    .unwrap();
-                assert_eq!(d.readable_prefix_sha256, hash(&bytes));
-                assert_eq!(
-                    serde_json::to_value(&d.source_extents).unwrap(),
-                    serde_json::to_value(&extents).unwrap()
-                );
-                assert_eq!(d.decoded_through_file_byte, decoded.through);
-                assert_eq!(d.stop_reason, decoded.stop);
-                assert_eq!(d.text_sha256, hash(decoded.text.as_bytes()));
-                if let Some(path) = &d.text_path {
+            if label == 22 && attempt == 2 {
+                assert!(decoded.text.encode_utf16().count() >= 5318);
+                assert!(!decoded.gaps.is_empty());
+            }
+            for engine in [1, ENGINE_VERSION] {
+                let published = project.recovery_dir().join(format!(
+                    "{label:03}/attempt_{attempt:03}_rtf_text_v{engine}/rtf-text.json"
+                ));
+                if published.exists() {
+                    let decoded = if engine == 1 {
+                        text::decode_v1(&bytes, &boundary)
+                    } else {
+                        text::decode(&bytes, &boundary)
+                    };
+                    let report: Report =
+                        serde_json::from_slice(&fs::read(&published).unwrap()).unwrap();
+                    let d = report
+                        .documents
+                        .iter()
+                        .find(|d| d.parent.record.path == parent.record.path)
+                        .unwrap();
+                    assert_eq!(d.readable_prefix_sha256, hash(&bytes));
                     assert_eq!(
-                        fs::read(published.parent().unwrap().join(path)).unwrap(),
-                        decoded.text.as_bytes()
+                        serde_json::to_value(&d.source_extents).unwrap(),
+                        serde_json::to_value(&extents).unwrap()
                     );
-                }
-                if let Some(path) = &d.edition_path {
-                    let html = fs::read(published.parent().unwrap().join(path)).unwrap();
-                    assert_eq!(hash(&html), d.edition_sha256);
-                    assert_eq!(
-                        html,
-                        edition(
-                            d,
-                            &decoded.text,
-                            &report.source_image,
-                            &report.source_sha256
-                        )
-                        .as_bytes()
-                    );
+                    assert_eq!(d.decoded_through_file_byte, decoded.through);
+                    assert_eq!(d.stop_reason, decoded.stop);
+                    assert_eq!(d.text_sha256, hash(decoded.text.as_bytes()));
+                    assert_eq!(d.unsupported_font_gaps, decoded.gaps);
+                    for g in &d.unsupported_font_gaps {
+                        assert!(g.input_end <= decoded.through && g.input_start < g.input_end);
+                        assert!(decoded.text.is_char_boundary(g.output_utf8_offset));
+                    }
+                    for s in &d.text_segments {
+                        let text =
+                            &decoded.text.as_bytes()[s.decoded_utf8_start..s.decoded_utf8_end];
+                        assert_eq!(
+                            fs::read(published.parent().unwrap().join(&s.path)).unwrap(),
+                            text
+                        );
+                        assert_eq!(hash(text), s.sha256);
+                        assert!(
+                            !decoded
+                                .gaps
+                                .iter()
+                                .any(|g| g.output_utf8_offset > s.decoded_utf8_start
+                                    && g.output_utf8_offset < s.decoded_utf8_end)
+                        );
+                    }
+                    if let Some(path) = &d.text_path {
+                        assert_eq!(
+                            fs::read(published.parent().unwrap().join(path)).unwrap(),
+                            decoded.text.as_bytes()
+                        );
+                    }
+                    if let Some(path) = &d.edition_path {
+                        let html = fs::read(published.parent().unwrap().join(path)).unwrap();
+                        assert_eq!(hash(&html), d.edition_sha256);
+                        assert_eq!(
+                            html,
+                            edition(
+                                d,
+                                &decoded.text,
+                                &report.source_image,
+                                &report.source_sha256,
+                                engine
+                            )
+                            .as_bytes()
+                        );
+                    }
                 }
             }
         }

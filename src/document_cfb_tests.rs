@@ -146,7 +146,7 @@ fn source_replay(image: &[u8], doc: &Document, bad: &BTreeSet<u64>) {
         };
         assert_eq!(text, segment.text);
     }
-    for link in &doc.cfb_recovery.as_ref().unwrap().allocation_links {
+    for link in doc.cfb_recovery.iter().flat_map(|e| &e.allocation_links) {
         assert_eq!(
             u32at(image, link.source_byte_offset) as u32,
             link.next_sector_id
@@ -367,6 +367,39 @@ fn saved_storage_metadata_case_recovers_text_and_replays_every_source_binding() 
         doc.missing_text.len()
     );
 }
+
+#[test]
+#[ignore = "requires FLUXVAULT_WORD_STORAGE_PROJECT; saved-image only, no physical media"]
+fn saved_mislabelled_word_container_replays_readable_text() {
+    let project = crate::project::ProjectState::open_without_session(PathBuf::from(
+        std::env::var("FLUXVAULT_WORD_STORAGE_PROJECT").unwrap(),
+    ))
+    .unwrap();
+    let native = crate::extraction::verified_native_report(
+        &project.extracted_dir().join("128/attempt_002_native_v5"),
+    )
+    .unwrap()
+    .unwrap();
+    let image = fs::read(project.images_dir().join(&native.source_image)).unwrap();
+    assert_eq!(hash(&image), native.source_sha256);
+    let a = native.analysis.as_ref().unwrap();
+    let parent = a
+        .unrecovered_files
+        .iter()
+        .find(|f| f.record.path == "vasalók.rtf")
+        .unwrap();
+    assert!(fat12::partial_file_safe(parent, a));
+    let bad = a.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
+    let doc = extract(&image, &parent.record, &bad).unwrap();
+    source_replay(&image, &doc, &bad);
+    let readable = doc.segments.iter().map(|s| s.cp_count).sum::<usize>();
+    assert!(readable > 0);
+    println!(
+        "Saved 128 Word container: {readable}/{} positions, {} gaps",
+        doc.main_characters.unwrap(),
+        doc.missing_text.len()
+    );
+}
 #[test]
 fn unavailable_root_sibling_nodes_cannot_be_replaced_with_detached_named_entries() {
     let (image, parent, bad) = fixture_sparse(false, false);
@@ -553,6 +586,10 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                         .file_name()
                         .to_string_lossy()
                         .ends_with("_word_text_v3")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v4")
             {
                 continue;
             }
