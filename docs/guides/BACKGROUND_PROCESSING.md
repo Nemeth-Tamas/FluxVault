@@ -10,7 +10,7 @@ After each verified acquisition, the disk enters a durable saved-image queue. Ex
 
 Report work now includes the full combined final audit, source inventory, current output hashes, actual delivery manifest and eight-sheet workbook. Immutable bundles and a complete-generation pointer protect report promotion; final reconciliation uses stronger checks for attention. [Report guide](FINAL_REPORTS.md).
 
-Safe composites/mirrored-FAT results now flow into extraction automatically as catalogued **DERIVED** attempts. Their source/sector recipes are replayed before reuse; they remain attention evidence, not new clean physical reads. Unsupported publication is recorded without abandoning ordinary processing. [Handoff, restart and bounds](OFFLINE_RECOVERY_HANDOFF.md).
+Safe composites/mirrored-FAT results now flow into extraction automatically as catalogued **DERIVED** attempts. Their source/sector recipes are replayed before reuse; they remain attention evidence, not new clean physical reads. Unsupported publication is recorded without abandoning ordinary processing. [Handoff, restart and bounds](../recovery/OFFLINE_RECOVERY_HANDOFF.md).
 
 **Follow the scan's big swap banner.** Background progress goes to saved logs, not over your waiting prompt. `QUIT` or the endpoint ends feeding, drains saved work and reconciles the whole project. A completed partial disk stays partial; successful processing does not mean every original byte was recovered.
 
@@ -84,7 +84,7 @@ The processing timeline and its resource metrics stay internal and are excluded 
 
 On Windows an explicitly selected `soffice.exe` uses its sibling `soffice.com` when available, preserving the selected installation and recording the actual executable in the audit. This avoids the GUI launcher's version-message console during background checks; custom wrappers remain unchanged.
 
-Validation covers concurrent arrivals for 136 jobs, duplicate enqueue, interrupted processing, changed-source refusal/restoration, failed-work restart, ownership, stale status and bounded control publication. Saved customer evidence is tested separately from physical acquisition. Run the clean/DD/damaged checks in [PILOT_136.md](PILOT_136.md) before the full live cohort.
+Validation covers concurrent arrivals for 136 jobs, duplicate enqueue, interrupted processing, changed-source refusal/restoration, failed-work restart, ownership, stale status and bounded control publication. Saved customer evidence is tested separately from physical acquisition. Run the clean/DD/damaged checks in [PILOT_136.md](../testing/PILOT_136.md) before the full live cohort.
 
 The real 20-disk pilot was copied into a separate validation project: all 172 conversion jobs succeeded across two coalesced processing runs, the final audit retained 17 verified disks and three attention disks, and every original image hash stayed unchanged. The fresh saved-evidence test took approximately 8 minutes 42 seconds including fixture copying and final checks; this is not physical scanning throughput. An executable scan test also exercised the default queue/drain/packing path with mock hardware and real saved-file tools.
 

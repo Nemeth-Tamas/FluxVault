@@ -21,6 +21,6 @@ All ten **pre-benchmark software gates** pass. This is readiness to collect meas
 
 ## Next run
 
-Use the freshly built executable (or reinstall `fv`), create a new project, and feed the actual collection. [136-disk runbook](PILOT_136.md). Stop partway with `QUIT` to drain or `STOP` to cancel; resume the same project. [Stop/resume](STOP_RESUME.md).
+Use the freshly built executable (or reinstall `fv`), create a new project, and feed the actual collection. [136-disk runbook](PILOT_136.md). Stop partway with `QUIT` to drain or `STOP` to cancel; resume the same project. [Stop/resume](../guides/STOP_RESUME.md).
 
 The **full 136 physical disks**, comparison against the **1,667-file script/DMDE baseline**, live ten-minute stage-exhaustion/escalation and six-hour production target still need measured acceptance. Keep the original archive untouched. No complete-original-file recovery percentage is claimed.

@@ -15,7 +15,7 @@ DESCRIPTION
     DISK means the physical floppy's customer label: 7 and 007 identify the
     same disk. fv.exe and fluxvault.exe are identical executable aliases.
 
-    This is a plain-text, man-style companion converted from CLI.md. It is
+    This is a plain-text, man-style companion converted from docs/guides/CLI.md. It is
     readable on Windows without a Unix man command. Examples are PowerShell.
     The command catalog is NOT a script to run from top to bottom.
 
@@ -103,7 +103,7 @@ LEGACY SCRIPT ARCHIVE IMPORT
     No physical flags or --project; duplicate options are rejected. Ctrl+C or
     fv stop targeting the printed staging project stops copying. Incomplete
     staging remains for inspection, not automatic resume/merge. Existing targets
-    never overwrite. See LEGACY_IMPORT.md for bounds and the 136-image check.
+    never overwrite. See docs/guides/LEGACY_IMPORT.md for bounds and the 136-image check.
 
 PRODUCTION WORKFLOW
     fv production start --last-disk 136
@@ -130,15 +130,15 @@ PRODUCTION WORKFLOW
     Fatal integrity/tool failures refuse publication. Default finalize still
     blocks attention. Repeating completed start returns a historical receipt,
     not fresh validation. Old scan/start batches keep their original behavior;
-    use a fresh project for production. Full guide: PRODUCTION_WORKFLOW.md.
+    use a fresh project for production. Full guide: docs/guides/PRODUCTION_WORKFLOW.md.
 
 Optional PowerShell 7 command/flag completion: fluxvault completions
     powershell prints the static trusted script. Enable it in one line
-    (SHELL_COMPLETION.md); no project or media access, no automatic profile
+    (docs/guides/SHELL_COMPLETION.md); no project or media access, no automatic profile
     changes.
 
-    For your first run, use the beginner tutorial (TUTORIAL.md). For daily
-    commands, use the cheat sheet (CHEATSHEET.md). This reference explains
+    For your first run, use the beginner tutorial (docs/guides/TUTORIAL.md). For daily
+    commands, use the cheat sheet (docs/guides/CHEATSHEET.md). This reference explains
     optional controls and evidence semantics; it is not a sequence to paste and
     run in full.
 
@@ -164,7 +164,7 @@ SAVED-FLUX DIAGNOSTICS
     recovery/delivery choice changes. Code 3 indicates
     partial/standalone/diagnostic attention; committed hash/provenance
     mismatches are errors. Physical flags are rejected. Interpretation, bounds
-    and saved validation (FLUX_DIAGNOSTICS.md).
+    and saved validation (docs/recovery/FLUX_DIAGNOSTICS.md).
 
 EVERYDAY SCAN CONTROLS
 
@@ -173,7 +173,7 @@ EVERYDAY SCAN CONTROLS
     second-console fv stop [--project PATH] requests it too. fv run status
     [--project PATH] [--json] probes the owner offline. Wait for STOPPED and
     drive activity to cease before moving disks. Cancellation exits 130.
-    Command scopes, JSON/exit contract and restart (STOP_RESUME.md).
+    Command scopes, JSON/exit contract and restart (docs/guides/STOP_RESUME.md).
 
     GW scans reuse saved defaults for omitted profile/map, selector, policy,
     endpoint, storage/processing mode and conversion workers. Explicit
@@ -183,7 +183,7 @@ EVERYDAY SCAN CONTROLS
     four workers and no endpoint. Numbered input asserts label/protection
     checks; individual capture/recover still require --source-write-protected.
     004 or 4 confirms 004; QUIT/Q stops. Blank/wrong-number input refuses reads
-    by default. Legacy READ 004 is accepted. See POLICIES.md.
+    by default. Legacy READ 004 is accepted. See docs/guides/POLICIES.md.
 
         fv scan --conversion-workers 12
         fv scan --no-verify
@@ -227,7 +227,7 @@ EVERYDAY SCAN CONTROLS
     conservative default; more is not guaranteed faster. Whole-project
     ownership prevents competing report/delivery writers, while short snapshots
     permit acquisition publication outside Office work. See
-    BACKGROUND_PROCESSING.md.
+    docs/guides/BACKGROUND_PROCESSING.md.
 
 SAVED CONVERSION STATE
 
@@ -239,7 +239,7 @@ SAVED CONVERSION STATE
     results. Even zero-gap derived results remain attention, and changed
     lineage is refused. Expert standalone recovery composite/recovery fat
     commands do not perform this catalog handoff themselves. Bounds, provenance
-    and restart (OFFLINE_RECOVERY_HANDOFF.md).
+    and restart (docs/recovery/OFFLINE_RECOVERY_HANDOFF.md).
 
     Saved conversion state is atomically replaced, with immutable current/prior
     snapshots retained in Reports/ConversionHistory for audit. Equivalent
@@ -281,7 +281,7 @@ CAPTURE PACKING AND FORMAT DISCOVERY
     these offline and safely checks abandoned compression/decode scratch, even
     without a remaining packing task. Real process-kill, injected disk-full and
     cross-process contention tests pass; adaptive CPU/I/O budgeting remains
-    open. Cleanup rules and validation (CAPTURE_STORAGE.md).
+    open. Cleanup rules and validation (docs/guides/CAPTURE_STORAGE.md).
 
     For existing evidence, storage pack N [--capture-attempt N] keeps raw;
     --retire-raw explicitly reclaims space after verified publication.
@@ -300,7 +300,7 @@ READ FAILURES AND RESTART
     allowance, but earlier stages cannot consume Detective's allowance. The
     historical expert whole_job policy retains a guarded empty-first-capture
     restart path. Completed disks/cursor and incomplete evidence remain
-    preserved. See policy scope and migration (POLICIES.md).
+    preserved. See policy scope and migration (docs/guides/POLICIES.md).
 
     Guided scan handles specifically classified No Index capture failures
     without immediately exiting: a red REMOVE AND REINSERT SAME DISK cue
@@ -316,9 +316,9 @@ READ FAILURES AND RESTART
     enforced. Telemetry retains the failed operations even after a successful
     retry.
 
-    For a copy-and-paste operator guide, start with CHEATSHEET.md. For the next
+    For a copy-and-paste operator guide, start with docs/guides/CHEATSHEET.md. For the next
     two short hardware checks and automatic result collection, use
-    TOMORROW_TEST.md.
+    docs/testing/TOMORROW_TEST.md.
 
     Offline reference comparison: fv benchmark compare --baseline ZIP
     [--include-deleted] [--project PATH] [--json]. Compares original recovered
@@ -329,9 +329,9 @@ READ FAILURES AND RESTART
     --include-deleted changes comparison scope only. Separate forensic recovery
     uses recovery extract N --include-deleted. Exit 0 matched / 3 changed,
     missing or no reference payloads / 2 operation error. Details and measured
-    results (BASELINE_COMPARISON.md).
+    results (docs/testing/BASELINE_COMPARISON.md).
 
-    For setup and the recorded live checks, see GREASEWEAZLE_PREFLIGHT.md. The
+    For setup and the recorded live checks, see docs/testing/GREASEWEAZLE_PREFLIGHT.md. The
     working shop drive is the Mitsumi on selector B; the original NEC has a
     faulty head/read path.
 
@@ -341,8 +341,8 @@ READ FAILURES AND RESTART
     resume offline while partial evidence remains intact. Normal QUIT still
     drains gracefully. New host audit records expose controller_supervision;
     old records remain compatible. No new scan flags/admin/registry changes.
-    Crash supervision and restart boundaries (PROCESS_SUPERVISION.md). Next
-    053-075 batch commands (NEXT_SCAN.md).
+    Crash supervision and restart boundaries (docs/development/PROCESS_SUPERVISION.md). Next
+    053-075 batch commands (docs/testing/NEXT_SCAN.md).
 
 INSTALLATION AND COMMAND CATALOG
 
@@ -353,7 +353,7 @@ INSTALLATION AND COMMAND CATALOG
     the terminal after a PATH change. Repeat installation after a new build:
     installed fv.exe/fluxvault.exe are copies. Alternatively run the full
     release path using PowerShell's & operator. Beginner setup
-    (TUTORIAL.md#1-install-or-refresh-the-short-command).
+    (docs/guides/TUTORIAL.md#1-install-or-refresh-the-short-command).
 
     This is a catalog, not a batch recipe. Choose one relevant command from a
     project folder. Physical recover/scan/capture commands access the inserted
@@ -439,7 +439,7 @@ INSTALLATION AND COMMAND CATALOG
     includes directory/JSON/latest-pointer paths and attention counts.
     Scan/process also generate it and use stronger combined checks for
     attention. Export itself returns 0 when a warning report was successfully
-    written. Files and compatibility (FINAL_REPORTS.md).
+    written. Files and compatibility (docs/guides/FINAL_REPORTS.md).
 
 USB ACQUISITION: OPTIONAL ADVANCED PATH
 
@@ -458,7 +458,7 @@ USB ACQUISITION: OPTIONAL ADVANCED PATH
     u out / g out confirms the last saved disk's removal; QUIT drains active
     reads. Selectors/endpoint persist. scan --double --plan is offline-only;
     production status inspects custody. Ordinary scan remains GW-only. First
-    test and limits (DUAL_SCAN.md).
+    test and limits (docs/guides/DUAL_SCAN.md).
 
     Inside dual scan, PAUSE (p) persistently blocks new reads while active
     reads and saved-file work finish; removal confirmations remain allowed.
@@ -478,7 +478,7 @@ USB ACQUISITION: OPTIONAL ADVANCED PATH
     loss and capped later-ticket age inform the heuristic, not recovery
     probabilities. Old journals retain unknown age; active/interrupted custody
     and PAUSE still control authorization. Policy and limits
-    (DUAL_SCAN.md#automatic-usb-triage-and-gw-recovery-priority-2026-10-09).
+    (docs/guides/DUAL_SCAN.md#automatic-usb-triage-and-gw-recovery-priority-2026-10-09).
 
     Dual scan also shows current-invocation saved-label pace and a rough
     fresh-feed ETA after three fresh saves with an endpoint; paused feeding
@@ -491,7 +491,7 @@ USB ACQUISITION: OPTIONAL ADVANCED PATH
     old runs show explicit timing gaps. Interrupted totals remain unknown,
     overlapping reader durations are not summed as wall time, and logs/exports
     are excluded from customer packages. Existing benchmark report is single-GW
-    only. Measurement details (DUAL_SCAN.md#pace-and-saved-timing-reports).
+    only. Measurement details (docs/guides/DUAL_SCAN.md#pace-and-saved-timing-reports).
 
     Windows A: is the USB floppy drive letter, not Greaseweazle selector A/B.
     This guarded path is optional and distinct from the default fv scan
@@ -658,7 +658,7 @@ GUIDED GREASEWEAZLE-ONLY BATCH
 
 MEASURED PILOT RUNS
 
-    For the first twenty numbered customer disks, see PILOT_20.md. scan
+    For the first twenty numbered customer disks, see docs/testing/PILOT_20.md. scan
     --profile-map FILE accepts a regular workstation JSON file (maximum 64 KiB)
     of the form
     {"schema_version":1,"profiles":[{"disk":9,"profile":"ibm.720"}]}. Entries
@@ -702,7 +702,7 @@ MEASURED PILOT RUNS
     persistence overhead-not a six-hour production guarantee. The simulated
     136-disk scan service test covers partial outcomes, an acquisition failure,
     persisted resume, numbering through 136 and automatic stopping before 137.
-    No hardware throughput is inferred from mock tests. See PILOT_136.md for
+    No hardware throughput is inferred from mock tests. See docs/testing/PILOT_136.md for
     setup, acceptance order and the data collection recipe.
 
     The final numbered image in Images has compatible acquisition metadata/logs
@@ -821,7 +821,7 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     completed acquisition log/map. Readable directory/FAT-chain recovery
     supports unpartitioned FAT12 volumes with 512-byte sectors, at most 4 MiB.
     Geometry may come from readable BPB metadata or the warned, corroborated
-    standard-layout fallback described in DAMAGED_FILESYSTEM_RECOVERY.md. With
+    standard-layout fallback described in docs/recovery/DAMAGED_FILESYSTEM_RECOVERY.md. With
     no usable layout, bounded signature recovery can search readable regions
     without claiming original filesystem reconstruction. Missing directories,
     FAT disagreement, loops, cross-links, size mismatches and unreadable
@@ -851,7 +851,7 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     live/deleted status. It does not guess missing file/name bytes or certify
     original text/customer completeness. recovery extract returns 3, including
     reuse. Normal processing automatically converts supported recovered Office
-    candidates; see CARVING_RECOVERY.md. Batch exceptions appear in
+    candidates; see docs/recovery/CARVING_RECOVERY.md. Batch exceptions appear in
     RecoveryExceptions.txt; BrokenForDMDE.txt is a compatibility filename, not
     a mandatory manual-DMDE instruction.
 
@@ -865,7 +865,7 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     and old Office derivatives remain preserved. Selection/cleanup reports
     explain changes and are included in customer archives; quarantine/private
     ownership state is excluded. See recovery selection and delivery
-    maintenance (RECOVERY_SELECTION.md).
+    maintenance (docs/recovery/RECOVERY_SELECTION.md).
 
     Generation 5 additionally reconstructs bounded evidenced lost-parent
     directories (DirectoryRecovery / delivery Directory-Recovered) and
@@ -885,7 +885,7 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     engine_version. Editions show explicit gaps and do not execute field
     codes/macros or fetch assets. No original replaced/repaired, extra
     whole-file count or routine Office conversion. Exit 3, including reuse; no
-    physical media/external tools. Full bounds and examples (DEEP_RECOVERY.md).
+    physical media/external tools. Full bounds and examples (docs/recovery/DEEP_RECOVERY.md).
 
     The same recovery documents N command and automatic native processing also
     try damaged RTF readable prefixes, including misnamed RTF1 content.
@@ -910,7 +910,7 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     only forensic candidates under Recovery and leaving normal
     extraction/delivery unchanged. Both return attention code 3; no physical
     media or external tools are accessed. Commands, evidence and limitations
-    (DELETED_AND_FRAGMENT_RECOVERY.md).
+    (docs/recovery/DELETED_AND_FRAGMENT_RECOVERY.md).
 
     Saved-image validation on 2026-10-06 recovered 22 forensic files /
     1,208,710 bytes from WinWord 1, preserved the original image SHA-256, and
@@ -932,7 +932,7 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     offline; finalize resume uses saved options and rechecks current products
     without physical reads. Completed receipts require a new finalize for a
     fresh snapshot. ZIP integrity is not customer-delivery certification.
-    Beginner/advanced finishing guide (FINALIZATION.md).
+    Beginner/advanced finishing guide (docs/guides/FINALIZATION.md).
 
     Production/finalize automatically copy a verified ready ZIP/checksum and
     FINAL_* final reports beside project.json. DELIVERY_READY.json binds that
@@ -965,7 +965,7 @@ SAVED-SECTOR INSPECTOR (ADVANCED)
     Changed or unbound claims refuse. Exit 0: selected range
     has readable saved evidence; 3: missing/unknown/derived range; 2: error.
     Never certifies the physical label, whole disk or customer completeness.
-    More examples and limits: SECTOR_INSPECTION.md.
+    More examples and limits: docs/recovery/SECTOR_INSPECTION.md.
 
 SAVED DAMAGE AND FILE TRACE (ADVANCED)
     fv recovery impact all [--json]
@@ -994,12 +994,12 @@ SAVED DAMAGE AND FILE TRACE (ADVANCED)
     or missing directory ownership is not guessed. No known file dependency
     is NOT proof the sector is unused/harmless. Deleted/carved/manual and
     converted files are outside this live-chain diagnostic. At most 65,536
-    dependency rows; truncation is explicit. See EVIDENCE_IMPACT.md.
+    dependency rows; truncation is explicit. See docs/recovery/EVIDENCE_IMPACT.md.
     Exit 0: no attention within inspection scope; 3: attention; 2: error.
     Never certifies customer completeness, identity or independent flux CRC.
 
 SOURCE
-    CLI.md in the FluxVault repository. This companion is a static snapshot;
+    docs/guides/CLI.md in the FluxVault repository. This companion is a static snapshot;
     future CLI changes may require regenerating it. Use fv --help for the
     installed executable's implemented command list.
 

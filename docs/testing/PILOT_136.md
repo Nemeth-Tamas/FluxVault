@@ -1,12 +1,12 @@
 # The first 136-disk pilot
 
-**Start here if you are new:** [the beginner tutorial](TUTORIAL.md) covers setup and ordinary scans. This runbook is for a measured batch; [the cheat sheet](CHEATSHEET.md) is the shorter daily reference.
+**Start here if you are new:** [the beginner tutorial](../guides/TUTORIAL.md) covers setup and ordinary scans. This runbook is for a measured batch; [the cheat sheet](../guides/CHEATSHEET.md) is the shorter daily reference.
 
-**Current checkpoint:** live 001–020, 053–064, repeat 009/058 and 021–032 cohorts are complete. New projects identify supported IBM formats, pack captures and process files in the background. Inconclusive completed format trials preserve raw-only exceptions so feeding can continue; tool/integrity failures still stop. Repeat small checks after hardware changes or when validating a new read-path build before a large run. The full physical 136-disk benchmark remains separate; [PROGRESS.md](PROGRESS.md) records current results and [PILOT_20.md](PILOT_20.md) is historical.
+**Current checkpoint:** live 001–020, 053–064, repeat 009/058 and 021–032 cohorts are complete. New projects identify supported IBM formats, pack captures and process files in the background. Inconclusive completed format trials preserve raw-only exceptions so feeding can continue; tool/integrity failures still stop. Repeat small checks after hardware changes or when validating a new read-path build before a large run. The full physical 136-disk benchmark remains separate; [PROGRESS.md](../development/PROGRESS.md) records current results and [PILOT_20.md](PILOT_20.md) is historical.
 
 **Goal:** read the numbered customer collection on the working Mitsumi/Greaseweazle station, preserve evidence, run the saved-file processing chain, and collect a useful performance/recovery baseline. This is a controlled single-station pilot, not a promise that every damaged disk will yield every file or that the six-hour dual-drive target has been met.
 
-[Pre-benchmark software gates now pass](SINGLE_GW_READINESS.md), including the live 2026-10-09 WinWord stop/resume check. Type `STOP` to cancel or `QUIT` to drain; resume the same project/command. Wait for STOPPED and physical idle before moving disks. [Stop/resume guide](STOP_RESUME.md).
+[Pre-benchmark software gates now pass](SINGLE_GW_READINESS.md), including the live 2026-10-09 WinWord stop/resume check. Type `STOP` to cancel or `QUIT` to drain; resume the same project/command. Wait for STOPPED and physical idle before moving disks. [Stop/resume guide](../guides/STOP_RESUME.md).
 
 ## 1. Start with a small hardware smoke test
 
@@ -32,7 +32,7 @@ Before committing to the full collection, also exercise a damaged disk in a sepa
 
 ## 2. Run the collection in a fresh pilot project
 
-For a new complete-chain test, prefer `production start --last-disk 136` in the fresh folder below; it restores options with `production resume` and automatically finishes to a verified, attention-labeled archive. Optional USB + GW: `production start --double --write-blocker-verified --last-disk 136`, with exact uN/gN labels. [Runbook](PRODUCTION_WORKFLOW.md). The older `scan` procedure below remains compatible and does not auto-package. Retain the earlier label-drifted partial batch separately; do not relabel/adopt it into the new benchmark.
+For a new complete-chain test, prefer `production start --last-disk 136` in the fresh folder below; it restores options with `production resume` and automatically finishes to a verified, attention-labeled archive. Optional USB + GW: `production start --double --write-blocker-verified --last-disk 136`, with exact uN/gN labels. [Runbook](../guides/PRODUCTION_WORKFLOW.md). The older `scan` procedure below remains compatible and does not auto-package. Retain the earlier label-drifted partial batch separately; do not relabel/adopt it into the new benchmark.
 
 After the short hardware checks pass:
 
@@ -44,7 +44,7 @@ Set-Location 'C:\Users\User\Desktop\FluxVault-Test\Customer-136-Pilot'
 
 Check the disk label against every prompt. Insert the protected disk, type the displayed **number only** (e.g. `004`), and wait for **GW SWAP** before removing it. Completed partial results advance normally. An acquisition error keeps the same number/evidence. New scans process saved files between swaps; **`QUIT`** ends feeding and drains/reconciles work. The source is never written. Plain `scan` reuses saved settings on restart.
 
-For Enter-only swaps, add `--no-verify` each invocation: it skips label typing, not protection/evidence verification. Never press Enter until the swap and label/protection checks are complete. Four conversion workers remains conservative; `--conversion-workers N` saves a request capped in background mode to leave two logical CPUs for acquisition. After 136, **BATCH FINISHED / REMOVE 136** requests no further insertion. See [background work](BACKGROUND_PROCESSING.md).
+For Enter-only swaps, add `--no-verify` each invocation: it skips label typing, not protection/evidence verification. Never press Enter until the swap and label/protection checks are complete. Four conversion workers remains conservative; `--conversion-workers N` saves a request capped in background mode to leave two logical CPUs for acquisition. After 136, **BATCH FINISHED / REMOVE 136** requests no further insertion. See [background work](../guides/BACKGROUND_PROCESSING.md).
 
 In a second terminal, `fv processing status` shows saved-file progress without disturbing the swap prompt. After an interruption, `fv processing resume` drains image work offline and `fv storage resume` drains packing. Another mutating report/conversion command is refused while a worker owns the project. Older scan journals retain serial tail mode; `--processing-mode background` opts them in, while `--processing-mode tail` opts out.
 

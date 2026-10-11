@@ -4,7 +4,7 @@ Date: 2026-10-05
 
 ## Development checkpoint: 2026-10-06
 
-`greaseweazle scan --gw-drive B --source-write-protected [--count N]` is now the guided GW-only feeding command. It prompts `READ NNN`/`QUIT`, runs bounded recovery for each disk, persists custody/completed results, reconciles interrupted numbering after offline evidence verification, and automatically runs the saved-file processing chain when feeding ends. Project metadata commits are atomic. The CLI holds a per-user cross-project Greaseweazle reservation for scan/recover/capture/info; termination releases it automatically. See `CHEATSHEET.md` and `CLI.md` for operator/resume details.
+`greaseweazle scan --gw-drive B --source-write-protected [--count N]` is now the guided GW-only feeding command. It prompts `READ NNN`/`QUIT`, runs bounded recovery for each disk, persists custody/completed results, reconciles interrupted numbering after offline evidence verification, and automatically runs the saved-file processing chain when feeding ends. Project metadata commits are atomic. The CLI holds a per-user cross-project Greaseweazle reservation for scan/recover/capture/info; termination releases it automatically. See `docs/guides/CHEATSHEET.md` and `docs/guides/CLI.md` for operator/resume details.
 
 The new batch behavior has mock/unit/executable coverage; the existing single-disk Mitsumi live results remain the hardware baseline. Next priorities are bounded format discovery, multi-disk live acceptance, isolated/coalesced background downstream work, and deeper damaged-filesystem recovery. The scan currently processes its downstream tail after feeding, not concurrently. Source-media writes remain forbidden.
 
@@ -47,8 +47,8 @@ Current main already has the foundations:
 Read these first:
 
 - `TODO.md`
-- `CLI.md`
-- `GREASEWEAZLE_PREFLIGHT.md`
+- `docs/guides/CLI.md`
+- `docs/testing/GREASEWEAZLE_PREFLIGHT.md`
 - `src/greaseweazle.rs`
 - `src/flux_capture.rs`
 - `src/cli/flux.rs`
@@ -301,6 +301,6 @@ The next development session pulled this handoff and completed FluxVault's live 
 
 Implemented `greaseweazle recover N --gw-drive B --source-write-protected`: fixed-profile fast capture, bounded targeted escalation, no-improvement/time/pass ceilings, hashed immutable artifacts, durable stage journal, and per-sector corroborated/single-capture/conflicting/unreadable provenance. It dispatches the existing offline project processing chain by default. Repeating a completed job verifies/reuses it with no new physical reads; interrupted decode resumes from saved raw evidence.
 
-Live project: `C:\Users\User\Desktop\FluxVault-Test\GW-Live-WinWord1`. Full captures 1/2 and targeted captures 3/4 are preserved. Automatic job seeded capture 2, reread cylinders 0/1/2 twice (problem cylinder plus controls), retained 2,879/2,880 sectors with no conflicts, stopped for no improvement, and explicitly left LBA 24 unreadable. Repeated recovery performed zero new reads; backup/audit/XLSX completed, but damaged-image extraction stayed flagged rather than claiming clean files. The floppy was then removed. Exact results/hash are in `GREASEWEAZLE_PREFLIGHT.md`.
+Live project: `C:\Users\User\Desktop\FluxVault-Test\GW-Live-WinWord1`. Full captures 1/2 and targeted captures 3/4 are preserved. Automatic job seeded capture 2, reread cylinders 0/1/2 twice (problem cylinder plus controls), retained 2,879/2,880 sectors with no conflicts, stopped for no improvement, and explicitly left LBA 24 unreadable. Repeated recovery performed zero new reads; backup/audit/XLSX completed, but damaged-image extraction stayed flagged rather than claiming clean files. The floppy was then removed. Exact results/hash are in `docs/testing/GREASEWEAZLE_PREFLIGHT.md`.
 
 Remaining next work: guided GW-only batch loop and physical-device reservation; bounded automatic format discovery (current recovery default is ibm.1440, explicit ibm.720 supported); native damaged-directory/FAT extraction and carving; complete crash/interruption scenarios and concurrent USB/GW production scheduling. These items remain unchecked in TODO. Single-pass good sectors are lower-confidence evidence, not independently certified bytes. Do not mistake this successful single-disk slice for a finished zero-touch production appliance.

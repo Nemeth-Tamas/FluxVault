@@ -43,7 +43,7 @@ Set-Location -LiteralPath 'C:\paste\the\printed\Dual-053-075-project'
 & $fv scan --double --last-disk 75 --write-blocker-verified
 ```
 
-Do not `init` or `disk select` on resume. A forced console exit is now covered by [Windows host supervision](PROCESS_SUPERVISION.md), but use graceful `q` for an ordinary break. Wait for physical activity to settle after abrupt exit and reconfirm the actual disk. This live pilot is not an instruction to crash a physical read deliberately.
+Do not `init` or `disk select` on resume. A forced console exit is now covered by [Windows host supervision](../development/PROCESS_SUPERVISION.md), but use graceful `q` for an ordinary break. Wait for physical activity to settle after abrupt exit and reconfirm the actual disk. This live pilot is not an instruction to crash a physical read deliberately.
 
 ## GW only: minimal typing
 

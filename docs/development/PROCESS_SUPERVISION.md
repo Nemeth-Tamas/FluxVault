@@ -5,7 +5,7 @@ No new scan flags or administrator setup. The current Windows executable supervi
 ## Operator: stop and resume
 
 - Prefer `QUIT` at a waiting prompt: finish active reads and drain saved-file work. Dual `PAUSE` blocks new feeding while current reads finish; it is not immediate cancellation.
-- Cancel active work with scan `STOP`, Windows Ctrl+C or second-console `fv stop --project PATH`. Wait for the original console's STOPPED cue and actual drive idle. [Generation-bound controls and restart](STOP_RESUME.md).
+- Cancel active work with scan `STOP`, Windows Ctrl+C or second-console `fv stop --project PATH`. Wait for the original console's STOPPED cue and actual drive idle. [Generation-bound controls and restart](../guides/STOP_RESUME.md).
 - If the console closes or FluxVault crashes, its supervised GW/7-Zip/Office host processes and their descendants are terminated by Windows. Interrupted `.partial.scp`, `.partial.img` and metadata remain evidence, not successful completed acquisitions. Do not delete them to restart.
 - Reopen the **same project**, use the **same scan command**, and follow its current custody prompt. Confirm the exact disk again; do not initialize/reset numbering or launch an independent raw reader. Dual resume still requires numbered `uN`/`gN` commands, not Enter-only mode.
 - A complete hash-verified raw capture can resume decoding offline. An incomplete raw capture needs a new confirmed physical read and a new evidence attempt number. Previously saved acquisitions are not duplicated.

@@ -60,4 +60,4 @@ Counts below partition the open TODO items; there are no additional checkboxes i
 3. Run saved-file conversion/compression benchmarks and address measured bottlenecks.
 4. Complete live cohorts and the controlled 136-disk comparison; measure both verified payload yield and total operator time.
 
-Single-GW retains its **10/10 pre-benchmark software gates**. Script engineering coverage remains approximately **93%** and dual approximately **92%**; this checklist reconciliation does not justify raising those estimates without their specific acceptance evidence. See [progress](PROGRESS.md), [project settings](PROJECT_SETTINGS.md) and the authoritative [TODO](TODO.md).
+Single-GW retains its **10/10 pre-benchmark software gates**. Script engineering coverage remains approximately **93%** and dual approximately **92%**; this checklist reconciliation does not justify raising those estimates without their specific acceptance evidence. See [progress](PROGRESS.md), [project settings](../guides/PROJECT_SETTINGS.md) and the authoritative [TODO](../../TODO.md).

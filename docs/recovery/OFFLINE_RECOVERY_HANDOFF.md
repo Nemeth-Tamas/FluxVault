@@ -11,7 +11,7 @@ fv process
 
 If different attempts contain complementary readable sectors, FluxVault builds a separate composite. If readable FAT redundancy can supply a missing FAT sector, it can also reconstruct that sector. The improved image now enters the normal image catalog and is used automatically for native file recovery, manifests, delivery planning, Office conversion, audit and workbook reports. Existing operator-created recovery folders still take precedence.
 
-You do not need to copy files out of `Recovery` or select a composite manually. Earlier acquisition images, forensic extractions and reports remain intact. Repeating processing verifies/reuses the same publication rather than adding another derived attempt. Update the installed `fv` copy after rebuilding; see [installation](TUTORIAL.md#1-install-or-refresh-the-short-command).
+You do not need to copy files out of `Recovery` or select a composite manually. Earlier acquisition images, forensic extractions and reports remain intact. Repeating processing verifies/reuses the same publication rather than adding another derived attempt. Update the installed `fv` copy after rebuilding; see [installation](../guides/TUTORIAL.md#1-install-or-refresh-the-short-command).
 
 ## Read the result
 

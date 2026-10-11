@@ -149,7 +149,7 @@ fv disk select 53
 fv scan --last-disk 64 --no-verify
 ```
 
-Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count N` caps this invocation. Completed jobs are reused, not reread; use [the fresh-test launcher](TOMORROW_TEST.md) for repeat-read measurements.
+Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count N` caps this invocation. Completed jobs are reused, not reread; use [the fresh-test launcher](../testing/TOMORROW_TEST.md) for repeat-read measurements.
 
 ### Saved-file tools: no physical disk needed
 
@@ -179,9 +179,9 @@ Normal scans/processing need their saved-file tools; standalone native extractio
 
 Final reports are automatic after saved-file processing. Open the printed `FloppyFinalReport.xlsx`; `Reports/FinalReportLatest.json` records the latest complete bundle. Standalone export needs no floppy/tools and changes no payload. [Statuses and limits](FINAL_REPORTS.md).
 
-Native generation 5 / Word-text engine 4 / RTF-prefix engine 2 automatically adds evidenced lost-directory recovery, bounded missing-FAT-link tail alternatives and separate document text salvage. No new scan flag is needed. `fv recovery documents 128` detects misnamed binary Word; `fv recovery documents 22` prints damaged-RTF prefix editions. Open the printed offline `.html` in your browser. Missing Word positions and unsupported RTF symbol glyphs have visible gap panels and separate text segments. Acquisition holes/unknown parser state still stop interpretation, with unknown remaining text length. Text/editions live under `Recovery`, not as repaired originals; attention exit 3 is expected. [Simple commands and limits](DEEP_RECOVERY.md).
+Native generation 5 / Word-text engine 4 / RTF-prefix engine 2 automatically adds evidenced lost-directory recovery, bounded missing-FAT-link tail alternatives and separate document text salvage. No new scan flag is needed. `fv recovery documents 128` detects misnamed binary Word; `fv recovery documents 22` prints damaged-RTF prefix editions. Open the printed offline `.html` in your browser. Missing Word positions and unsupported RTF symbol glyphs have visible gap panels and separate text segments. Acquisition holes/unknown parser state still stop interpretation, with unknown remaining text length. Text/editions live under `Recovery`, not as repaired originals; attention exit 3 is expected. [Simple commands and limits](../recovery/DEEP_RECOVERY.md).
 
-`fv process` automatically uses supported verified composite/FAT improvements for extraction and delivery. These appear as **DERIVED**, not clean physical reads; even zero-gap results retain attention. No manual copying from `Recovery` is needed. [Details](OFFLINE_RECOVERY_HANDOFF.md).
+`fv process` automatically uses supported verified composite/FAT improvements for extraction and delivery. These appear as **DERIVED**, not clean physical reads; even zero-gap results retain attention. No manual copying from `Recovery` is needed. [Details](../recovery/OFFLINE_RECOVERY_HANDOFF.md).
 
 ### Settings and diagnostics
 
@@ -197,7 +197,7 @@ Advanced saved-image choice: `fv disk prefer 7 2` pins image attempt 002 for dis
 
 USB-only scanning now also runs saved-file processing in the background. Default: one forward pass, then set partials aside for GW. `--last-disk N` persists the endpoint; `--count N` only caps this invocation. `OUT` confirms final removal; switching to dual retains the transfer queue. Use `--acquisition-only` explicitly to skip processing. Never run competing scans in the same project.
 
-`fv diagnose 59` inspects saved raw/packed captures and decode passes, replays final sector provenance and exports a short recovery note plus track/sector CSV and JSON. No floppy or host tool needed; exit `3` means attention/partial. [How to read it](FLUX_DIAGNOSTICS.md).
+`fv diagnose 59` inspects saved raw/packed captures and decode passes, replays final sector provenance and exports a short recovery note plus track/sector CSV and JSON. No floppy or host tool needed; exit `3` means attention/partial. [How to read it](../recovery/FLUX_DIAGNOSTICS.md).
 
 USB-only: `fv scan --usb --count 20 --write-blocker-verified` (default A:, same protection checks; type the number). Two-drive **pilot**: `fv scan --double --write-blocker-verified --last-disk 10`, then `u7` / `g8` for USB/GW labels, `gOLD` for a queued USB partial, `u out` / `g out` after the last saved disks, `QUIT` to drain. Use a small new project first; dual rejects `--no-verify`. Ordinary scan stays GW-only. [Copyable 007–010 test](DUAL_SCAN.md).
 
@@ -212,9 +212,9 @@ Dual timing: `fv production benchmark` exports saved timing JSON/CSV offline. Ne
 - `--json` gives machine-readable output; progress stays on stderr.
 - `--color never` removes colored scan cues; text instructions remain.
 - `fv --help` lists implemented commands. There is no GUI; two-drive mode remains an opt-in pilot, not full-collection production acceptance.
-- Expert saved-byte check: `fv recovery sector 59 --lba 24 --sectors 2`. Add `--attempt 2` for an image attempt or `--json`; this never reads a floppy. Missing/derived bytes stay labeled. [Sector inspector](SECTOR_INSPECTION.md).
-- Whole batch damage summary: `fv recovery impact all`. See exact affected live files/offsets: `fv recovery impact 59`; trace a file: `fv recovery trace 59 'FOLDER\LETTER.DOC'`. Add `--json` for full details, or `--attempt 2` for a single disk only. Saved images only, no writes; unknown/refused disks stay visible. [Guide](EVIDENCE_IMPACT.md).
+- Expert saved-byte check: `fv recovery sector 59 --lba 24 --sectors 2`. Add `--attempt 2` for an image attempt or `--json`; this never reads a floppy. Missing/derived bytes stay labeled. [Sector inspector](../recovery/SECTOR_INSPECTION.md).
+- Whole batch damage summary: `fv recovery impact all`. See exact affected live files/offsets: `fv recovery impact 59`; trace a file: `fv recovery trace 59 'FOLDER\LETTER.DOC'`. Add `--json` for full details, or `--attempt 2` for a single disk only. Saved images only, no writes; unknown/refused disks stay visible. [Guide](../recovery/EVIDENCE_IMPACT.md).
 
-Selection/cleanup are automatic: verified richer generations become preferred, earlier evidence stays intact, and eligible obsolete original copies move into recoverable `Recovery/DeliveryQuarantine`. Edited/untracked/pre-ledger copies and old Office derivatives stay preserved. [Details](RECOVERY_SELECTION.md).
+Selection/cleanup are automatic: verified richer generations become preferred, earlier evidence stays intact, and eligible obsolete original copies move into recoverable `Recovery/DeliveryQuarantine`. Edited/untracked/pre-ledger copies and old Office derivatives stay preserved. [Details](../recovery/RECOVERY_SELECTION.md).
 
-More: [CLI reference](CLI.md) · [policies](POLICIES.md) · [background work](BACKGROUND_PROCESSING.md) · [136-disk runbook](PILOT_136.md) · [archive comparison](BASELINE_COMPARISON.md).
+More: [CLI reference](CLI.md) · [policies](POLICIES.md) · [background work](BACKGROUND_PROCESSING.md) · [136-disk runbook](../testing/PILOT_136.md) · [archive comparison](../testing/BASELINE_COMPARISON.md).

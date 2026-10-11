@@ -48,7 +48,7 @@ For routine **known 1.44 MB** disks, the new single-disk command is:
 fluxvault greaseweazle recover 7 --gw-drive B --source-write-protected
 ```
 
-No USB scan is required. See [CHEATSHEET.md](CHEATSHEET.md) for the operator loop and [CLI.md](CLI.md) for policy/resume limits. A repeated completed job is reused, not physically reread. For a fresh hardware test, use a separate project or expert `capture`.
+No USB scan is required. See [CHEATSHEET.md](../guides/CHEATSHEET.md) for the operator loop and [CLI.md](../guides/CLI.md) for policy/resume limits. A repeated completed job is reused, not physically reread. For a fresh hardware test, use a separate project or expert `capture`.
 
 ## Saved-image native recovery check — 2026-10-06
 
@@ -94,4 +94,4 @@ Protected customer disks were confirmed by the operator; each used a fresh isola
 
 009 project: `C:\Users\User\Desktop\FluxVault-Test\Pilot-Smoke-009-20261006`; image SHA-256 `b10cfe96525bb0aec3952c84c8d6df124b908fb170cd33ce94395dd90c4cc7c2`. This run used `--profile-map policies/customer-first-20-profiles.json` with the short three-pass/180-second policy, proving the DD override is actually wired into physical capture and decoding. The archive's 009 contains a damaged boot image and signature-carved outputs/recovery-tool reports; their hashes/counts are not equivalent to this reachable-file extraction. Carved/deleted-content comparison remains an explicit regression task.
 
-These two observations are useful shakedown measurements, not a 20-disk or 136-disk throughput guarantee. The guided 20-disk cap, 008-HD/009-DD/010-HD switching, restart binding and downstream preflight also have synthetic/cross-process tests. Extraction now explicitly requests UTF-8 console output from 7-Zip; a saved-image integration check verifies Hungarian filenames in the listing and hash-bound extraction reuse without another physical read. See `PILOT_20.md` for the current attended-run command.
+These two observations are useful shakedown measurements, not a 20-disk or 136-disk throughput guarantee. The guided 20-disk cap, 008-HD/009-DD/010-HD switching, restart binding and downstream preflight also have synthetic/cross-process tests. Extraction now explicitly requests UTF-8 console output from 7-Zip; a saved-image integration check verifies Hungarian filenames in the listing and hash-bound extraction reuse without another physical read. See `docs/testing/PILOT_20.md` for the current attended-run command.

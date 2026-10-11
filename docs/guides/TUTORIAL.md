@@ -61,7 +61,7 @@ fv greaseweazle info
 
 `tools check` checks installed programs. `greaseweazle info` checks board availability, not floppy contents. Resolve missing-tool/board-not-ready messages before feeding disks. Normal scans also preflight processing tools before the first prompt.
 
-The current straight ribbon uses **selector B**, already the new-scan default. The older NEC is not the validated drive. Other hardware needs [its own setup check](GREASEWEAZLE_PREFLIGHT.md).
+The current straight ribbon uses **selector B**, already the new-scan default. The older NEC is not the validated drive. Other hardware needs [its own setup check](../testing/GREASEWEAZLE_PREFLIGHT.md).
 
 ### 4. Feed the disks
 
@@ -112,7 +112,7 @@ Type `QUIT` at a waiting prompt. Feeding stops and saved-file work finishes. Do 
 
 To cancel active work instead, type `STOP`, or use Windows Ctrl+C. From another terminal: `fv stop --project 'C:\full\path\to\your\project'`. Wait for the original console's **STOPPED** cue **and drive activity to stop** before moving disks. `fv run status --project PATH` checks its owner offline. Cancellation exits `130`; pending labels, spent stage time and partial evidence remain resumable. `fv start` means `fv scan`, not reset. [Full guide](STOP_RESUME.md).
 
-If the console unexpectedly closes, Windows stops FluxVault's supervised external host processes and their children. Keep partial files and reopen the same project/scan command; wait for drive activity to settle and reconfirm its displayed disk. Completed raw captures can resume offline decoding, but partial captures are not successful reads. This is crash cleanup, not a replacement for graceful `QUIT`. [Details and tested boundaries](PROCESS_SUPERVISION.md).
+If the console unexpectedly closes, Windows stops FluxVault's supervised external host processes and their children. Keep partial files and reopen the same project/scan command; wait for drive activity to settle and reconfirm its displayed disk. Completed raw captures can resume offline decoding, but partial captures are not successful reads. This is crash cleanup, not a replacement for graceful `QUIT`. [Details and tested boundaries](../development/PROCESS_SUPERVISION.md).
 
 ### Resume the same batch
 
@@ -126,7 +126,7 @@ fv production resume --no-verify
 
 Insert the **number displayed now**, not necessarily 001. Endpoint/settings are restored; complete saved acquisitions resume finishing offline. Keep pending-job settings unchanged. Never reset the cursor or edit journals to work around an error. Older `scan` batches still resume with `scan`; automatic packaging is not silently added.
 
-A completed recovery is checked/reused, not reread. Use a **new project** for a genuinely fresh repeat-read benchmark; [the launcher](TOMORROW_TEST.md) does this for you.
+A completed recovery is checked/reused, not reread. Use a **new project** for a genuinely fresh repeat-read benchmark; [the launcher](../testing/TOMORROW_TEST.md) does this for you.
 
 ### Check results
 
@@ -150,11 +150,11 @@ fv storage resume
 
 `fv process` also runs the saved-image recovery/extraction/conversion/audit/report chain. It never reads a physical disk.
 
-Newer native recovery automatically looks for surviving lost directories, supported missing-link file-tail alternatives and readable text inside incomplete Word documents, including supported containers with unrelated damaged directory entries. You need not choose a strategy. To inspect one saved disk's Word-text outcome, run `fv recovery documents 24`. Open the printed `.html` edition path in your browser to read all surviving segments in order, with missing ranges clearly marked. Separate `.txt` segments and a gap/source report remain under `Recovery`; the edition is a generated forensic presentation, not a repaired DOC or extra complete original. No manual text assembly or Office repair step. **Exit 3 is normal attention.** [Beginner commands and advanced evidence](DEEP_RECOVERY.md).
+Newer native recovery automatically looks for surviving lost directories, supported missing-link file-tail alternatives and readable text inside incomplete Word documents, including supported containers with unrelated damaged directory entries. You need not choose a strategy. To inspect one saved disk's Word-text outcome, run `fv recovery documents 24`. Open the printed `.html` edition path in your browser to read all surviving segments in order, with missing ranges clearly marked. Separate `.txt` segments and a gap/source report remain under `Recovery`; the edition is a generated forensic presentation, not a repaired DOC or extra complete original. No manual text assembly or Office repair step. **Exit 3 is normal attention.** [Beginner commands and advanced evidence](../recovery/DEEP_RECOVERY.md).
 
 Damaged documents get automatic content checks even when their extension is misleading. For saved examples, `fv recovery documents 128` finds binary Word inside an `.rtf`-named file; `fv recovery documents 22` prints an RTF text/HTML edition without Office or a floppy. Open the printed HTML: unsupported symbol glyphs appear as explicit gap panels, with readable text retained on either side. Unknown acquisition bytes or unsupported parser state still stop interpretation, and remaining text length stays unknown. The same attention exit 3 applies; these are separate forensic editions, not repaired editable originals.
 
-When saved attempts can supply missing sectors or readable FAT redundancy can repair a FAT gap, processing automatically hands the verified improved image to file extraction and delivery. It appears as **DERIVED**, not a clean physical read; attention is still expected even with no remaining gaps. Earlier evidence and operator-created recovery folders are preserved. [Details and limits](OFFLINE_RECOVERY_HANDOFF.md).
+When saved attempts can supply missing sectors or readable FAT redundancy can repair a FAT gap, processing automatically hands the verified improved image to file extraction and delivery. It appears as **DERIVED**, not a clean physical read; attention is still expected even with no remaining gaps. Earlier evidence and operator-created recovery folders are preserved. [Details and limits](../recovery/OFFLINE_RECOVERY_HANDOFF.md).
 
 ### Find your files
 
@@ -259,7 +259,7 @@ fv benchmark report
 
 Native extraction returns attention even after salvaging files. Deleted recovery is **off by default**, forensic-only and separate from normal delivery. Retry checks saved source bindings. Tool paths, capture/decode controls, guarded USB operations and JSON usage are in [CLI.md](CLI.md).
 
-`recovery impact` explains which known live files and metadata depend on missing/disputed sectors; `recovery trace` shows a named file's logical offsets, holes and saved origins. They read images only and write nothing. Unknown directory entries are not guessed. [Examples and scope](EVIDENCE_IMPACT.md).
+`recovery impact` explains which known live files and metadata depend on missing/disputed sectors; `recovery trace` shows a named file's logical offsets, holes and saved origins. They read images only and write nothing. Unknown directory entries are not guessed. [Examples and scope](../recovery/EVIDENCE_IMPACT.md).
 
 Compare against the old script/DMDE archive:
 
@@ -267,11 +267,11 @@ Compare against the old script/DMDE archive:
 fv benchmark compare --baseline 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\TextilMuzeum_Floppy_Archive_20260920_115210.zip'
 ```
 
-The ZIP is read, not modified. On **comparison**, `--include-deleted` changes scoring scope; it does not run deleted recovery. [Interpretation](BASELINE_COMPARISON.md).
+The ZIP is read, not modified. On **comparison**, `--include-deleted` changes scoring scope; it does not run deleted recovery. [Interpretation](../testing/BASELINE_COMPARISON.md).
 
 ## Troubleshooting
 
-For a difficult **saved** disk, `fv diagnose 59` produces a short recovery note and detailed track/pass/sector data without reading it again. See [saved-flux diagnostics](FLUX_DIAGNOSTICS.md); this is optional investigation, not another required scan step.
+For a difficult **saved** disk, `fv diagnose 59` produces a short recovery note and detailed track/pass/sector data without reading it again. See [saved-flux diagnostics](../recovery/FLUX_DIAGNOSTICS.md); this is optional investigation, not another required scan step.
 
 | Symptom | Next step |
 | --- | --- |
