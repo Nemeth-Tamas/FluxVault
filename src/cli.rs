@@ -179,6 +179,7 @@ Usage:
   fluxvault finalize status         Inspect historical finishing receipts, no tools/media
   fluxvault package build --destination PATH [--keep-staging] [--project PATH]
                                     Create and verify an archival ZIP
+  fluxvault package publish         Copy verified finished ZIP/final reports beside project.json; no tools/media
   fluxvault --help                  Show this help
   fluxvault completions powershell Generate static PowerShell 7+ Tab completion
 Options:
@@ -2663,6 +2664,13 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 destination,
                 conversion_workers.unwrap_or(default_workers),
                 allow_attention,
+                json_output,
+            );
+        }
+        Some("package") if positional == ["package", "publish"] && destination.is_none() => {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            return finalize::publish_saved(
+                &ProjectState::open_without_session(root)?,
                 json_output,
             );
         }

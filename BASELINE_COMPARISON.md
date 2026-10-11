@@ -15,6 +15,7 @@ The command writes uniquely named `Reports/BaselineComparison-*.json` and `.csv`
 - SHA-256 and size, with one-to-one matching within each disk. First match normalized paths and bytes; then renamed identical bytes; finally identify same-path changed bytes. One current file cannot satisfy multiple reference copies.
 - Preserved older managed extraction generations are still usable after their image/inventory hashes verify. Operator recovery is labeled unbound, not silently certified.
 - Per-disk source-image hashes are compared separately. Different image bytes prevent a claim of identical-evidence recovery yield; file matches do not establish why an image changed.
+- Exact `$Raw` / `[$Raw files by signatures]` directory components at the root or nested are signature-carved origin, case-insensitively. `$Root`/`$Noname*` wrapper directories mark reconstructed DMDE-filesystem origin. Filename lookalikes do not change classification. Origin is not a certificate of live/deleted status or complete payloads.
 - Empty/temporary files and tool/OS metadata do not inflate normal payload totals. Diagnostic rows retain empty/temporary files; recovery tool reports are counted separately.
 
 ## Deleted recovery is off by default
@@ -29,16 +30,19 @@ fv benchmark compare --baseline 'C:\path\reference.zip' --include-deleted
 
 **This flag expands comparison scope only; it does not enable deleted-file extraction.** Unknown, signature-carved and ambiguous entries stay visible and in scope. Duplicate DMDE paths can refer to live and deleted versions; collision-renamed ZIP entries cannot safely be classified by guessing the filename. They can still appear as missing/changed even if you do not want deleted recovery. This conservative behavior is explicit in the report, not evidence of a lost live file.
 
-## Saved customer baseline, 2026-10-06
+## Saved customer comparisons
 
 | Saved project | In-scope reference payloads | Identical | Changed | Missing |
 | --- | ---: | ---: | ---: | ---: |
 | `Customer-020-Pilot-20261006` | 188 | 181 | 1 | 6 |
 | `Customer-053-064` | 88 | 81 | 4 | 3 |
+| `Customer-136-Dual-20261010` (reviewed 2026-10-11) | 1,159 | 985 | 12 | 162 |
 
 These are measured file-byte matches, **not product-completion percentages**. The first cohort's missing entries are five signature candidates on 009 (including three two-byte fragments) and `ajanlat2.doc` on 017; 020 has a changed `Leltár.doc`. Different source-image hashes are recorded for these disks.
 
 The second cohort's changed/missing rows are on 058. Its archive includes live/deleted same-name versions and collision-renamed drafts, so not all seven rows establish live-file recovery failures. Source images also differ. The ten confirmed deleted payloads from 059 are out of scope by default: both live documents match exactly. All eight reference payloads from partial 062 match exactly despite its 14 remaining missing sectors.
+
+The full 136-label comparison also records **80 current-only payloads**, **167 confirmed deleted references excluded by default** and **70 excluded recovery-tool reports**. Its 162 absent candidates include 103 reconstructed DMDE-filesystem-origin entries, 54 signature-carved entries and five ordinary filesystem entries; uncertain carved fragments/versions are not automatically 162 lost whole live files. Source-image differences remain explicit. Largest absent groups are on 133/027/040/030/121/122/022/033/023. See [the saved batch review](BATCH_136_REVIEW.md) for snapshot IDs, investigation results and priorities. The reference and current extractions differ in evidence and naming: these numbers are byte-match observations, not proof of historical recovery parity.
 
 The reference ZIP and saved images/payloads remain intact. Snapshots also retain current-only content, classification/origin, uncertainties and binding verification. Internal comparison/test summaries are not included in customer packages.
 

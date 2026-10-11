@@ -163,6 +163,24 @@ fn category(path: &str, bytes: u64) -> &'static str {
     }
 }
 
+fn reference_origin(path: &str) -> &'static str {
+    let normalized = path.replace('\\', "/").to_lowercase();
+    let parents = normalized.rsplit_once('/').map_or("", |(p, _)| p);
+    if parents
+        .split('/')
+        .any(|p| matches!(p, "$raw" | "[$raw files by signatures]"))
+    {
+        "signature_carved"
+    } else if parents
+        .split('/')
+        .any(|p| p.starts_with("$noname") || p == "$root")
+    {
+        "dmde_filesystem"
+    } else {
+        "filesystem"
+    }
+}
+
 fn payload(
     path: &str,
     bytes: u64,
@@ -615,14 +633,7 @@ fn compare(
         if total > MAX_TOTAL {
             return Err("Reference payloads exceed comparison bound".into());
         }
-        let origin =
-            if relative.contains("[$Raw Files by Signatures]") || relative.contains("/$Raw/") {
-                "signature_carved"
-            } else if relative.contains("$Noname") || relative.contains("$Root") {
-                "dmde_filesystem"
-            } else {
-                "filesystem"
-            };
+        let origin = reference_origin(&relative);
         reference
             .entry(disk)
             .or_default()
@@ -995,6 +1006,31 @@ mod tests {
             (0, "ambiguous")
         );
         assert!(dmde_filelist(b"-- -- 5 ----- ---- x ../bad").is_err());
+    }
+
+    #[test]
+    fn reference_provenance_handles_root_raw_case_and_filename_lookalikes() {
+        for path in [
+            "$Raw/Documents/f1.doc",
+            "$raw/Documents/f1.doc",
+            "$Noname 01/$Root/$RAW/f1.doc",
+            "[$raw files by signatures]/f1.doc",
+            "wrapper\\$Raw\\f1.doc",
+        ] {
+            assert_eq!(reference_origin(path), "signature_carved", "{path}");
+        }
+        assert_eq!(
+            reference_origin("$noname 01/$root/live.doc"),
+            "dmde_filesystem"
+        );
+        for path in [
+            "$Raw.doc",
+            "notes/$Root.doc",
+            "notes/$Raw data/file.doc",
+            "notes/live.doc",
+        ] {
+            assert_eq!(reference_origin(path), "filesystem", "{path}");
+        }
     }
 
     #[test]

@@ -3,16 +3,6 @@ use rust_xlsxwriter::{Chart, ChartType, Color, Format, Workbook};
 
 /// Select and verify only the complete latest report, not its stale/partial history.
 pub(super) fn package_files(root: &Path) -> Result<Vec<(PathBuf, String)>, String> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Latest {
-        schema_version: u32,
-        generation: String,
-        directory: String,
-        language: String,
-        artifacts_sha256: BTreeMap<String, String>,
-        customer_delivery_certified: bool,
-    }
     fn regular(path: &Path) -> Result<(), String> {
         let metadata = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         if !metadata.file_type().is_file() {
@@ -37,37 +27,7 @@ pub(super) fn package_files(root: &Path) -> Result<Vec<(PathBuf, String)>, Strin
         return Err("Oversized final-report pointer".into());
     }
     let bytes = fs::read(&pointer).map_err(|e| e.to_string())?;
-    let latest: Latest =
-        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid final report pointer: {e}"))?;
-    const FILES: &[&str] = &[
-        "FloppyFinalReport.xlsx",
-        "FloppyFinalReport.json",
-        "FloppyFinalAudit.csv",
-        "FloppyFinalAudit.txt",
-        "RecoveredFiles.csv",
-        "ConversionResults.csv",
-        "ConversionIssues.csv",
-        "IntegrityValidation.csv",
-        "DeliveryManifest.csv",
-        "DeliveryManifest.sha256",
-    ];
-    if latest.schema_version != 1
-        || latest.customer_delivery_certified
-        || !matches!(latest.language.as_str(), "hu" | "en")
-        || latest.generation.is_empty()
-        || latest.generation.len() > 100
-        || !latest
-            .generation
-            .bytes()
-            .all(|b| b.is_ascii_digit() || b == b'-')
-        || latest.directory != format!("FinalReports/{}", latest.generation)
-        || latest.artifacts_sha256.len() != FILES.len()
-        || FILES
-            .iter()
-            .any(|name| !latest.artifacts_sha256.contains_key(*name))
-    {
-        return Err("Incomplete/invalid latest final-report identity".into());
-    }
+    let latest = Binding::parse(&bytes)?;
     let parent = reports.join("FinalReports");
     let directory = reports.join(&latest.directory);
     let report_root = reports.canonicalize().map_err(|e| e.to_string())?;

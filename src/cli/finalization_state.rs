@@ -51,6 +51,8 @@ pub(super) struct Record {
     pub options: Options,
     pub phase: Phase,
     pub processing: Option<Value>,
+    #[serde(default)]
+    pub processing_attention: Option<bool>,
     pub package: Option<Value>,
     pub error: Option<String>,
     pub customer_delivery_certified: bool,
@@ -155,6 +157,7 @@ impl Record {
             options,
             phase: Phase::Processing,
             processing: None,
+            processing_attention: None,
             package: None,
             error: None,
             customer_delivery_certified: false,

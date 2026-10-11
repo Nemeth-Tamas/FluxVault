@@ -37,7 +37,7 @@ Check the label and open write-protect hole, insert the displayed disk, then pre
 
 No policy/format file is needed. New scans identify supported 720 KB/1.44 MB formats, recover within limits, process saved files in the background and pack captures.
 
-Production also builds a verified ZIP automatically at the checked endpoint, under sibling `My-New-Batch-Delivery`. Partial/raw-only results stay attention, not customer-certified. Early QUIT never archives an unfinished batch. [Guide](PRODUCTION_WORKFLOW.md).
+Production automatically publishes the verified ZIP/checksum and `FINAL_*` reports **beside `project.json`** at the checked endpoint. Its outside-project original stays in sibling `My-New-Batch-Delivery`. `DELIVERY_READY.json` names the exact snapshot. Partial/raw-only results stay attention, not customer-certified. Early QUIT never archives an unfinished batch. [Guide](PRODUCTION_WORKFLOW.md).
 
 Optional audible swap/error reminders: add `--sound on`, for example `fv scan --last-disk 136 --no-verify --sound on`. Off by default and not remembered on restart. USB/GW tones differ; clean/partial/error patterns differ. Dual USB partials use a separate rising transfer-to-GW pattern. Audio is best-effort and interactive-only: always follow the written saved/swap cue, not a sound alone. [Details](CLI.md#optional-scan-sound-cues).
 
@@ -105,6 +105,10 @@ fv finalize --destination 'C:\Users\User\Desktop\FluxVault-Delivery'
 ```
 
 Destination must exist outside the project, never on a floppy. Default finalize blocks attention; add `--allow-attention` to explicitly archive partial results with their warnings (still exit 3). Use `fv finalize status` and `fv finalize resume` after a stop/crash; saved products are rechecked offline. Ctrl+C or second-console `fv stop` stops finishing. [Guide](FINALIZATION.md). Keep the project; a ZIP is not proof of complete recovery.
+
+### Already finished on an older version?
+
+From its project folder, `fv package publish` checks/copies the saved ZIP and its final reports into the project root, with no rescan, conversion or ZIP rebuilding. Copies cost extra storage. For newly changed project content, use a new `finalize` instead.
 
 ### Optional: bring in an old script ZIP
 

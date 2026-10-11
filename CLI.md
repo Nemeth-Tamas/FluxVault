@@ -148,6 +148,7 @@ fluxvault report export --language en --json
 fluxvault audit
 fluxvault package build --destination C:\CustomerPackages
 fluxvault package build --destination C:\CustomerPackages --keep-staging
+fluxvault package publish
 fluxvault finalize --destination C:\CustomerPackages
 fluxvault finalize --destination C:\CustomerPackages --allow-attention
 fluxvault finalize status
@@ -155,6 +156,8 @@ fluxvault finalize resume
 ```
 
 Use `--project C:\path\to\project` to select a project explicitly. Add `--json` to a command for machine-readable stdout (including structured errors); long-running progress goes to stderr. Exit code 0 means complete, 3 means attention/partial, and 2 means invalid input or an operation error. These codes will be refined as production automation is added.
+
+Production/finalization automatically copy the verified ZIP/checksum and archive-bound `FINAL_*` reports beside `project.json`, with `DELIVERY_READY.json` as the all-copies-verified commit marker. `package publish [--project PATH] [--json]` upgrades/resumes this layout from a saved finalization archive receipt, without physical reads, Office, extraction or ZIP rebuilding. It verifies archive and copied hashes, preserves earlier generations and rejects unowned/edited targets. The outside-project original remains unchanged; root copies/private publication state are not packaged recursively. This publishes the recorded snapshot, not newly processed project state. Expert `package build` remains outside-project packaging only; use finalization for the full handoff. [Details](FINALIZATION.md).
 
 `package build --keep-staging` additionally keeps `<package-stem>.staging` next to the verified ZIP, containing its exact members, README and manifest/hash sidecar. Each copied file is hash-checked; internal/quarantined files stay excluded. JSON adds `staging` (a path, or null without the flag). This is a separate unpacked **snapshot of the verified ZIP**, not a move, merge, live project view, or customer-completeness certificate. It requires extra storage and copy/verification time; default packaging and automatic production remain ZIP-only. Cancellation/errors retain uniquely named `.partial.staging` / `.partial.zip` evidence, never replace an earlier folder, and do not report successful packaging. If cancellation occurs after the folder is verified/published but before ZIP promotion, that verified folder can remain alongside the partial ZIP. The original project is always preserved.
 

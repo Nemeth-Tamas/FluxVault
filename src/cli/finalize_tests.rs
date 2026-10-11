@@ -258,6 +258,13 @@ fn status_is_read_only_and_does_not_touch_saved_destination() {
         true
     );
     assert!(!record.options.destination.exists());
+    for operation in ["finalize", "package_publish", "process"] {
+        let _control = crate::run_control::Session::start(&f.project, operation).unwrap();
+        let active: Value =
+            serde_json::from_str(&status(&f.project, true).unwrap().output).unwrap();
+        assert_eq!(active["active"], operation != "process");
+        assert!(!record.options.destination.exists());
+    }
     assert_eq!(
         fs::read(f.project.root().join(".fluxvault-finalize.json")).unwrap(),
         before
@@ -343,6 +350,7 @@ fn attention_default_blocks_package_but_opt_in_preserves_attention_exit() {
                 assert!(allowed);
                 Ok(json!({"files":2}))
             },
+            |_| Ok(()),
         )
         .unwrap();
         assert_eq!(outcome.exit_code, 3);
@@ -394,6 +402,7 @@ fn same_owner_and_control_generation_span_processing_and_packaging() {
             );
             Ok(json!({"files":2}))
         },
+        |_| Ok(()),
     )
     .unwrap();
     assert_eq!(result.exit_code, 0);
@@ -422,6 +431,7 @@ fn cancellation_at_phase_boundary_never_starts_packaging() {
             })
         },
         || panic!("stop between phases must not start packaging"),
+        |_| panic!("stop must not publish handoff"),
     )
     .unwrap_err();
     assert!(crate::cancellation::stopped(&error));
@@ -448,6 +458,7 @@ fn failed_or_invalid_process_results_cannot_create_a_package() {
                     exit_code
                 }),
                 || panic!("failed/invalid result must not package"),
+                |_| panic!("failed/invalid result must not publish handoff"),
             )
             .is_err()
         );
@@ -470,6 +481,7 @@ fn packaging_failure_keeps_resumable_phase_and_no_success_receipt() {
             })
         },
         || Err("injected disk full".into()),
+        |_| panic!("failed ZIP must not publish handoff"),
     )
     .unwrap_err();
     assert_eq!(error, "injected disk full");
@@ -478,4 +490,95 @@ fn packaging_failure_keeps_resumable_phase_and_no_success_receipt() {
         state::load(&f.project).unwrap().unwrap().phase,
         Phase::Packaging
     );
+}
+
+#[test]
+fn handoff_failure_keeps_verified_archive_receipt_before_any_complete_phase() {
+    let f = Fixture::new();
+    let mut record = f.record();
+    record.options.allow_attention = true;
+    record.save(&f.project).unwrap();
+    let error = finish_with(
+        &f.project,
+        &mut record,
+        true,
+        || {
+            Ok(CliResponse {
+                output: "{}".into(),
+                exit_code: 3,
+            })
+        },
+        || Ok(json!({"zip":"verified-archive.zip","sha256":"bound-hash"})),
+        |_| Err("injected handoff disk-full".into()),
+    )
+    .unwrap_err();
+    assert!(error.contains("handoff disk-full"));
+    let saved = state::load(&f.project).unwrap().unwrap();
+    assert_eq!(saved.phase, Phase::Packaging);
+    assert_eq!(saved.processing_attention, Some(true));
+    assert!(saved.package.is_some());
+}
+
+#[test]
+fn cli_publishes_and_resumes_finished_archive_without_tools_or_reprocessing() {
+    for attention in [false, true] {
+        let f = Fixture::new();
+        let audit = crate::audit::run_audit(&f.project, &|_| {}).unwrap();
+        crate::final_report::export(&f.project, &audit, crate::final_report::Language::English)
+            .unwrap();
+        let mut record = f.record();
+        // Policy permission alone must not turn a clean result into attention.
+        record.options.allow_attention = true;
+        record.processing = Some(json!({"fixture_no_tools":true}));
+        record.processing_attention = Some(attention);
+        record.package = Some(archive(&f.project, f.destination.clone()).unwrap());
+        record.phase = Phase::Interrupted;
+        record.save(&f.project).unwrap();
+        let zip = record.package.as_ref().unwrap()["zip"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let response = resume(&f.project, false, true).unwrap();
+        assert_eq!(response.exit_code, if attention { 3 } else { 0 });
+        let value: Value = serde_json::from_str(&response.output).unwrap();
+        assert_eq!(value["processing_repeated"], false);
+        assert_eq!(value["archive_rebuilt"], false);
+        assert_eq!(value["package"]["zip"], zip);
+        assert!(f.project.root().join("DELIVERY_READY.json").is_file());
+        assert_eq!(
+            state::load(&f.project).unwrap().unwrap().phase,
+            if attention {
+                Phase::CompleteAttention
+            } else {
+                Phase::CompleteClean
+            }
+        );
+        let cli = crate::cli::run(
+            &["package".into(), "publish".into(), "--json".into()],
+            f.project.root(),
+        )
+        .unwrap();
+        assert_eq!(cli.exit_code, response.exit_code);
+        let human =
+            crate::cli::run(&["package".into(), "publish".into()], f.project.root()).unwrap();
+        let ready_zip = value["package"]["delivery"]["zip"].as_str().unwrap();
+        let ready_report = handoff_report(&value["package"]).unwrap();
+        assert!(ready_report.contains("FINAL_FloppyFinalReport-"));
+        assert!(ready_report.ends_with(".xlsx"));
+        assert!(human.output.contains(&format!("ZIP: {ready_zip}")));
+        assert!(
+            human
+                .output
+                .contains(&format!("Final report: {ready_report}"))
+        );
+        assert_eq!(human.exit_code, response.exit_code);
+        assert_eq!(
+            fs::read_dir(&f.destination)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|s| s == "zip"))
+                .count(),
+            1
+        );
+    }
 }

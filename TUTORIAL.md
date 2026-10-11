@@ -184,6 +184,8 @@ fv finalize --destination 'C:\Users\User\Desktop\FluxVault-Delivery'
 
 The destination must exist **outside the project**, on workstation storage. `finalize` processes saved files and verifies an archive; attention blocks packaging by default. To explicitly archive partial results and their warnings, add `--allow-attention` (still exit 3). Stop with Ctrl+C or second-console `fv stop`, then use `fv finalize status` / `fv finalize resume`; resume rechecks saved products without reading media. [Finishing guide](FINALIZATION.md). Keep the original project regardless.
 
+Successful production/finalization automatically copy the verified ZIP/checksum and `FINAL_*` final reports beside `project.json`. `DELIVERY_READY.json` identifies that archive edition; the outside-project original stays preserved. For an older completed batch, `fv package publish` adds/rechecks those copies without rescanning or repeating processing. Use a new finalization, not `package publish`, for newly changed project content.
+
 `package build` is an expert archival command, **not** a shortcut to recovery certification. An archive can preserve partial evidence without proving complete customer recovery.
 
 Want an unpacked folder as well? Run `fv package build --destination 'C:\Users\User\Desktop\FluxVault-Delivery' --keep-staging`. It retains a hash-checked copy of the exact ZIP contents beside the ZIP as `<package-name>.staging`; your project remains intact. This costs extra storage/time, so automatic production keeps its faster ZIP-only default.

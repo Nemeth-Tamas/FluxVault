@@ -8,7 +8,7 @@ There is no GUI. Both `fv` and `fluxvault` run the same program.
 
 Developing FluxVault? `pwsh -NoProfile -File .\scripts\check.ps1` is the fail-fast format/build/strict-lint/routine-test gate. It does not scan hardware, install tools or modify user PATH. Environment-dependent acceptance tests remain explicit opt-ins.
 
-Latest development checkpoint: **426/473 TODOs (90.1%)**, with the same denominator. [What closed and what remains](CHECKLIST_90.md). USB-only feeding now has background recovery/audit and durable GW transfers; [project defaults and preferred images](PROJECT_SETTINGS.md) are optional expert controls. This is engineering checklist coverage, not a 90% customer recovery-rate claim.
+Latest development checkpoint: **433/479 TODOs (90.4%), 46 open**. [Current progress](PROGRESS.md) and [the measured 136-disk review](BATCH_136_REVIEW.md) separate delivery readiness, historical file differences and remaining recovery work. USB-only feeding has background recovery/audit and durable GW transfers; [project defaults and preferred images](PROJECT_SETTINGS.md) are optional expert controls. This is engineering checklist coverage, not a customer recovery-rate claim; the earlier [90% checkpoint](CHECKLIST_90.md) is historical.
 
 ## Start here
 
@@ -44,7 +44,7 @@ Need to cancel an active read? Type `STOP`, use Windows Ctrl+C, or run `fv stop 
 
 For less typing, add `--no-verify` and press **Enter only after swapping and checking the label/protection**. This skips label typing, not evidence verification.
 
-Resume from the **same project** with `fv production resume` (add `--no-verify`/`--sound on` again if wanted). The saved endpoint remains 020, not twenty more reads. Finishing and ZIP creation are automatic at the checked endpoint; partial results stay attention, never customer-certified. Output defaults to sibling `My-New-Batch-Delivery`. [Production guide](PRODUCTION_WORKFLOW.md).
+Resume from the **same project** with `fv production resume` (add `--no-verify`/`--sound on` again if wanted). The saved endpoint remains 020, not twenty more reads. Finishing is automatic: the verified ZIP/checksum and `FINAL_*` reports appear **beside `project.json`**. The original archive remains in sibling `My-New-Batch-Delivery`; `DELIVERY_READY.json` binds the ready copies to that snapshot. Partial results stay attention, never customer-certified. For an already-finished older batch, `fv package publish` adds this layout offline without rebuilding/converting/rescanning. [Production guide](PRODUCTION_WORKFLOW.md).
 
 Existing `scan`/`start` retain their original behavior. Continue old batches with their original command; use a fresh project for the complete production path.
 

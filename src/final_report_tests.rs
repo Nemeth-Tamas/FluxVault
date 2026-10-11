@@ -277,6 +277,74 @@ fn status_precedence_does_not_hide_no_files_or_conversion_failures() {
 }
 
 #[test]
+fn zero_missing_read_fs_uncertainty_and_derived_bytes_have_distinct_attention() {
+    let mut d = Disk {
+        source_recovered_files: 1,
+        imaging_status: "OK".into(),
+        bad_sectors: Some(0),
+        evidence_status: "PARTIAL_IMAGE_READ".into(),
+        ..Disk::default()
+    };
+    assert_eq!(classify(&d), "CHECK: FILESYSTEM COMPLETENESS");
+    d.evidence_status = "DERIVED_RECOVERY".into();
+    assert_eq!(classify(&d), "CHECK: DERIVED RECOVERY");
+    d.bad_sectors = Some(1);
+    assert_eq!(classify(&d), "PARTIAL: IMAGE READ");
+    d.source_recovered_files = 0;
+    d.bad_sectors = Some(0);
+    d.native_filesystem_status = "NO REACHABLE LIVE FAT FILES; DELETED ENTRIES PRESENT".into();
+    assert_eq!(classify(&d), "CHECK: NO REACHABLE LIVE FILES");
+    d.native_filesystem_status = "UNSUPPORTED/UNKNOWN FILESYSTEM".into();
+    assert_eq!(classify(&d), "CHECK: UNSUPPORTED FILESYSTEM");
+    d.conversion_failed = 1;
+    assert_eq!(classify(&d), "CHECK: CONVERSION FAILED");
+}
+
+#[test]
+fn bound_native_description_exposes_deleted_markers_and_unknown_layout_without_certification() {
+    let mut image = vec![0; 1474560];
+    image[11..13].copy_from_slice(&512_u16.to_le_bytes());
+    image[13] = 1;
+    image[14..16].copy_from_slice(&1_u16.to_le_bytes());
+    image[16] = 2;
+    image[17..19].copy_from_slice(&224_u16.to_le_bytes());
+    image[19..21].copy_from_slice(&2880_u16.to_le_bytes());
+    image[21] = 0xf0;
+    image[22..24].copy_from_slice(&9_u16.to_le_bytes());
+    image[510..512].copy_from_slice(&[0x55, 0xaa]);
+    for start in [512, 5120] {
+        image[start..start + 3].copy_from_slice(&[0xf0, 0xff, 0xff]);
+    }
+    image[9728] = 0xe5;
+    image[9729..9739].copy_from_slice(b"EST    TXT");
+    let mut proof = crate::fat12_recovery::RecoveryReport {
+        schema_version: 1,
+        native_engine_version: 5,
+        method: "native_fat12_and_validated_carving".into(),
+        source_image: "fixture.img".into(),
+        source_sha256: "fixture".into(),
+        disk: 1,
+        attempt: 1,
+        analysis: Some(crate::fat12::analyze(&image, &[]).unwrap()),
+        carving: None,
+        filesystem_error: None,
+        deleted: None,
+        warning: "scope remains uncertain".into(),
+    };
+    let mut disk = Disk::default();
+    describe_native(&mut disk, &proof);
+    assert_eq!(disk.native_deleted_entries, 1);
+    assert!(disk.issues[0].contains("not a count of recoverable deleted files"));
+    assert_eq!(classify(&disk), "CHECK: NO REACHABLE LIVE FILES");
+    proof.analysis = None;
+    proof.filesystem_error = Some("unsupported boot layout".into());
+    let mut unknown = Disk::default();
+    describe_native(&mut unknown, &proof);
+    assert_eq!(classify(&unknown), "CHECK: UNSUPPORTED FILESYSTEM");
+    assert!(unknown.issues[0].contains("unsupported boot layout"));
+}
+
+#[test]
 fn delivery_mapping_refuses_duplicate_and_escaping_paths() {
     let f = Fixture::empty();
     let path = f.0.reports_dir().join("DeliveryPathMap.csv");

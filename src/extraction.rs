@@ -181,15 +181,22 @@ pub fn inspect_extraction_presence(
 
 /// Native files must retain their source-bound inventory and recovery report before delivery.
 pub(crate) fn verify_native_extraction(directory: &Path) -> Result<bool, String> {
+    Ok(verified_native_report(directory)?.is_some())
+}
+
+/// Return the already inventory/hash-validated native proof, not an unbound
+/// Recovery-side copy. Reporting must not infer live/deleted state from a marker.
+pub(crate) fn verified_native_report(
+    directory: &Path,
+) -> Result<Option<crate::fat12_recovery::RecoveryReport>, String> {
     let marker: ExtractionMarker = serde_json::from_slice(
         &fs::read(directory.join(".fluxvault-extraction.json")).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     if marker.native_recovery_report_sha256.is_none() {
-        return Ok(false);
+        return Ok(None);
     }
-    verify_managed_extraction(directory, &marker.source_sha256)?;
-    Ok(true)
+    Ok(verify_managed_with_native(directory, &marker.source_sha256)?.2)
 }
 
 /// Re-hash all managed files before an extraction is trusted or reused.
@@ -198,6 +205,14 @@ pub(crate) fn verify_managed_extraction(
     output_directory: &Path,
     expected_source_sha256: &str,
 ) -> Result<(usize, u64), String> {
+    let (files, bytes, _) = verify_managed_with_native(output_directory, expected_source_sha256)?;
+    Ok((files, bytes))
+}
+
+fn verify_managed_with_native(
+    output_directory: &Path,
+    expected_source_sha256: &str,
+) -> Result<(usize, u64, Option<crate::fat12_recovery::RecoveryReport>), String> {
     let marker_path = output_directory.join(MARKER_FILE_NAME);
     let inventory_path = output_directory.join(INVENTORY_FILE_NAME);
     let marker: ExtractionMarker =
@@ -253,6 +268,7 @@ pub(crate) fn verify_managed_extraction(
             ));
         }
     }
+    let mut native = None;
     if let Some(expected) = &marker.native_recovery_report_sha256 {
         let report_path = output_directory.join(FAT12_REPORT_NAME);
         if !sha256_file(&report_path)?.eq_ignore_ascii_case(expected) {
@@ -282,8 +298,9 @@ pub(crate) fn verify_managed_extraction(
                 ));
             }
         }
+        native = Some(report);
     }
-    Ok((actual.len(), total_bytes))
+    Ok((actual.len(), total_bytes, native))
 }
 
 fn inspect_candidate_directory(path: &Path) -> Result<ExtractionPresence, String> {

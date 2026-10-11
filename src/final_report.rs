@@ -12,6 +12,60 @@ use serde_json::json;
 use crate::{audit, conversion, conversion_run, extraction, project::ProjectState};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+pub(crate) const ARTIFACTS: &[&str] = &[
+    "FloppyFinalReport.xlsx",
+    "FloppyFinalReport.json",
+    "FloppyFinalAudit.csv",
+    "FloppyFinalAudit.txt",
+    "RecoveredFiles.csv",
+    "ConversionResults.csv",
+    "ConversionIssues.csv",
+    "IntegrityValidation.csv",
+    "DeliveryManifest.csv",
+    "DeliveryManifest.sha256",
+];
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Binding {
+    pub schema_version: u32,
+    pub generation: String,
+    pub directory: String,
+    pub language: String,
+    pub artifacts_sha256: BTreeMap<String, String>,
+    pub customer_delivery_certified: bool,
+}
+impl Binding {
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > 64 * 1024 {
+            return Err("Oversized final-report pointer".into());
+        }
+        let latest: Self = serde_json::from_slice(bytes)
+            .map_err(|e| format!("Invalid final report pointer: {e}"))?;
+        if latest.schema_version != 1
+            || latest.customer_delivery_certified
+            || !matches!(latest.language.as_str(), "hu" | "en")
+            || latest.generation.is_empty()
+            || latest.generation.len() > 100
+            || !latest
+                .generation
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b == b'-')
+            || latest.directory != format!("FinalReports/{}", latest.generation)
+            || latest.artifacts_sha256.len() != ARTIFACTS.len()
+            || ARTIFACTS
+                .iter()
+                .any(|name| !latest.artifacts_sha256.contains_key(*name))
+            || latest
+                .artifacts_sha256
+                .values()
+                .any(|h| h.len() != 64 || !h.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err("Incomplete/invalid latest final-report identity".into());
+        }
+        Ok(latest)
+    }
+}
 const LIMITS: &str = "OK means recorded image, selected recovered files and recorded delivery/conversion artifacts passed integrity checks. It does not certify original disk completeness, document semantics, historical ownership, or script/DMDE yield parity. Untracked delivery files remain attention items. Forensic fragments/deleted candidates/text salvage are not counted as recovered whole files.";
 
 #[cfg(test)]
@@ -89,6 +143,10 @@ struct Disk {
     imaging_status: String,
     bad_sectors: Option<usize>,
     extraction_status: String,
+    #[serde(default)]
+    native_filesystem_status: String,
+    #[serde(default)]
+    native_deleted_entries: usize,
     source_recovered_files: usize,
     customer_delivery_files: usize,
     convertible_files: usize,
@@ -265,7 +323,15 @@ fn collect(project: &ProjectState, audit: &audit::AuditResult) -> Result<Documen
         {
             // Never trust a marker alone: audit replays the complete managed inventory.
             let verified = evidence.extracted_hashes_verified && evidence.image_hash_verified;
-            let native = verified && extraction::verify_native_extraction(&output_directory)?;
+            let native_report = if verified {
+                extraction::verified_native_report(&output_directory)?
+            } else {
+                None
+            };
+            let native = native_report.is_some();
+            if let Some(proof) = native_report {
+                describe_native(&mut disk, &proof);
+            }
             for file in extraction::inventory_files(&output_directory)? {
                 report.recovered_files.push(Recovered {
                     floppy: disk.floppy.clone(),
@@ -594,18 +660,66 @@ fn collect(project: &ProjectState, audit: &audit::AuditResult) -> Result<Documen
     Ok(report)
 }
 
+fn describe_native(disk: &mut Disk, proof: &crate::fat12_recovery::RecoveryReport) {
+    if let Some(analysis) = &proof.analysis {
+        disk.native_deleted_entries = analysis.deleted_entries_not_recovered;
+        disk.native_filesystem_status = if analysis.recovered_files.is_empty()
+            && analysis.directory_gaps.is_empty()
+            && analysis.skipped.is_empty()
+            && analysis.unrecovered_files.is_empty()
+        {
+            if disk.native_deleted_entries > 0 {
+                "NO REACHABLE LIVE FAT FILES; DELETED ENTRIES PRESENT"
+            } else {
+                "NO REACHABLE LIVE FAT FILES; CONTENT COMPLETENESS UNPROVEN"
+            }
+        } else if !analysis.directory_gaps.is_empty()
+            || !analysis.skipped.is_empty()
+            || !analysis.unrecovered_files.is_empty()
+        {
+            "FAT FILE/DIRECTORY GAPS OR AMBIGUITY"
+        } else {
+            "SUPPORTED FAT ANALYSIS; HISTORICAL COMPLETENESS UNPROVEN"
+        }
+        .into();
+        if disk.native_deleted_entries > 0 && analysis.recovered_files.is_empty() {
+            disk.issues.push(format!("Saved FAT analysis found {} deleted entry markers and no reachable live files. Deleted recovery is opt-in; marker count is not a count of recoverable deleted files.", disk.native_deleted_entries));
+        }
+    } else {
+        disk.native_filesystem_status =
+            "UNSUPPORTED/UNKNOWN FILESYSTEM; CARVING DOES NOT ESTABLISH LIVE OWNERSHIP".into();
+        if let Some(error) = &proof.filesystem_error {
+            disk.issues
+                .push(format!("Saved filesystem analysis: {error}"));
+        }
+    }
+}
+
 fn classify(disk: &Disk) -> &'static str {
     if disk.integrity_invalid > 0 || disk.conversion_failed > 0 {
         "CHECK: CONVERSION FAILED"
     } else if disk.source_recovered_files == 0 {
-        "CHECK: NO RECOVERED FILES"
+        if disk
+            .native_filesystem_status
+            .starts_with("UNSUPPORTED/UNKNOWN")
+        {
+            "CHECK: UNSUPPORTED FILESYSTEM"
+        } else if disk
+            .native_filesystem_status
+            .starts_with("NO REACHABLE LIVE")
+        {
+            "CHECK: NO REACHABLE LIVE FILES"
+        } else {
+            "CHECK: NO RECOVERED FILES"
+        }
     } else if disk.conversion_partial > 0 {
         "PARTIAL: CONVERSION"
-    } else if disk.imaging_status != "OK"
-        || disk.evidence_status == "PARTIAL_IMAGE_READ"
-        || disk.evidence_status == "DERIVED_RECOVERY"
-    {
+    } else if disk.imaging_status != "OK" || disk.bad_sectors.is_some_and(|n| n > 0) {
         "PARTIAL: IMAGE READ"
+    } else if disk.evidence_status == "DERIVED_RECOVERY" {
+        "CHECK: DERIVED RECOVERY"
+    } else if disk.evidence_status == "PARTIAL_IMAGE_READ" {
+        "CHECK: FILESYSTEM COMPLETENESS"
     } else if disk.evidence_status != "IMAGE_FILES_CONVERSIONS_VERIFIED" || !disk.issues.is_empty()
     {
         "CHECK: EVIDENCE"

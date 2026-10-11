@@ -34,13 +34,19 @@ Frozen headers, filters and colored statuses help navigate details. XLSX custome
 | Status | Meaning |
 | --- | --- |
 | `OK` | Recorded image, selected files and current delivery/conversion artifacts passed scoped checks. |
-| `PARTIAL: IMAGE READ` | Image/native/derived recovery retains completeness uncertainty; independently saved files may be useful. |
+| `PARTIAL: IMAGE READ` | Recorded image status or missing/disputed sector count retains physical-read uncertainty; independently saved files may be useful. |
+| `CHECK: FILESYSTEM COMPLETENESS` | Image is recorded OK with no missing/disputed sectors, but native extraction retains filesystem-completeness uncertainty. Not a failed physical read. |
+| `CHECK: DERIVED RECOVERY` | Zero-gap derived evidence is still derived, not a new clean physical read. |
+| `CHECK: NO REACHABLE LIVE FILES` | Verified native FAT analysis found no reachable live files. Deleted markers, if present, are reported separately, not counted as recovered/deleted files. |
+| `CHECK: UNSUPPORTED FILESYSTEM` | No recovered files and native analysis cannot establish a supported filesystem; boot/program disks need not contain ordinary FAT files. |
 | `PARTIAL: CONVERSION` | One requested modern/PDF output passed; the other conversion did not succeed. |
 | `CHECK: CONVERSION FAILED` | No requested output passed, or a formerly successful output changed/failed integrity. |
 | `CHECK: NO RECOVERED FILES` | No selected recovered whole files were verified/inventoried; raw/fragments may still exist. |
 | `CHECK: EVIDENCE` / `CHECK: REPORT STATE` | Missing/invalid source, delivery mapping, conversion state or unassigned delivery files prevent OK. |
 
 All issues remain recorded even when one higher-priority status is shown. `OK` does not prove complete original content, document semantics, historical live/deleted ownership, or DMDE yield parity.
+
+Per-disk JSON adds `NativeFilesystemStatus` and `NativeDeletedEntries` from the verified source/inventory-bound native analysis. The latter counts observed deleted-entry markers, which can include long-filename records, **not recoverable deleted files**. Earlier report JSON without these fields stays readable. These distinctions do not erase existing attention or automatically enable deleted recovery.
 
 Legacy/manual recovery retains `MANUAL_UNVERIFIED` origin and disk-level attention. Its current file/output hashes can still pass conversion integrity independently; missing custody evidence is not falsely reported as an Office conversion failure.
 
@@ -74,7 +80,7 @@ The timestamped Hungarian acquisition workbook and `EvidenceAudit.json/.csv` rem
 fv report export --language en --json
 ```
 
-JSON returns `workbook`, `acquisition_workbook`, `final_report.directory/json/latest`, disk/attention counts and `customer_delivery_certified=false`. Successful export returns 0 even when its data shows attention. Scan/process/finalize return attention code 3 when combined evidence requires it; `finalize` does not package an attention run.
+JSON returns `workbook`, `acquisition_workbook`, `final_report.directory/json/latest`, disk/attention counts and `customer_delivery_certified=false`. Successful export returns 0 even when its data shows attention. Scan/process/finalize return attention code 3 when combined evidence requires it; strict-default `finalize` blocks an attention package, while explicit `--allow-attention` and production preserve warnings in a verified archival ZIP.
 
 CSV uses stable headers/statuses, UTF-8 BOM, quotes and multiline values. Formula-looking CSV cells receive a leading apostrophe for safe spreadsheet display; JSON retains exact values. Hash bookkeeping is not a cryptographic signature or completeness certificate.
 

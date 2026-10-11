@@ -395,6 +395,7 @@ INSTALLATION AND COMMAND CATALOG
         fluxvault audit
         fluxvault package build --destination C:\CustomerPackages
         fluxvault package build --destination C:\CustomerPackages --keep-staging
+        fluxvault package publish
         fluxvault finalize --destination C:\CustomerPackages
         fluxvault finalize --destination C:\CustomerPackages --allow-attention
         fluxvault finalize status
@@ -917,6 +918,15 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     without physical reads. Completed receipts require a new finalize for a
     fresh snapshot. ZIP integrity is not customer-delivery certification.
     Beginner/advanced finishing guide (FINALIZATION.md).
+
+    Production/finalize automatically copy a verified ready ZIP/checksum and
+    FINAL_* final reports beside project.json. DELIVERY_READY.json binds that
+    archived edition only after all copies pass hash checks. The original ZIP
+    remains outside the project; root copies are excluded from later packages.
+    package publish upgrades/resumes this handoff from a saved finalization
+    receipt without media, tools, conversion or ZIP rebuilding. Edited/unowned
+    targets refuse; older archive/report editions remain. This costs extra ZIP
+    storage and does not refresh old archives to match new project content.
 
     The CLI has guided read-only acquisition, bounded IBM discovery/raw-only
     exception continuation, native intact-chain/layout recovery and coalesced

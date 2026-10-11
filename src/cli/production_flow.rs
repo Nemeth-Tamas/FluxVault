@@ -556,13 +556,17 @@ fn execute(
             json!({"workflow":r,"scan":scan,"finalization":finished,"session_elapsed_ms":started.elapsed().as_millis(),"customer_delivery_certified":false}).to_string()
         } else {
             format!(
-                "PRODUCTION FINISHED{} / REMOVE DISKS\nArchive: {}\nSHA-256: {}\nVerified archival ZIP; attention stays in reports, NOT customer-certified.\nElapsed: {:.1}s",
+                "PRODUCTION FINISHED{} / REMOVE DISKS\nArchive: {}\nFinal report: {}\nSHA-256: {}\nVerified archival ZIP; attention stays in reports, NOT customer-certified.\nElapsed: {:.1}s",
                 if exit_code == 3 {
                     " WITH ATTENTION"
                 } else {
                     ""
                 },
-                finished["package"]["zip"].as_str().unwrap_or(""),
+                finished["package"]["delivery"]["zip"]
+                    .as_str()
+                    .or_else(|| finished["package"]["zip"].as_str())
+                    .unwrap_or(""),
+                finalize::handoff_report(&finished["package"]).unwrap_or("See Reports"),
                 finished["package"]["sha256"].as_str().unwrap_or(""),
                 started.elapsed().as_secs_f64()
             )

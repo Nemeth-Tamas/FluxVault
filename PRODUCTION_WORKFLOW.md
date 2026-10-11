@@ -22,9 +22,19 @@ No policy/profile file is needed for standard IBM 720 KB/1.44 MB disks.
 Recovery/conversion/reporting and lossless capture packing run automatically.
 
 After the final saved read, remove disks when instructed. Finishing continues
-offline and prints the ZIP path/SHA-256. Default output: a **sibling**
-`My-New-Production-Batch-Delivery` folder, created automatically. Keep the project;
-the ZIP is a snapshot, not a replacement for working evidence.
+offline and prints the ready ZIP path/SHA-256. The verified ZIP/checksum and
+`FINAL_*` final workbook/audit/inventory reports are copied **into the project
+root beside `project.json`**. `DELIVERY_READY.json` identifies that exact archive
+edition. Its original ZIP remains in the automatically created sibling
+`My-New-Production-Batch-Delivery` folder. Keep the project; the ZIP is a snapshot,
+not a replacement for working evidence. Copies require extra ZIP-sized storage.
+
+For a batch finished by an older version, run `fv package publish` from that
+project. It checks/copies the saved finalization archive and its embedded report
+generation; it does not read media, run Office or rebuild the ZIP. Changed or
+unowned root files are never replaced. Earlier report/archive editions remain;
+the ready receipt identifies the current published archive. To reflect newly
+processed evidence instead, use a new finalization, not publication of an old ZIP.
 
 ## Stop and return later
 
@@ -47,7 +57,9 @@ worker count are saved. Follow the current numbered prompt; never reset the curs
 or edit journals. Interrupted finishing rechecks acquisitions and resumes offline
 without another physical read. Closing the console leaves the last known phase,
 not proof of completion. Interrupted ZIPs stay partial; restart creates a new
-immutable archive, not an in-place repaired ZIP.
+immutable archive, not an in-place repaired ZIP. If the verified archive receipt
+was saved and only handoff copying was interrupted, `fv package publish` resumes
+those copies without reprocessing; `fv finalize resume` also uses that shortcut.
 
 ```powershell
 fv production status

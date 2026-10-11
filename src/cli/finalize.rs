@@ -66,6 +66,7 @@ pub(super) fn raw_endpoint(
             "attention":true,"customer_delivery_certified":false}).to_string()})
         },
         || archive(project, destination),
+        |value| crate::delivery_publish::publish(project, value),
     );
     if let Err(error) = &outcome {
         record.phase = if crate::cancellation::requested() || crate::cancellation::stopped(error) {
@@ -130,6 +131,9 @@ pub(super) fn resume(
     if record.phase.complete() {
         return Err("Finalization already completed. Its receipt is historical, not a fresh verification; use finalize --destination PATH for a new checked archive".into());
     }
+    if record.package.is_some() {
+        return publish_saved(project, json_output);
+    }
     let root = project.root().canonicalize().map_err(|e| e.to_string())?;
     let mut options = record.options;
     options.destination = state::destination(project.root(), &root, options.destination)?;
@@ -141,7 +145,10 @@ pub(super) fn status(project: &ProjectState, json_output: bool) -> Result<CliRes
     let record = state::load(project)?;
     let control = crate::run_control::status(project)?;
     let active = control["active"].as_bool() == Some(true)
-        && control["record"]["operation"].as_str() == Some("finalize");
+        && matches!(
+            control["record"]["operation"].as_str(),
+            Some("finalize" | "package_publish")
+        );
     let value = json!({"record":record, "active":active,
         "project_owner_active":crate::project_work::active(project.root())?,
         "physical_media_access":false, "receipt_is_historical_not_current_verification":true,
@@ -228,6 +235,7 @@ fn finish_owned(
             Ok(process::response(&result, &project.reports_dir(), true))
         },
         || archive(project, destination),
+        |value| crate::delivery_publish::publish(project, value),
     )
 }
 
@@ -237,6 +245,7 @@ fn finish_with(
     json_output: bool,
     process: impl FnOnce() -> Result<CliResponse, String>,
     package: impl FnOnce() -> Result<Value, String>,
+    publish: impl FnOnce(&mut Value) -> Result<(), String>,
 ) -> Result<CliResponse, String> {
     crate::cancellation::check()?;
     let process = process()?;
@@ -246,6 +255,7 @@ fn finish_with(
     let process_json: Value = serde_json::from_str(&process.output).map_err(|e| e.to_string())?;
     let attention = process.exit_code == 3;
     record.processing = Some(process_json.clone());
+    record.processing_attention = Some(attention);
     if attention && !record.options.allow_attention {
         record.phase = Phase::BlockedByAttention;
         record.save(project)?;
@@ -262,7 +272,13 @@ fn finish_with(
     // Snapshot stays held during inventory, streaming and verification. The
     // processing owner is held for the entire command, including tool checks.
     let _snapshot = crate::project_work::snapshot(project.root())?;
-    let package_json = package()?;
+    let mut package_json = package()?;
+    record.package = Some(package_json.clone());
+    // Keep the verified archive receipt before copying root-level handoff
+    // artifacts. A failed/stopped copy can be resumed offline without tools.
+    record.save(project)?;
+    eprintln!("FINALIZE / publishing verified ZIP and final reports beside project.json...");
+    publish(&mut package_json)?;
     record.package = Some(package_json.clone());
     record.phase = if attention {
         Phase::CompleteAttention
@@ -304,9 +320,12 @@ fn response(
         format!(
             "Finalization complete{}; verified archival ZIP, NOT customer-certified.\n{}\nSHA-256: {}\nReport: {}",
             if attention { " WITH ATTENTION" } else { "" },
-            package["zip"].as_str().unwrap_or(""),
+            package["delivery"]["zip"]
+                .as_str()
+                .or_else(|| package["zip"].as_str())
+                .unwrap_or(""),
             package["sha256"].as_str().unwrap_or(""),
-            process["workbook"].as_str().unwrap_or("")
+            handoff_report(&package).unwrap_or_else(|| process["workbook"].as_str().unwrap_or(""))
         )
     } else {
         format!(
@@ -318,6 +337,59 @@ fn response(
         output,
         exit_code: if attention { 3 } else { 0 },
     }
+}
+
+pub(super) fn handoff_report(package: &Value) -> Option<&str> {
+    let reports = package["delivery"]["reports"].as_array()?;
+    reports
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|p| p.contains("FINAL_FloppyFinalReport-") && p.ends_with(".xlsx"))
+        .or_else(|| reports.iter().filter_map(Value::as_str).next())
+}
+
+/// Upgrade/resume the handoff of an already verified archive, without running
+/// extraction, Office, acquisition or rebuilding a ZIP.
+pub(super) fn publish_saved(
+    project: &ProjectState,
+    json_output: bool,
+) -> Result<CliResponse, String> {
+    let _control = crate::run_control::Session::start(project, "package_publish")?;
+    let _snapshot = crate::project_work::snapshot(project.root())?;
+    let mut record = state::load(project)?
+        .ok_or("No saved finalization archive; run production or finalize first")?;
+    let mut package = record
+        .package
+        .clone()
+        .ok_or("No verified archive receipt; finish finalization first")?;
+    crate::delivery_publish::publish(project, &mut package)?;
+    let attention = record
+        .processing_attention
+        .unwrap_or(record.phase != Phase::CompleteClean);
+    record.package = Some(package.clone());
+    record.phase = if attention {
+        Phase::CompleteAttention
+    } else {
+        Phase::CompleteClean
+    };
+    record.error = None;
+    record.save(project)?;
+    Ok(CliResponse {
+        exit_code: if attention { 3 } else { 0 },
+        output: if json_output {
+            json!({"package":package,"physical_media_access":false,"customer_delivery_certified":false,
+                "processing_repeated":false,"archive_rebuilt":false,"attention":attention}).to_string()
+        } else {
+            format!(
+                "HANDOFF READY{} / verified archival copies, NOT customer-certified\nZIP: {}\nFinal report: {}\nReceipt: {}\nSHA-256: {}",
+                if attention { " WITH ATTENTION" } else { "" },
+                package["delivery"]["zip"].as_str().unwrap_or(""),
+                handoff_report(&package).unwrap_or("See FINAL_* beside project.json"),
+                package["delivery"]["ready"].as_str().unwrap_or(""),
+                package["sha256"].as_str().unwrap_or("")
+            )
+        },
+    })
 }
 
 #[cfg(test)]

@@ -17,6 +17,16 @@ The destination must exist **outside the project**, on workstation storage, not 
 
 By default, attention stops automatic packaging. Read the final report; a damaged disk does not become healthy just because some files were extracted.
 
+Successful finishing places the verified ready ZIP/checksum and `FINAL_*` final report copies **beside `project.json`**, automatically. The outside-project original remains preserved. `DELIVERY_READY.json` binds all copies to that exact ZIP and archived report generation; copies are excluded from future package inventories, so packages cannot include themselves. Each report's suffix identifies its archive edition, preserving previous editions without replacing unrelated/user-edited files. Allow extra storage for one ZIP-sized copy.
+
+For a previously finished batch, or handoff copying interrupted after the archive receipt was saved:
+
+```powershell
+fv package publish
+```
+
+This verifies/copies the recorded ZIP and its **embedded** final reports without media, tools, extraction, conversion or archive rebuilding. It does not refresh an old archive to match newer project changes: run a new finalization for that. Linked paths, changed archive/copies, foreign pointers and unowned filename collisions refuse; partial publication stays resumable and only all-verified copies receive a ready commit receipt. Workstation filesystems must support safe non-replacing hard-link promotion for staged copies (tested on Windows NTFS); this never links a handoff copy to its original archive/evidence.
+
 ## Archive partial results explicitly
 
 If you want a complete archival snapshot of what was recovered, including limitations:
@@ -54,7 +64,7 @@ fv finalize resume
 
 Resume uses the saved destination, worker count and partial-archive policy. It **rechecks** the current inputs and outputs through the shared pipeline; valid completed extraction/conversion products can be reused. It does not trust old summaries, skip validation, reread a floppy, or reset scan numbering. To change workers/destination or return to clean-only policy, run a new `finalize --destination ...` command instead.
 
-Interrupted ZIPs remain `.partial.zip`. Resume builds a **new** immutable package, not an append/resume-in-place of the old ZIP. If a crash occurred after ZIP completion but before its receipt was saved, an earlier complete archive may remain too; neither is silently overwritten. A completed receipt makes `finalize resume` refuse another run: use a new finalization if you want a freshly checked snapshot.
+Interrupted ZIPs remain `.partial.zip`. Resume builds a **new** immutable package, not an append/resume-in-place of the old ZIP. If a verified archive receipt was saved before handoff interruption, resume verifies/publishes its existing root copies instead, preserving the saved processing attention and skipping tools/rebuilding. If a crash occurred after ZIP completion but before its receipt was saved, an earlier complete archive may remain too; neither is silently overwritten. A completed receipt makes `finalize resume` refuse another run: use `package publish` to recheck/copy its recorded snapshot, or a new finalization for a freshly processed snapshot.
 
 `finalize status` is read-only, needs no tools, and reads no media. It shows saved phase/settings and whether a registered finalizer currently owns the project. A receipt is historical: status does not rehash the ZIP or certify that files have not changed since completion.
 
@@ -69,6 +79,6 @@ Workers accept 1–16, default 4; resource admission can limit concurrency. Tool
 
 The bounded, project-bound `.fluxvault-finalize.json` pointer records phase/options/results. Immutable phase receipts stay under `.fluxvault-finalizations`; malformed, oversized, linked or foreign-project control files are refused rather than silently replaced. Receipts are workstation control state and are not customer package contents. Failed/interrupted runs keep earlier evidence and explain their last known phase. Power loss can leave an in-progress receipt despite no active owner; resume revalidates instead of assuming work is still running.
 
-This command starts when you request it. Automatically finishing/packaging at the scan endpoint and unattended alternate-profile flux searches remain separate TODOs. `processing resume` and `storage resume` remain the controls for their durable background queues. Keep the source project after packaging.
+This expert command starts when requested; production already invokes finishing/packaging automatically at its checked endpoint. Broader unattended alternate-profile searches remain separate TODOs. `processing resume` and `storage resume` remain controls for their durable background queues. Keep the source project after packaging.
 
 See [final report contents](FINAL_REPORTS.md), [stop/resume](STOP_RESUME.md), and [the CLI reference](CLI.md).
