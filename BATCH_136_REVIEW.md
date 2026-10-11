@@ -62,6 +62,10 @@ The saved native impact inspection maps 13 known live-file dependencies and 16 i
 
 Disk 133 still has two USB/GW disagreements at LBAs 17/773 and a dependent `V_xB5MOSANG.DOC` payload. The operator confirmed the same physical label. Preserve both byte editions and inspect exact metadata/file offsets; no unsupported winner, guessed bytes or clean-customer certificate follows.
 
+### Focused saved-image recovery — 2026-10-11
+
+Disk 052's incomplete `fejléc_logoval.doc` now yields 1,792/1,792 declared main-text positions with Word-text engine 3. The old v2 refusal and saved image remain unchanged. Two independent blockers were addressed: unused storage-object fields are not stream allocations, and a fully unavailable extension-count field need not prevent source-bound common-prefix text salvage. The effective Word version/complete FIB stay explicitly unknown; all required common text-mapping fields and CLX/allocation evidence must remain readable and consistent. Text/HTML carry forensic warnings, not editable-document repair or extra intact-file counts. The completed archive and baseline statistics above are the earlier immutable snapshot; publishing v3 evidence does not retroactively change them.
+
 ## Timing acceptance
 
 The first recorded dual session began at `2026-10-10T14:01:06.179Z`; the original verified archive finished writing at `2026-10-10T18:41:59.3497428Z`: approximately **4 hours 41 minutes**, including gaps/restarts/hotfixes. This meets the six-hour elapsed target for this observed 136-label attention archive, not a claim of an uninterrupted single-build or zero-intervention run. Recorded feeding invocations total about 3 hours 20 minutes; the final finishing invocation reported 1,120.4 seconds. These intervals have different boundaries and must not be substituted for each other.

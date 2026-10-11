@@ -14,7 +14,7 @@ use std::{
 const MAX_CHARACTERS: usize = 200_000;
 const MAX_SEGMENTS: usize = 4096;
 const MAX_WORK: usize = 64 * 1024 * 1024;
-pub const ENGINE_VERSION: u32 = 2;
+pub const ENGINE_VERSION: u32 = 3;
 #[path = "document_cfb.rs"]
 mod cfb_recovery;
 pub use cfb_recovery::Evidence as CfbEvidence;
@@ -52,6 +52,15 @@ pub struct TextGap {
     pub reason: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FibPrefixEvidence {
+    pub base_version: u16,
+    pub field_pairs: usize,
+    pub unavailable_extension_count_offset: usize,
+    pub supported_header_exclusion_end: usize,
+    pub complete_fib_verified: bool,
+    pub warning: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub parent: fat12::FileRecord,
     pub status: String,
@@ -71,6 +80,8 @@ pub struct Document {
     pub readable_edition: Option<ReadableEdition>,
     #[serde(default)]
     pub edition_refusal: Option<String>,
+    #[serde(default)]
+    pub incomplete_fib: Option<FibPrefixEvidence>,
 }
 #[derive(Serialize, Deserialize)]
 struct Report {
@@ -411,24 +422,56 @@ fn decode_streams(
         return Err("Unsupported Word FIB field-count version".into());
     }
     let new_at = 154 + pairs * 8;
-    let new_count = u16at(known(word, new_at, 2)?, 0) as usize;
-    if new_count > 5 {
-        return Err("Unsupported Word extended FIB count".into());
-    }
-    let new_words = known(word, new_at + 2, new_count * 2)?;
-    let valid_new = match new_count {
-        0 => pairs == base_expected,
-        2 => matches!(
-            (u16at(new_words, 0), pairs),
-            (0xd9, 0x6c) | (0x101, 0x88) | (0x10c, 0xa4)
-        ),
-        5 => u16at(new_words, 0) == 0x112 && pairs == 0xb7,
-        _ => false,
+    let (fib_end, extension_bytes, incomplete_fib) = match known(word, new_at, 2) {
+        Ok(count) => {
+            let new_count = u16at(count, 0) as usize;
+            if new_count > 5 {
+                return Err("Unsupported Word extended FIB count".into());
+            }
+            let new_words = known(word, new_at + 2, new_count * 2)?;
+            let valid_new = match new_count {
+                0 => pairs == base_expected,
+                2 => matches!(
+                    (u16at(new_words, 0), pairs),
+                    (0xd9, 0x6c) | (0x101, 0x88) | (0x10c, 0xa4)
+                ),
+                5 => u16at(new_words, 0) == 0x112 && pairs == 0xb7,
+                _ => false,
+            };
+            if !valid_new {
+                return Err("Inconsistent Word nFibNew/field-count binding".into());
+            }
+            (new_at + 2 + new_words.len(), 2 + new_words.len(), None)
+        }
+        Err(error) => {
+            // MS-DOC 2.4.1 maps main text through the common FibRgFcLcb97
+            // prefix in every version. This is prefix-only forensic salvage,
+            // NOT an inferred cswNew/nFibNew or a valid complete FIB. Narrow
+            // admission: Word97-sized prefix, matching readable base version,
+            // both count bytes unavailable (not a contradictory known value).
+            if version != 0xc1
+                || pairs != base_expected
+                || word
+                    .sources
+                    .get(new_at..new_at + 2)
+                    .is_none_or(|s| s.iter().any(Option::is_some))
+                || new_at + 12 > word.bytes.len()
+            {
+                return Err(error);
+            }
+            // Exclude all supported extension sizes from candidate text. This
+            // is a policy boundary, not a claim about the unknown actual tail.
+            let end = new_at + 12;
+            (end, 0, Some(FibPrefixEvidence {
+                base_version: version,
+                field_pairs: pairs,
+                unavailable_extension_count_offset: new_at,
+                supported_header_exclusion_end: end,
+                complete_fib_verified: false,
+                warning: "Word extended header is unreadable. Only the readable common FIB/CLX main-text mapping is used; extension count, effective version and complete header validity are unknown, not guessed. Text is a forensic candidate, not a repaired or certified document.".into(),
+            }))
+        }
     };
-    if !valid_new {
-        return Err("Inconsistent Word nFibNew/field-count binding".into());
-    }
-    let fib_end = new_at + 2 + new_words.len();
     let cb_mac = u32at(fib, 64);
     let main = u32at(fib, 76);
     if main == 0 || main > MAX_CHARACTERS || cb_mac > word.bytes.len() || cb_mac < 426 {
@@ -446,7 +489,7 @@ fn decode_streams(
     }
     let clx = known(table, clx_at, clx_len)?;
     metadata.extend(source_lbas(word, 0, 426));
-    metadata.extend(source_lbas(word, new_at, 2 + new_words.len()));
+    metadata.extend(source_lbas(word, new_at, extension_bytes));
     metadata.extend(source_lbas(table, clx_at, clx_len));
     let mut at = 0;
     while clx.get(at) == Some(&1) {
@@ -490,6 +533,7 @@ fn decode_streams(
         strict_parser_refusal: None,
         readable_edition: None,
         edition_refusal: None,
+        incomplete_fib,
     };
     for i in 0..pieces {
         if cps[i] >= main {
@@ -670,6 +714,7 @@ pub(crate) fn preserve(
                 strict_parser_refusal: None,
                 readable_edition: None,
                 edition_refusal: None,
+                incomplete_fib: None,
             },
         };
         if positions + d.main_characters.unwrap_or(0) > 500_000 {

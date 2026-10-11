@@ -35,6 +35,15 @@ pub struct StreamEvidence {
     pub sector_ids: Vec<u32>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageFields {
+    pub stream_id: u32,
+    pub name: String,
+    pub directory_parent_byte_offset: usize,
+    pub raw_starting_sector: u32,
+    pub raw_stream_size: u64,
+    pub raw_entry_hex: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Evidence {
     pub method: String,
     pub sector_bytes: usize,
@@ -44,6 +53,8 @@ pub struct Evidence {
     pub allocation_links: Vec<Link>,
     pub selected_streams: Vec<StreamEvidence>,
     pub allocation_issues: Vec<String>,
+    #[serde(default)]
+    pub ignored_storage_fields: Vec<StorageFields>,
     pub whole_container_verified: bool,
     pub warning: String,
 }
@@ -231,7 +242,12 @@ fn parse_entry(raw: Vec<u8>, id: u32, offset: usize, major: u16) -> Result<Optio
     if name.is_empty() || name.contains(['\0', '/', '\\', ':', '!']) {
         return Err("Invalid CFB directory name".into());
     }
-    let length = if major == 3 {
+    // MS-CFB 2.6.3: start/size have no stream meaning for type-1 storage
+    // objects. Do NOT apply a stream allocation/size ceiling to those fields.
+    // Type-5 root remains meaningful (the mini stream), as do type-2 streams.
+    let length = if raw[66] == 1 {
+        0
+    } else if major == 3 {
         u32at(&raw, 120) as u64
     } else {
         u64::from_le_bytes(raw[120..128].try_into().unwrap())
@@ -246,7 +262,11 @@ fn parse_entry(raw: Vec<u8>, id: u32, offset: usize, major: u16) -> Result<Optio
         left: u32at(&raw, 68) as u32,
         right: u32at(&raw, 72) as u32,
         child: u32at(&raw, 76) as u32,
-        start: u32at(&raw, 116) as u32,
+        start: if raw[66] == 1 {
+            0
+        } else {
+            u32at(&raw, 116) as u32
+        },
         length: length as usize,
         offset,
         raw,
@@ -325,6 +345,7 @@ pub(super) fn streams(
     }
     let mut entries = Vec::new();
     let mut missing = Vec::new();
+    let mut ignored_storage_fields = Vec::new();
     for sid in &directory {
         let begin = p.offset(*sid)?;
         for off in (0..sector).step_by(128) {
@@ -334,7 +355,21 @@ pub(super) fn streams(
                 missing.push(id);
                 entries.push(None);
             } else {
-                entries.push(parse_entry(p.known(at, 128)?, id, at, major)?);
+                let entry = parse_entry(p.known(at, 128)?, id, at, major)?;
+                if let Some(e) = &entry
+                    && e.kind == 1
+                    && e.raw[116..128].iter().any(|b| *b != 0)
+                {
+                    ignored_storage_fields.push(StorageFields {
+                        stream_id: e.id,
+                        name: e.name.clone(),
+                        directory_parent_byte_offset: e.offset,
+                        raw_starting_sector: u32at(&e.raw, 116) as u32,
+                        raw_stream_size: u64::from_le_bytes(e.raw[120..128].try_into().unwrap()),
+                        raw_entry_hex: e.raw.iter().map(|b| format!("{b:02x}")).collect(),
+                    });
+                }
+                entries.push(entry);
             }
         }
     }
@@ -500,7 +535,7 @@ pub(super) fn streams(
     let evidence = Evidence { method:"selective_readable_cfb_root_streams".into(),sector_bytes:sector,
         directory_sector_ids:directory,missing_directory_stream_ids:missing,
         root_sibling_entries:root_evidence.into_iter().map(|e| EntryEvidence {stream_id:e.id,name:e.name,directory_parent_byte_offset:e.offset,raw_entry_hex:e.raw.iter().map(|b|format!("{b:02x}")).collect()}).collect(),
-        allocation_links:p.links.into_values().collect(),selected_streams:selected,allocation_issues:issues,
+        allocation_links:p.links.into_values().collect(),selected_streams:selected,allocation_issues:issues,ignored_storage_fields,
         whole_container_verified:false,
         warning:"Selective stream salvage, NOT compound-container repair. Readable complete root sibling paths identify Word/table streams; missing non-root entries and unrelated allocation failures remain unresolved. Known allocation crosslinks are refused, but unavailable entries cannot establish every historical ownership claim. Only recorded links/extents are followed; no missing entry/link/name is synthesized, no macros/embedded objects are executed and no original semantics certified.".into() };
     Ok((word, table, p.metadata, evidence))

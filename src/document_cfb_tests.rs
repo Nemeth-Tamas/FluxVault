@@ -196,6 +196,177 @@ fn sparse_container_and_missing_word_text_preserve_exact_gaps_and_never_decode_p
     assert_eq!(doc.missing_text[0].cp_count, 256);
     source_replay(&image, &doc, &bad);
 }
+
+#[test]
+fn nonzero_unused_storage_size_and_start_do_not_become_stream_allocation_in_v3_or_v4() {
+    for v4 in [false, true] {
+        let (image, parent, bad) = fixture_sparse(true, v4);
+        let mut payload = fat12::file_bytes(&image, &parent);
+        let storage = entry_named(&payload, "ObjectPool");
+        payload[storage + 116..storage + 120].copy_from_slice(&0xfffe_fffeu32.to_le_bytes());
+        payload[storage + 120..storage + 128].copy_from_slice(&u64::MAX.to_le_bytes());
+        let (image, parent) = scatter(payload, parent);
+        let bad = BTreeSet::from([bad as u64]);
+        let doc = extract(&image, &parent, &bad).unwrap();
+        assert_eq!(doc.segments.iter().map(|s| s.cp_count).sum::<usize>(), 900);
+        let e = doc.cfb_recovery.as_ref().unwrap();
+        let ignored = e
+            .ignored_storage_fields
+            .iter()
+            .find(|s| s.name == "ObjectPool")
+            .unwrap();
+        assert_eq!(ignored.raw_stream_size, u64::MAX);
+        assert_eq!(ignored.raw_starting_sector, 0xfffe_fffe);
+        assert_eq!(ignored.raw_entry_hex.len(), 256);
+        assert_eq!(ignored.directory_parent_byte_offset, storage);
+        assert!(
+            !e.selected_streams
+                .iter()
+                .any(|s| s.stream_id == ignored.stream_id)
+        );
+        assert!(!e.whole_container_verified);
+        source_replay(&image, &doc, &bad);
+        let html = readable_html::render(&doc, "image.img", &"f".repeat(64)).unwrap();
+        assert!(html.contains("Unused storage fields retained"));
+    }
+}
+
+#[test]
+fn storage_field_tolerance_cannot_hide_invalid_root_stream_or_sibling_metadata() {
+    for mode in 0..5 {
+        let (image, parent, bad) = fixture_sparse(true, false);
+        let mut payload = fat12::file_bytes(&image, &parent);
+        let storage = entry_named(&payload, "ObjectPool");
+        payload[storage + 120..storage + 128].copy_from_slice(&u64::MAX.to_le_bytes());
+        let target = match mode {
+            0 => entry_named(&payload, "Root Entry"),
+            1 => entry_named(&payload, "WordDocument"),
+            _ => storage,
+        };
+        match mode {
+            0 | 1 => payload[target + 120..target + 128].copy_from_slice(&u64::MAX.to_le_bytes()),
+            2 => payload[target + 68..target + 72].copy_from_slice(&0u32.to_le_bytes()),
+            3 => payload[target + 64..target + 66].copy_from_slice(&65u16.to_le_bytes()),
+            _ => payload[target + 66] = 2, // It now claims to be a stream: size MUST be bounded.
+        }
+        let (image, parent) = scatter(payload, parent);
+        assert!(
+            extract(&image, &parent, &BTreeSet::from([bad as u64])).is_err(),
+            "mode {mode}"
+        );
+    }
+}
+
+#[test]
+fn unreadable_word97_extension_salvages_only_source_mapped_main_text() {
+    let (mut image, parent, directory_bad) = fixture_sparse(true, false);
+    let word = word_mapping(&image, &parent);
+    let header_bad = word.sources[898].unwrap() / 512;
+    image[header_bad * 512..(header_bad + 1) * 512].fill(0xff);
+    let bad = BTreeSet::from([directory_bad as u64, header_bad as u64]);
+    let doc = extract(&image, &parent, &bad).unwrap();
+    assert_eq!(doc.segments.iter().map(|s| s.cp_count).sum::<usize>(), 900);
+    assert!(doc.missing_text.is_empty());
+    let evidence = doc.incomplete_fib.as_ref().unwrap();
+    assert!(!evidence.complete_fib_verified);
+    assert_eq!(evidence.unavailable_extension_count_offset, 898);
+    assert_eq!(evidence.supported_header_exclusion_end, 910);
+    assert!(!doc.repaired_original && !doc.customer_delivery_certified);
+    source_replay(&image, &doc, &bad);
+    let html = readable_html::render(&doc, "image.img", &"f".repeat(64)).unwrap();
+    assert!(html.contains("Incomplete Word header — text-only candidate"));
+    assert!(html.contains("effective version and complete header validity are unknown"));
+}
+
+#[test]
+fn prefix_only_salvage_refuses_missing_required_or_contradictory_metadata() {
+    for mode in 0..11 {
+        let (image, parent, directory_bad) = fixture_sparse(true, false);
+        let mapping =
+            parent_mapping(&image, &parent, &BTreeSet::from([directory_bad as u64])).unwrap();
+        let (mut word, mut table, metadata, _) =
+            cfb_recovery::streams(&mapping.bytes, &mapping.sources).unwrap();
+        word.sources[898..900].fill(None);
+        match mode {
+            0 => word.sources[418] = None, // Required CLX pointer.
+            1 => word.bytes[10..12].copy_from_slice(&0x0300u16.to_le_bytes()), // Encrypted.
+            2 => word.bytes[2..4].copy_from_slice(&0xd9u16.to_le_bytes()), // Base/count mismatch.
+            3 => word.sources[899] = Some(0), // Partially known count is not guessed.
+            4 => table.sources[0] = None,  // Unreadable piece table.
+            5 => table.bytes[15..19].copy_from_slice(&((800u32 * 2) | 0x4000_0000).to_le_bytes()), // Header overlap.
+            6 => table.bytes[9..13].copy_from_slice(&0u32.to_le_bytes()), // Invalid CP sequence.
+            7 | 8 => {
+                word.sources[898..900].copy_from_slice(&[Some(0), Some(1)]);
+                word.bytes[898..900]
+                    .copy_from_slice(&(if mode == 7 { 6u16 } else { 1u16 }).to_le_bytes());
+            }
+            9 => word.bytes[2..4].copy_from_slice(&0x999u16.to_le_bytes()),
+            10 => {
+                word.bytes[152..154].copy_from_slice(&0x6cu16.to_le_bytes());
+                word.bytes[1018..1020].copy_from_slice(&2u16.to_le_bytes());
+                word.sources[1020..1024].fill(None);
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            decode_streams(&parent, &word, &table, metadata).is_err(),
+            "mode {mode}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires FLUXVAULT_WORD_STORAGE_PROJECT; saved-image only, no physical media"]
+fn saved_storage_metadata_case_recovers_text_and_replays_every_source_binding() {
+    let project = crate::project::ProjectState::open_without_session(PathBuf::from(
+        std::env::var("FLUXVAULT_WORD_STORAGE_PROJECT").unwrap(),
+    ))
+    .unwrap();
+    let native_dir = project.extracted_dir().join("052/attempt_001_native_v5");
+    let native = crate::extraction::verified_native_report(&native_dir)
+        .unwrap()
+        .unwrap();
+    let image = fs::read(project.images_dir().join(&native.source_image)).unwrap();
+    assert_eq!(hash(&image), native.source_sha256);
+    let a = native.analysis.as_ref().unwrap();
+    let parent = a
+        .unrecovered_files
+        .iter()
+        .find(|f| f.record.path == "fejléc_logoval.doc")
+        .unwrap();
+    assert!(fat12::partial_file_safe(parent, a));
+    let bad = a.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
+    let doc = extract(&image, &parent.record, &bad).unwrap();
+    let readable = doc.segments.iter().map(|s| s.cp_count).sum::<usize>();
+    assert!(readable > 0);
+    assert!(!doc.incomplete_fib.as_ref().unwrap().complete_fib_verified);
+    assert!(
+        doc.cfb_recovery
+            .as_ref()
+            .unwrap()
+            .ignored_storage_fields
+            .iter()
+            .any(|s| s.name == "ObjectPool")
+    );
+    source_replay(&image, &doc, &bad);
+    for field in &doc.cfb_recovery.as_ref().unwrap().ignored_storage_fields {
+        let offset = field.directory_parent_byte_offset;
+        let source = parent.record.data_lbas[offset / 512] as usize * 512 + offset % 512;
+        assert!(!bad.contains(&((source / 512) as u64)));
+        assert_eq!(
+            field.raw_entry_hex,
+            image[source..source + 128]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+    }
+    println!(
+        "Saved 052: {readable}/{} main-text positions, {} gaps; source extents/metadata/allocation links and ignored raw storage fields replay",
+        doc.main_characters.unwrap(),
+        doc.missing_text.len()
+    );
+}
 #[test]
 fn unavailable_root_sibling_nodes_cannot_be_replaced_with_detached_named_entries() {
     let (image, parent, bad) = fixture_sparse(false, false);
@@ -360,7 +531,7 @@ fn readable_html_escapes_untrusted_markup_and_shows_gap_and_partial_metadata_war
 }
 
 #[test]
-#[ignore = "requires FLUXVAULT_WORD_TEST_PROJECT; read-only replay of saved v2 Word text/HTML reports"]
+#[ignore = "requires FLUXVAULT_WORD_TEST_PROJECT; read-only replay of saved v2/v3 Word text/HTML reports"]
 fn saved_word_reports_replay_source_extents_and_readable_editions() {
     let project = crate::project::ProjectState::open_without_session(std::path::PathBuf::from(
         std::env::var("FLUXVAULT_WORD_TEST_PROJECT").unwrap(),
@@ -378,13 +549,17 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                     .file_name()
                     .to_string_lossy()
                     .ends_with("_word_text_v2")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v3")
             {
                 continue;
             }
             let mut report: Report =
                 serde_json::from_slice(&fs::read(folder.path().join("word-text.json")).unwrap())
                     .unwrap();
-            assert_eq!(report.engine_version, ENGINE_VERSION);
+            assert!((2..=ENGINE_VERSION).contains(&report.engine_version));
             let image = fs::read(project.images_dir().join(&report.source_image)).unwrap();
             assert_eq!(hash(&image), report.source_sha256);
             let bad = report.bad_lbas.iter().copied().collect::<BTreeSet<_>>();

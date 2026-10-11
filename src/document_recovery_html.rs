@@ -33,6 +33,12 @@ pub(super) fn render(doc: &Document, source: &str, sha: &str) -> Result<String, 
     html.push_str("<aside class=\"warning\"><h2>Generated edition — not the original document</h2><p>Only source-mapped readable text is shown. Missing positions are marked, never guessed. Segment boundaries remain visible. Formatting, tables, pictures, fields, revisions and original meaning are not reconstructed or certified. This HTML is a new presentation of forensic text, not a repaired DOC.</p><p class=\"meta\">CP ranges are zero-based Word character positions (UTF-16 code units). Non-whitespace control characters are displayed as literal Unicode escape labels. Consult word-text.json and the separate text files for original decoded characters and exact source extents.</p></aside>");
     if let Some(evidence) = &doc.cfb_recovery {
         write!(html,"<aside class=\"warning\"><h2>Partial compound-file metadata</h2><p>{}</p><p class=\"meta\">{} unavailable directory entries; {} unrelated allocation exceptions. Entire original container remains unverified.</p></aside>",escaped(&evidence.warning),evidence.missing_directory_stream_ids.len(),evidence.allocation_issues.len()).unwrap();
+        if !evidence.ignored_storage_fields.is_empty() {
+            write!(html,"<aside class=\"warning\"><h2>Unused storage fields retained</h2><p>{} storage entries contain nonzero start/size fields. These fields do not describe streams for storage objects; their original bytes are recorded in word-text.json, not followed as allocation or rewritten. Required stream, root mini-stream and sibling-tree checks remain enforced.</p></aside>", evidence.ignored_storage_fields.len()).unwrap();
+        }
+    }
+    if let Some(evidence) = &doc.incomplete_fib {
+        write!(html,"<aside class=\"warning\"><h2>Incomplete Word header — text-only candidate</h2><p>{}</p><p class=\"meta\">Unavailable extension count at Word stream byte {}. Supported-header exclusion ends at byte {}; this is a conservative search bound, not a reconstructed header.</p></aside>",escaped(&evidence.warning),evidence.unavailable_extension_count_offset,evidence.supported_header_exclusion_end).unwrap();
     }
     let mut events = doc
         .segments

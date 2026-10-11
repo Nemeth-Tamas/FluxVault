@@ -361,7 +361,7 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
     assert_eq!(text.recovered_character_positions, 644);
     assert_eq!(text.missing_character_positions, 256);
     assert_eq!(text.repaired_originals, 0);
-    assert_eq!(text.engine_version, 2);
+    assert_eq!(text.engine_version, ENGINE_VERSION);
     assert_eq!(text.readable_editions, 1);
     let edition = &text.readable_edition_paths[0];
     let edition_bytes = fs::read(edition).unwrap();
@@ -373,12 +373,21 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
         .with_file_name("attempt_001_word_text_v1");
     fs::create_dir(&legacy).unwrap();
     fs::write(legacy.join("word-text.json"), b"old forensic report").unwrap();
+    let previous = text
+        .output_directory
+        .with_file_name("attempt_001_word_text_v2");
+    fs::create_dir(&previous).unwrap();
+    fs::write(previous.join("word-text.json"), b"old v2 evidence").unwrap();
     let repeated = run().unwrap();
     assert!(repeated.reused);
     assert!(repeated.document_salvage.unwrap().reused);
     assert_eq!(
         fs::read(legacy.join("word-text.json")).unwrap(),
         b"old forensic report"
+    );
+    assert_eq!(
+        fs::read(previous.join("word-text.json")).unwrap(),
+        b"old v2 evidence"
     );
     let cli = crate::cli::run(
         &[
@@ -443,7 +452,7 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
     assert!(
         archive
             .by_name(&format!(
-                "Recovery/001/attempt_{:03}_word_text_v2/{name}",
+                "Recovery/001/attempt_{:03}_word_text_v{ENGINE_VERSION}/{name}",
                 attempt.attempt_number
             ))
             .is_ok()
@@ -451,7 +460,7 @@ fn native_service_cli_archive_and_tamper_checks_keep_text_out_of_whole_file_coun
     assert!(
         archive
             .by_name(&format!(
-                "Recovery/001/attempt_{:03}_word_text_v2/{}",
+                "Recovery/001/attempt_{:03}_word_text_v{ENGINE_VERSION}/{}",
                 attempt.attempt_number,
                 edition.file_name().unwrap().to_string_lossy()
             ))
