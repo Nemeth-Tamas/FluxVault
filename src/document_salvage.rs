@@ -863,7 +863,7 @@ pub(crate) fn preserve(
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn regular_read(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn regular_read(path: &Path) -> Result<Vec<u8>, String> {
     if !fs::symlink_metadata(path)
         .map_err(|e| e.to_string())?
         .file_type()
@@ -882,7 +882,7 @@ fn regular_read(path: &Path) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)

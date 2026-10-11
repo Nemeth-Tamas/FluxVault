@@ -384,6 +384,8 @@ fn should_exclude(path: &Path) -> bool {
             name.eq_ignore_ascii_case("System Volume Information")
                 || name.eq_ignore_ascii_case("$RECYCLE.BIN")
                 || name.starts_with(".tmp-fragments-")
+                || name.starts_with(".tmp-word-text-")
+                || name.starts_with(".tmp-rtf-text-")
                 || name.starts_with(".tmp-native-")
         }
         _ => false,
@@ -613,7 +615,7 @@ fn readme_text(project_name: &str, file_count: usize, total_bytes: u64) -> Strin
     text.push_str("\r\nPacked flux: a managed .scp.zip contains one byte-identical original SCP, not regenerated flux. Its .scp.packed.json binds original/packed sizes and SHA-256. FluxVault decodes it transparently; a ZIP tool can restore the original SCP member.\r\n");
     text.push_str("\r\nOffline DERIVED images: Images may also contain explicitly labeled offline composite/mirrored-FAT attempts. They are saved-sector derivations, NOT new clean physical reads. OfflineDerived reports bind original images/logs/metadata and exact replayable sector copies; originals remain included. Zero remaining gaps do not certify filesystem/customer completeness.\r\n");
     text.push_str("\r\nForensic-only recovery: Recovery may contain raw .bin fragments of incomplete live files and explicitly requested deleted candidates. They are separate evidence, NOT complete/live customer documents. Read their source/offset/hash and missing-range reports; fragment counts do not increase recovered whole-file counts.\r\n");
-    text.push_str("\r\nGeneration-5 recovery: Directory-Recovered preserves files from evidenced orphan directory trees; lost root names/parents and historical live/deleted status are unknown. Fragment-Hypotheses contains structurally validated missing-FAT-link alternatives, not proven original allocation. Recovery/*_word_text_v2 holds separate forensic UTF-8 Word text segments, generated offline readable HTML editions and exact missing character-position reports; earlier v1 evidence remains intact. Selective CFB mapping can bypass unrelated unavailable directory entries but does not certify the entire compound container. NOT repaired DOCs, original replacements, complete documents or formatting recovery. These texts/editions never increase whole-file counts or enter routine conversion/delivery. Read the native and word-text reports before using candidate content.\r\n");
+    text.push_str("\r\nGeneration-5 recovery: Directory-Recovered preserves files from evidenced orphan directory trees; lost root names/parents and historical live/deleted status are unknown. Fragment-Hypotheses contains structurally validated missing-FAT-link alternatives, not proven original allocation. Recovery Word-text generations hold separate forensic UTF-8 Word text segments, offline HTML editions and exact missing-position reports; earlier evidence stays intact. Selective CFB/common-FIB mapping does not certify the entire container/header. RTF-text generations hold conservative readable-prefix UTF-8/HTML and source/stop reports: parsing never resumes across an unknown byte or unsupported text encoding; the remainder's text length is unknown. NOT repaired DOC/RTF files, original replacements, complete documents or formatting recovery. These texts/editions never increase whole-file counts or enter routine conversion/delivery. Read native, word-text and rtf-text reports before using candidate content.\r\n");
     text.push_str("\r\nRecoverySelection reports explain the preferred same-acquisition recovery generation; earlier forensic results remain included. DeliveryCleanup reports audit equivalent obsolete original copies moved into local Recovery/DeliveryQuarantine. Quarantined copies and private ownership journals are excluded from this package; edited/untracked originals and prior Office derivatives are preserved.\r\n");
     text
 }
@@ -1006,6 +1008,12 @@ mod tests {
         )));
         assert!(should_exclude(Path::new(
             "Recovery/001/.tmp-fragments-1-2/fragment.bin"
+        )));
+        assert!(should_exclude(Path::new(
+            "Recovery/001/.tmp-word-text-1-2/edition.html"
+        )));
+        assert!(should_exclude(Path::new(
+            "Recovery/001/.tmp-rtf-text-1-2/rtf-text.json"
         )));
         assert!(should_exclude(Path::new(
             "Recovery/.tmp-native-001-1-2/DeletedRecovery/candidate.doc"

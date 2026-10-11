@@ -152,6 +152,8 @@ fv storage resume
 
 Newer native recovery automatically looks for surviving lost directories, supported missing-link file-tail alternatives and readable text inside incomplete Word documents, including supported containers with unrelated damaged directory entries. You need not choose a strategy. To inspect one saved disk's Word-text outcome, run `fv recovery documents 24`. Open the printed `.html` edition path in your browser to read all surviving segments in order, with missing ranges clearly marked. Separate `.txt` segments and a gap/source report remain under `Recovery`; the edition is a generated forensic presentation, not a repaired DOC or extra complete original. No manual text assembly or Office repair step. **Exit 3 is normal attention.** [Beginner commands and advanced evidence](DEEP_RECOVERY.md).
 
+Damaged `.rtf` files additionally get a conservative readable-prefix attempt automatically. For a saved example, `fv recovery documents 22` prints its new text/HTML report paths without Office or a floppy. The edition explains exactly where interpretation stopped: unknown bytes, font/encoding or controls are not guessed, and later fragments are not silently joined. The remaining text length is unknown. The same attention exit 3 applies; this is a separate forensic edition, not a repaired editable RTF.
+
 When saved attempts can supply missing sectors or readable FAT redundancy can repair a FAT gap, processing automatically hands the verified improved image to file extraction and delivery. It appears as **DERIVED**, not a clean physical read; attention is still expected even with no remaining gaps. Earlier evidence and operator-created recovery folders are preserved. [Details and limits](OFFLINE_RECOVERY_HANDOFF.md).
 
 ### Find your files
@@ -164,7 +166,7 @@ The full report is automatic after processing. Refresh/open its location with `f
 | `Flux` | Raw/packed captures and decode/format evidence. |
 | `Extracted` | Forensic recovered originals and preserved generations. |
 | `Converted` | Delivery-friendly originals and successful Office/PDF copies. |
-| `Recovery` | Derived evidence, partial fragments, forensic Word text and optional deleted candidates. |
+| `Recovery` | Derived evidence, partial fragments, forensic Word/RTF-prefix text and optional deleted candidates. |
 | `Reports` | Inventories, audit, workbook, benchmarks, selection/cleanup reports. |
 | `Logs` | Acquisition and processing details. |
 

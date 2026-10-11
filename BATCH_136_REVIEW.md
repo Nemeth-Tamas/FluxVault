@@ -64,6 +64,8 @@ Disk 133 still has two USB/GW disagreements at LBAs 17/773 and a dependent `V_xB
 
 ### Focused saved-image recovery — 2026-10-11
 
+The next bounded slice adds automatic RTF-prefix text salvage: saved 022 `nka261056994.rtf` yields 330 readable UTF-16 positions, stopping at byte 37,306 on an unsupported selected font. Its first 73,728 bytes in attempt 1 / 143,872 bytes in selected attempt 2 are acquisition-readable; later bytes are not joined across a missing sector. The separate text/HTML/report retains exact prefix image extents, hashes, native parent/hole evidence and unknown remaining text length. Whole-file and completed-archive/baseline counts above are unchanged. Saved 128's `.rtf`-named file has a CFB header instead of RTF1 syntax; the RTF decoder correctly refuses that different format.
+
 Disk 052's incomplete `fejléc_logoval.doc` now yields 1,792/1,792 declared main-text positions with Word-text engine 3. The old v2 refusal and saved image remain unchanged. Two independent blockers were addressed: unused storage-object fields are not stream allocations, and a fully unavailable extension-count field need not prevent source-bound common-prefix text salvage. The effective Word version/complete FIB stay explicitly unknown; all required common text-mapping fields and CLX/allocation evidence must remain readable and consistent. Text/HTML carry forensic warnings, not editable-document repair or extra intact-file counts. The completed archive and baseline statistics above are the earlier immutable snapshot; publishing v3 evidence does not retroactively change them.
 
 ## Timing acceptance

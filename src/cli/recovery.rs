@@ -140,12 +140,14 @@ pub(super) fn run_advanced(
             if positional[1] == "documents" {
                 return Ok(CliResponse {
                     output: if json_output {
-                        json!({"document_salvage":result.document_salvage,"native_recovery":result,"physical_media_access":false,"repaired_originals":0}).to_string()
+                        json!({"document_salvage":result.document_salvage,"rtf_salvage":result.rtf_salvage,"native_recovery":result,"physical_media_access":false,"repaired_originals":0}).to_string()
                     } else {
-                        result.document_salvage.as_ref().map_or_else(
-                            || format!("Disk {disk_number:03}: no eligible incomplete .doc/.dot candidates. Native report: {}. No original repaired or physical media accessed.",result.report_path.display()),
+                        let word = result.document_salvage.as_ref().map_or_else(
+                            || if result.rtf_salvage.is_none() { format!("Disk {disk_number:03}: no eligible incomplete .doc/.dot/.rtf candidates. Native report: {}. No original repaired or physical media accessed.",result.report_path.display()) } else { String::new() },
                             |s| format!("Disk {disk_number:03}: {} documents with readable text; {} UTF-8 segments / {} character positions; {} missing positions; {} refused documents.\nWord text engine v{}: {} selectively mapped containers; {} readable HTML editions.\n{}Folder: {}\nReport: {}\nFORENSIC TEXT ONLY: HTML editions show explicit gaps, not repaired DOCs, original replacements, formatting or whole-file completeness.",s.documents_with_text,s.text_segments,s.recovered_character_positions,s.missing_character_positions,s.refused_documents,s.engine_version,s.selectively_mapped_documents,s.readable_editions,s.readable_edition_paths.iter().map(|p| format!("Open readable edition: {}\n",readable_path(p))).collect::<String>(),readable_path(&s.output_directory),readable_path(&s.report_path))
-                        )
+                        );
+                        let rtf = result.rtf_salvage.as_ref().map_or(String::new(),|s|format!("\nDisk {disk_number:03}: RTF prefix text engine v{}: {} documents with text / {} readable UTF-16 positions. Remaining text length UNKNOWN; no state joined across holes.\n{}Folder: {}\nReport: {}\nFORENSIC PREFIX ONLY: generated text/HTML, not repaired RTFs or whole files.",s.engine_version,s.documents_with_text,s.readable_utf16_positions,s.readable_edition_paths.iter().map(|p|format!("Open readable edition: {}\n",readable_path(p))).collect::<String>(),readable_path(&s.output_directory),readable_path(&s.report_path)));
+                        format!("{word}{rtf}").trim().to_string()
                     },
                     exit_code: 3,
                 });
@@ -163,7 +165,7 @@ pub(super) fn run_advanced(
                     json!({"recovery":result,"manifest":inventory.path,"physical_media_access":false}).to_string()
                 } else {
                     format!(
-                        "Disk {disk_number:03}: {} payloads recovered{} ({} validated signature/fragment candidates); {} entries skipped; {} validated long names; {} short-name fallbacks.\nLayout: {}{}{}{}{}{}\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
+                        "Disk {disk_number:03}: {} payloads recovered{} ({} validated signature/fragment candidates); {} entries skipped; {} validated long names; {} short-name fallbacks.\nLayout: {}{}{}{}{}{}{}\nFolder: {}\nReport: {}\nDisk/filesystem completeness remains unverified; no physical media accessed.",
                         result.files,
                         if result.reused {
                             " (verified result reused)"
@@ -192,6 +194,7 @@ pub(super) fn run_advanced(
                             )),
                         result.fragments.as_ref().map_or(String::new(), |f| format!("\nRaw partial-file evidence: {} fragments / {} bytes (NOT complete files). Report: {}", f.files, f.bytes, f.report_path.display())),
                         result.document_salvage.as_ref().map_or(String::new(), |s| format!("\nWord text salvage: {} segments / {} readable character positions (NOT repaired DOC files). Report: {}",s.text_segments,s.recovered_character_positions,s.report_path.display())),
+                        result.rtf_salvage.as_ref().map_or(String::new(),|s|format!("\nRTF prefix text: {} readable UTF-16 positions; remainder unknown (NOT repaired RTF files). Report: {}",s.readable_utf16_positions,s.report_path.display())),
                         if result.reconstructed_directories > 0 || result.fragmented_parents_with_candidates > 0 { format!("\nLost-directory roots: {}; missing-link candidate parents: {} ({} with competing alternatives). WARNING: original directory parent/name/ownership and fragment-tail association remain unknown; candidates are non-authoritative.", result.reconstructed_directories, result.fragmented_parents_with_candidates, result.ambiguous_fragmented_parents) } else { String::new() },
                         result.output_directory.display(),
                         result.report_path.display()

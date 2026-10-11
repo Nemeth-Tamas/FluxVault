@@ -153,7 +153,7 @@ Usage:
   fluxvault recovery extract N [--include-deleted] [--project PATH]
                                     Recover intact/signature files offline; deleted opt-in stays forensic-only
   fluxvault recovery documents N [--project PATH]
-                                    Native recovery plus forensic Word text salvage
+                                    Native recovery plus forensic Word/RTF prefix text
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
   fluxvault conversion plan [--project PATH]

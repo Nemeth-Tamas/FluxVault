@@ -52,6 +52,7 @@ pub mod recovery_backup;
 pub mod recovery_plan;
 pub mod report;
 mod resource_budget;
+pub mod rtf_salvage;
 pub mod run_control;
 pub mod safety;
 mod scp_diagnostics;

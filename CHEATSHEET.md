@@ -162,6 +162,7 @@ Resume with the scan line only. `--last-disk` is an absolute endpoint; `--count 
 | Request 12 Office workers offline | `fv process --conversion-workers 12` |
 | Native partial-file recovery | `fv recovery extract 59` |
 | Forensic text from an incomplete Word file | `fv recovery documents 24` |
+| Readable prefix text from a damaged RTF | `fv recovery documents 22` |
 | Deleted candidates, forensic-only | `fv recovery extract 59 --include-deleted` |
 | Extract eligible saved disks | `fv extract all` |
 | Refresh inventory | `fv files manifest` |
@@ -178,7 +179,7 @@ Normal scans/processing need their saved-file tools; standalone native extractio
 
 Final reports are automatic after saved-file processing. Open the printed `FloppyFinalReport.xlsx`; `Reports/FinalReportLatest.json` records the latest complete bundle. Standalone export needs no floppy/tools and changes no payload. [Statuses and limits](FINAL_REPORTS.md).
 
-Native generation 5 / Word-text engine 2 automatically adds evidenced lost-directory recovery, bounded missing-FAT-link tail alternatives and Word text salvage, including supported containers with unrelated directory damage. No new scan flag is needed. `fv recovery documents 24` prints a readable offline `.html` edition path: open it to see the text with explicit gaps, without assembling segments yourself. Text/editions live under `Recovery`, not as repaired DOCs; the command returns attention code 3. [Simple commands and limits](DEEP_RECOVERY.md).
+Native generation 5 / Word-text engine 3 / RTF-prefix engine 1 automatically adds evidenced lost-directory recovery, bounded missing-FAT-link tail alternatives and separate document text salvage. No new scan flag is needed. `fv recovery documents 24` prints Word edition paths; `fv recovery documents 22` can print damaged-RTF prefix editions. Open the printed offline `.html` in your browser. Word gaps remain visible; RTF parsing stops at the first unknown input/state and labels the remainder uninterpreted, with unknown text length. Text/editions live under `Recovery`, not as repaired DOC/RTF originals; attention exit 3 is expected. [Simple commands and limits](DEEP_RECOVERY.md).
 
 `fv process` automatically uses supported verified composite/FAT improvements for extraction and delivery. These appear as **DERIVED**, not clean physical reads; even zero-gap results retain attention. No manual copying from `Recovery` is needed. [Details](OFFLINE_RECOVERY_HANDOFF.md).
 

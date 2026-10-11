@@ -101,6 +101,7 @@ pub struct RecoveryResult {
     pub deleted_warning: Option<String>,
     pub fragments: Option<crate::fragments::FragmentResult>,
     pub document_salvage: Option<crate::document_salvage::SalvageResult>,
+    pub rtf_salvage: Option<crate::rtf_salvage::SalvageResult>,
 }
 
 pub fn recover_attempt(
@@ -293,6 +294,8 @@ fn recover_with_mode(
                 crate::fragments::preserve(&snapshot, &image, &recovery_disk, &report)?;
             result.document_salvage =
                 crate::document_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
+            result.rtf_salvage =
+                crate::rtf_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
         }
         return Ok(result);
     }
@@ -438,6 +441,16 @@ fn recover_with_mode(
         result.fragments = crate::fragments::preserve(&snapshot, &image, &recovery_disk, &report)?;
         result.document_salvage =
             crate::document_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
+        result.rtf_salvage =
+            crate::rtf_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
+        if let Some(text) = &result.rtf_salvage {
+            progress(&format!(
+                "RTF prefix salvage: {} documents / {} readable UTF16 positions / {} HTML editions; remainder unknown, not repaired originals.",
+                text.documents_with_text,
+                text.readable_utf16_positions,
+                text.readable_edition_paths.len()
+            ));
+        }
         if let Some(text) = &result.document_salvage {
             progress(&format!(
                 "Document text salvage: {} readable segments / {} character positions; {} missing positions; {} refusals; {} readable HTML editions. Separate forensic text only, not repaired DOC files.",
@@ -538,6 +551,7 @@ fn result(
         deleted_warning: report.deleted.as_ref().map(|d| d.warning.clone()),
         fragments: None,
         document_salvage: None,
+        rtf_salvage: None,
     }
 }
 

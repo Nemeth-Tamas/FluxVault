@@ -1,6 +1,6 @@
-# Deeper recovery: directories, file tails and Word text
+# Deeper recovery: directories, file tails and Word/RTF text
 
-Native recovery generation **5** adds three automatic saved-image paths. Word-text engine **2** additionally maps supported Word streams around unrelated missing compound-directory entries and creates readable offline HTML editions. Normal `fv scan` / `fv process` invokes these when native recovery is needed. No floppy, new policy, DMDE step or recovery decision is required.
+Native recovery generation **5** adds automatic saved-image recovery paths. Word-text engine **3** maps supported Word streams around unrelated missing compound-directory entries and admits explicitly warned common-prefix text when an optional version-tail count is unavailable. RTF-text engine **1** adds conservative readable-prefix text decoding and separate offline editions. Normal `fv scan` / `fv process` invokes these when native recovery is needed. No floppy, new policy, DMDE step or recovery decision is required.
 
 ## Beginner: use it
 
@@ -19,7 +19,7 @@ fv recovery extract 24
 fv recovery documents 24
 ```
 
-Both run native recovery; `documents` focuses its output on the additional forensic Word-text result. Add `--json` for machine-readable counts/paths. **Exit 3 is expected attention**, including successful reuse: the original disk/document remains damaged. No eligible partial `.doc`/`.dot` means no document-text result, not a repaired file.
+Both run native recovery; `documents` focuses its output on the additional forensic Word/RTF-text results. Add `--json` for machine-readable counts/paths. **Exit 3 is expected attention**, including successful reuse: the original disk/document remains damaged. No eligible partial `.doc`/`.dot`/`.rtf` means no document-text result, not a repaired file.
 
 If text survives, the command prints **Open readable edition: ...html**. Open that file in your browser: one page presents the segments in order, with a red block for each missing range. There is no manual text assembly or Office repair step. The page works offline, does not execute macros or fetch pictures/links, and is clearly labeled as a generated recovery edition, not the original DOC. It remains forensic evidence under `Recovery`, not an automatically certified delivery original.
 
@@ -34,6 +34,7 @@ Do not initialize/reset the old project, edit its internal reports, or copy reco
 | Intact signature candidate | Same generation, under `SignatureRecovery` | Existing `Signature-Recovered` treatment |
 | Readable pieces of an incomplete file | `Recovery/NNN/attempt_NNN_fragments_v2` | Raw evidence only, not complete documents |
 | Word main-text segments, readable HTML and report | `Recovery/NNN/attempt_NNN_word_text_v3` | Forensic evidence/generated presentation only; no routine conversion or original replacement |
+| RTF readable-prefix text, HTML and stopping report | `Recovery/NNN/attempt_NNN_rtf_text_v1` | Forensic text only; remaining text length unknown, no whole-file/conversion count |
 
 Legacy images use `legacy_native_v5` rather than an attempt extraction name. The native report is `Recovery/NNN/attempt_NNN_fat12_v5.json`. Older native generations, fragment-v1 folders, Word-text-v1/v2 folders and forensic deleted-v1 results stay intact. Same-acquisition selection cannot replace an ordinary reachable file solely with reconstructed/hypothetical copies. The archival ZIP includes forensic recovery evidence and generated HTML with warnings; inclusion is not customer-delivery certification.
 
@@ -72,6 +73,18 @@ This is **text salvage, not a repaired DOC**. Formatting, table structure, pictu
 Bounds: 4 MiB parent/stream size, 64 documents and 500,000 declared main-text positions per run; 200,000 positions / 4,096 segments / 64 MiB strict read work per document; 64 KiB CLX and 16 MiB report ceiling. Selective CFB mapping allows at most 4,096 directory entries / 65,536 allocation visits and inline DIFAT only. Editions are bounded to 4 MiB each / 8 MiB combined; raw segments remain when an edition exceeds its budget. Immutable staging and source/report/text/HTML/inventory verification protect repeat runs. Edited editions are preserved and refused, never overwritten.
 
 The interpretation follows Microsoft's [MS-DOC text retrieval](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/01d5d8c4-cf9c-4ef9-80fd-439e763cfe01), [FIB structure](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/9aeaa2e7-4a45-468e-ab13-3f6193eb9394), [compressed text offsets/mapping](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-doc/aa2e55a2-f4f2-4795-bab5-6d9d7a0ed249) and [CFB directory specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/a94d7445-c4be-49cd-b6b9-2f4abc663817). The refusal/search budgets are FluxVault policy, not guarantees in those specifications.
+
+## Advanced: damaged RTF readable prefixes
+
+`fv recovery documents 22` also attempts automatic prefix decoding of eligible incomplete `.rtf` files. The first unreadable/unmapped file byte is a hard input boundary: later raw fragments remain preserved, but are not joined using guessed group/font state. Unsupported visible control words, unknown/symbol/multibyte font encodings, malformed tokens and unsupported UTF-16 surrogate units stop interpretation even earlier. The report records that stopping byte/reason and remaining uninterpreted **file bytes**, not an invented missing-character count.
+
+The bounded decoder tracks group-local font/Unicode fallback/hidden/deleted state. It supports ANSI Windows-1250/1252 text, supported font charset/code-page bindings, escaped braces/backslashes/hex bytes, signed BMP `\uN` and bounded `\ucN` fallbacks. Font/color/style metadata, pictures/objects, fields, headers/footers/footnotes and ignorable destinations are excluded; binary payloads are skipped only within a known skipped destination and wholly readable input. It executes no Office code, object, field or macro. This is a conservative subset, not a full RTF renderer or complete editable-file reconstruction. A filename alone does not establish a readable RTF1 header.
+
+`rtf-text.json` retains the native incomplete-parent/FAT/missing-range evidence, exact logical prefix length, image extents and SHA-256, decoded-through offset, stop reason and text/HTML hashes. Immutable publication/replay refuses edited reports/text/editions or extra output files. Normal manifest/Office queues gain no whole files/jobs from these derivatives. Committed editions are archived as warned evidence; `.tmp-word-text-*` and `.tmp-rtf-text-*` staging is excluded.
+
+Bounds: 256 KiB readable input per parent; 4 MiB combined input, 64 parents, 500,000 combined UTF-8 text bytes; 200,000 UTF-8 bytes, 128 group levels and 256 fonts per document; 16 MiB provenance ceiling. Unsupported oversized/malformed mappings yield per-document refusals, not loss of the disk's independently recovered files. Duplicate font definitions are refused; unknown ignorable metadata cannot redefine a known font. Missing/unsupported content is never replaced with a guessed word or replacement character. Group/parser behavior follows [Microsoft RTF syntax](https://learn.microsoft.com/en-us/previous-versions/office/developer/office2000/aa140284(v=office.10)), [reader conventions](https://learn.microsoft.com/en-us/previous-versions/office/developer/office2000/aa140286(v=office.10)) and [font-aware text extraction](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxrtfex/205e1abf-b794-4fd0-b1e4-5210882233ab). Refusal limits are FluxVault policy.
+
+Saved **022**, `nka261056994.rtf`: **330 readable UTF-16 positions**. Attempt 1 has a 73,728-byte readable prefix; the selected attempt 2 has 143,872 readable prefix bytes. Both stop at file byte 37,306 on an unsupported selected font, before the first missing sector. This is a limited new forensic text result, not all document text or an intact RTF. Saved 128's `.rtf`-named candidate has a compound-file header instead of RTF syntax; this decoder correctly refuses it. Existing raw fragments and completed archival snapshots stay preserved.
 
 ## Checked against saved evidence — 2026-10-08
 
