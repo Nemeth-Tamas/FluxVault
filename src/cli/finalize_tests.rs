@@ -9,6 +9,49 @@ struct Fixture {
     project: ProjectState,
     destination: PathBuf,
 }
+
+#[test]
+fn saved_customer_language_is_immutable_on_finalization_resume() {
+    let f = Fixture::new();
+    let mut record = f.record();
+    record.options.customer_language = crate::final_report::Language::English;
+    record.save(&f.project).unwrap();
+    let before = fs::read(f.project.root().join("project.json")).unwrap();
+    let error = resume_in_language(
+        &f.project,
+        false,
+        true,
+        Some(crate::final_report::Language::Hungarian),
+    )
+    .unwrap_err();
+    assert!(error.contains("saved customer language"));
+    assert_eq!(
+        before,
+        fs::read(f.project.root().join("project.json")).unwrap()
+    );
+    assert_eq!(
+        state::load(&f.project)
+            .unwrap()
+            .unwrap()
+            .options
+            .customer_language,
+        crate::final_report::Language::English
+    );
+    f.tamper(|value| {
+        value["options"]
+            .as_object_mut()
+            .unwrap()
+            .remove("customer_language");
+    });
+    assert_eq!(
+        state::load(&f.project)
+            .unwrap()
+            .unwrap()
+            .options
+            .customer_language,
+        crate::final_report::Language::Hungarian
+    );
+}
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
@@ -35,6 +78,7 @@ impl Fixture {
                 destination: self.destination.canonicalize().unwrap(),
                 workers: 4,
                 allow_attention: false,
+                customer_language: crate::final_report::Language::Hungarian,
             },
         )
         .unwrap()

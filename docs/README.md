@@ -16,6 +16,7 @@ Command examples use the repository or an acquisition project as their working d
 - [Capture storage and lossless packing](guides/CAPTURE_STORAGE.md)
 - [Finish and publish a batch](guides/FINALIZATION.md)
 - [Understand the final reports](guides/FINAL_REPORTS.md)
+- [Customer language and the English operator interface](guides/CUSTOMER_LANGUAGE.md)
 - [Optional project settings](guides/PROJECT_SETTINGS.md)
 - [Recovery policies](guides/POLICIES.md)
 - [PowerShell Tab completion](guides/SHELL_COMPLETION.md)

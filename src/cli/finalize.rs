@@ -39,6 +39,7 @@ pub(super) fn raw_endpoint(
             destination: destination.clone(),
             workers,
             allow_attention: true,
+            customer_language: crate::project_settings::language(project)?,
         },
     )?;
     record.save(project)?;
@@ -93,7 +94,7 @@ fn archive(project: &ProjectState, destination: PathBuf) -> Result<Value, String
     )?;
     Ok(
         json!({"zip":result.zip_path,"sha256_file":result.sha256_path,"sha256":result.sha256,
-        "files":result.file_count,"bytes":result.total_bytes,"customer_delivery_certified":false}),
+        "files":result.file_count,"bytes":result.total_bytes,"customer_language":result.customer_language,"customer_delivery_certified":false}),
     )
 }
 
@@ -105,6 +106,26 @@ pub(super) fn run(
     allow_attention: bool,
     json_output: bool,
 ) -> Result<CliResponse, String> {
+    run_in_language(
+        cwd,
+        project_root,
+        destination,
+        workers,
+        allow_attention,
+        json_output,
+        None,
+    )
+}
+
+pub(super) fn run_in_language(
+    cwd: &Path,
+    project_root: PathBuf,
+    destination: PathBuf,
+    workers: usize,
+    allow_attention: bool,
+    json_output: bool,
+    language: Option<crate::final_report::Language>,
+) -> Result<CliResponse, String> {
     state::workstation(&project_root)?;
     let project = ProjectState::open_without_session(project_root)?;
     let root = project.root().canonicalize().map_err(|e| e.to_string())?;
@@ -115,19 +136,33 @@ pub(super) fn run(
             destination,
             workers,
             allow_attention,
+            customer_language: language.unwrap_or(crate::project_settings::language(&project)?),
         },
         json_output,
     )
 }
 
+#[cfg(test)]
 pub(super) fn resume(
     project: &ProjectState,
     allow_attention: bool,
     json_output: bool,
 ) -> Result<CliResponse, String> {
+    resume_in_language(project, allow_attention, json_output, None)
+}
+
+pub(super) fn resume_in_language(
+    project: &ProjectState,
+    allow_attention: bool,
+    json_output: bool,
+    language: Option<crate::final_report::Language>,
+) -> Result<CliResponse, String> {
     // Hold ownership before reading the options, not just before their use.
     let owner = crate::project_work::reserve(project.root())?;
     let record = state::load(project)?.ok_or("No saved finalization to resume")?;
+    if language.is_some_and(|l| l != record.options.customer_language) {
+        return Err("Resume uses the saved customer language; create a new finalization for a different language".into());
+    }
     if record.phase.complete() {
         return Err("Finalization already completed. Its receipt is historical, not a fresh verification; use finalize --destination PATH for a new checked archive".into());
     }
@@ -196,6 +231,7 @@ fn execute_owned(
         return Err("No saved disk images to finalize; no package was created".into());
     }
     let _control = crate::run_control::Session::start(project, "finalize")?;
+    crate::project_settings::set_language_owned(project, options.customer_language)?;
     let mut record = Record::new(project, options)?;
     record.save(project)?;
     let outcome = finish_owned(project, &mut record, json_output);

@@ -1,5 +1,7 @@
 # FluxVault CLI — advanced reference
 
+Customer delivery text defaults to Hungarian while the operator interface stays English. `--language hu|en` selects it for `production start/resume`, `process`, `finalize/resume`, `report export` and `package build`; resume must match its saved language. [Coverage, remembered defaults and immutable snapshots](CUSTOMER_LANGUAGE.md).
+
 Optional PowerShell 7 command/flag completion: `fluxvault completions powershell` prints the static trusted script. [Enable it in one line](SHELL_COMPLETION.md); no project or media access, no automatic profile changes.
 
 For your first run, use [the beginner tutorial](TUTORIAL.md). For daily commands, use [the cheat sheet](CHEATSHEET.md). This reference explains optional controls and evidence semantics; it is not a sequence to paste and run in full.

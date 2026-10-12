@@ -177,6 +177,7 @@ pub(super) fn publish(
     let mut workbook = Workbook::new();
     let header = Format::new()
         .set_bold()
+        .set_text_wrap()
         .set_font_color(Color::White)
         .set_background_color(Color::RGB(0x17365D));
     let summary = workbook.add_worksheet();
@@ -285,9 +286,10 @@ pub(super) fn publish(
         write_new(&partial.join(file), csv(&headers, &rows).as_bytes())?;
         let sheet = workbook.add_worksheet();
         sheet.set_name(name).map_err(|e| e.to_string())?;
+        sheet.set_row_height(0, 36).map_err(|e| e.to_string())?;
         for (col, title) in headers.iter().enumerate() {
             sheet
-                .write_string_with_format(0, col as u16, title, &header)
+                .write_string_with_format(0, col as u16, language.header(title), &header)
                 .map_err(|e| e.to_string())?;
             sheet
                 .set_column_width(
@@ -341,9 +343,18 @@ pub(super) fn publish(
         .set_name(language.text("Hatókör", "Scope"))
         .map_err(|e| e.to_string())?;
     limits
-        .write_string_with_format(0, 0, LIMITS, &Format::new().set_text_wrap())
+        .write_string_with_format(0, 0, language.limits(), &Format::new().set_text_wrap())
         .map_err(|e| e.to_string())?;
-    limits.set_row_height(0, 100).map_err(|e| e.to_string())?;
+    limits
+        .set_row_height(
+            0,
+            if language == Language::Hungarian {
+                150
+            } else {
+                100
+            },
+        )
+        .map_err(|e| e.to_string())?;
     for (i, issue) in document.issues.iter().enumerate() {
         limits
             .write_string(i as u32 + 2, 0, excel_text(issue))
@@ -367,7 +378,7 @@ pub(super) fn publish(
         "{}\n{}\n\n{}\n\n",
         language.text("FLOPPY VÉGSŐ AUDIT", "FLOPPY FINAL AUDIT"),
         document.project,
-        LIMITS
+        language.limits()
     );
     for (name, value) in metrics {
         text.push_str(&format!("{name}: {value}\n"));
@@ -412,7 +423,7 @@ pub(super) fn publish(
     let temporary = project
         .reports_dir()
         .join(format!(".final-report-{generation}.partial.json"));
-    write_new(&temporary, &serde_json::to_vec_pretty(&json!({"schema_version":1,"generation":generation,"directory":format!("FinalReports/{generation}"),"language":language.text("hu","en"),"artifacts_sha256":hashes,"customer_delivery_certified":false})).map_err(|e| e.to_string())?)?;
+    write_new(&temporary, &serde_json::to_vec_pretty(&json!({"schema_version":1,"generation":generation,"directory":format!("FinalReports/{generation}"),"language":language.code(),"artifacts_sha256":hashes,"customer_delivery_certified":false})).map_err(|e| e.to_string())?)?;
     crate::cancellation::check()?;
     fs::rename(temporary, &latest).map_err(|e| e.to_string())?;
     Ok(Export {

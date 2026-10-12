@@ -40,6 +40,7 @@ pub enum PackageEvent {
 
 #[derive(Debug, Clone)]
 pub struct PackageResult {
+    pub customer_language: String,
     pub zip_path: PathBuf,
     pub sha256_path: PathBuf,
     pub file_count: usize,
@@ -84,6 +85,24 @@ pub(crate) fn build_package(
 pub(crate) fn build_package_with_staging(
     request: &PackageRequest,
     keep_staging: bool,
+    stage: &impl Fn(&str),
+) -> Result<PackageResult, String> {
+    build_package_language(request, keep_staging, None, stage)
+}
+
+pub(crate) fn build_package_in_language(
+    request: &PackageRequest,
+    keep_staging: bool,
+    language: crate::final_report::Language,
+    stage: &impl Fn(&str),
+) -> Result<PackageResult, String> {
+    build_package_language(request, keep_staging, Some(language), stage)
+}
+
+fn build_package_language(
+    request: &PackageRequest,
+    keep_staging: bool,
+    explicit_language: Option<crate::final_report::Language>,
     stage: &impl Fn(&str),
 ) -> Result<PackageResult, String> {
     crate::cancellation::check()?;
@@ -137,9 +156,23 @@ pub(crate) fn build_package_with_staging(
     if destination.starts_with(&project) {
         return Err("Package destination must be outside the project tree.".to_owned());
     }
+    let language = explicit_language.unwrap_or(crate::project_settings::language_at(&project)?);
 
     stage("Archival files are being inventoried...");
     let files = collect_project_files(&project)?;
+    let latest = project.join("Reports/FinalReportLatest.json");
+    if explicit_language.is_some() && latest.exists() {
+        let binding =
+            crate::final_report::Binding::parse(&crate::document_salvage::regular_read(&latest)?)?;
+        if binding.language != language.code() {
+            return Err(format!(
+                "Final report language is {}; requested customer language is {}. Run report export --language {} before package build; existing reports/archives were not rewritten.",
+                binding.language,
+                language.code(),
+                language.code()
+            ));
+        }
+    }
     if files.is_empty() {
         return Err("No archival files are available to package.".to_owned());
     }
@@ -165,6 +198,7 @@ pub(crate) fn build_package_with_staging(
         &partial_path,
         &files,
         &request.project_name,
+        language,
         stage,
     );
     let (file_count, total_bytes) = match result {
@@ -218,6 +252,7 @@ pub(crate) fn build_package_with_staging(
             format!("ZIP is complete, but its SHA-256 sidecar could not be written: {error}")
         })?;
     Ok(PackageResult {
+        customer_language: language.code().to_owned(),
         zip_path,
         sha256_path,
         file_count,
@@ -459,6 +494,7 @@ fn write_and_verify(
     partial_path: &Path,
     files: &[PackageFile],
     project_name: &str,
+    language: crate::final_report::Language,
     stage: &impl Fn(&str),
 ) -> Result<(usize, u64), String> {
     let mut zip = ZipWriter::new(output);
@@ -521,7 +557,7 @@ fn write_and_verify(
     }
     let total_bytes = rows.iter().map(|row| row.bytes).sum();
     let manifest = manifest_text(&rows);
-    let readme = readme_text(project_name, files.len(), total_bytes);
+    let readme = readme_in_language(language, project_name, files.len(), total_bytes);
     zip.start_file("PACKAGE_MANIFEST.csv", options)
         .map_err(|error| error.to_string())?;
     zip.write_all(manifest.as_bytes())
@@ -606,6 +642,20 @@ fn manifest_text(rows: &[ManifestRow]) -> String {
         ));
     }
     text
+}
+
+fn readme_in_language(
+    language: crate::final_report::Language,
+    project_name: &str,
+    file_count: usize,
+    total_bytes: u64,
+) -> String {
+    if language == crate::final_report::Language::English {
+        return readme_text(project_name, file_count, total_bytes);
+    }
+    format!(
+        "FluxVault archiválási csomag\r\nProjekt: {project_name}\r\nFájlok száma: {file_count}\r\nForrásadatok mérete: {total_bytes} bájt\r\n\r\nImages: beolvasott szektorszintű lemezképek.\r\nLogs: beolvasási és adatmentési naplók.\r\nExtracted: visszanyert forrásfájlok.\r\nConverted: könnyebben használható, átalakított másolatok.\r\nRecovery: megőrzött adatmentési bizonyítékok, származtatott képek és mentések.\r\nReports: kiválasztott fájljegyzékek és jelentések.\r\nFlux: nyers fluxusfelvételek, ha rendelkezésre állnak.\r\n\r\nA Windows System Volume Information és lomtár mappái nem részei az átadási fájloknak. Az eredeti lemezképek minden rögzített bájtot megőriznek.\r\nA PACKAGE_MANIFEST.csv minden csomagolt fájl SHA-256 ellenőrzőösszegét tartalmazza.\r\nA részleges lemezkép vagy visszanyert fájl nem bizonyítja, hogy minden eredeti bájt olvasható volt. Az átadás előtt tekintse át az audit- és adatmentési jelentések korlátait.\r\n\r\nTömörített fluxus: a kezelt .scp.zip egyetlen, az eredetivel bájtonként azonos SCP-felvételt tartalmaz, nem újragenerált fluxust. A .scp.packed.json rögzíti az eredeti/tömörített méreteket és SHA-256 értékeket. FluxVault automatikusan dekódolja; ZIP-kezelővel az eredeti SCP visszaállítható.\r\n\r\nDERIVED lemezképek: az Images mappa jelölt, mentett szektorokból összeállított vagy tükrözött FAT alapján származtatott képeket is tartalmazhat. Ezek NEM új hibamentes fizikai beolvasások. Az OfflineDerived jelentések az eredeti képekhez/naplókhoz/metadatokhoz és pontosan visszajátszható szektormásolásokhoz kötik őket. Az eredetik megmaradnak. A hiányzó szektorok megszűnése nem igazolja a fájlrendszer vagy a tartalom teljességét.\r\n\r\nBizonyítékként megőrzött adatmentés: a Recovery mappa hiányos fájlok nyers .bin töredékeit és külön kért töröltfájl-jelölteket tartalmazhat. Ezek NEM teljes, igazoltan élő ügyféldokumentumok. A jelentésekben ellenőrizze a forrást, eltolást, ellenőrzőösszeget és hiányzó tartományokat; a töredékek nem növelik a teljes visszanyert fájlok számát.\r\n\r\n5. generációs adatmentés: a Directory-Recovered bizonyítékokkal alátámasztott árva könyvtárfák fájljait őrzi; az elveszett gyökérnevek/szülők és a történeti élő/törölt állapot ismeretlenek. A Fragment-Hypotheses szerkezetileg ellenőrzött hiányzó FAT-kapcsolati alternatívákat tartalmaz, nem bizonyított eredeti kiosztást. A Word-text generációk külön UTF-8 szövegrészeket, offline HTML-kiadásokat és pontos hiányzópozíció-jelentéseket őriznek; a korábbi bizonyítékok megmaradnak. A részleges CFB/FIB leképezés nem igazolja a teljes tároló/fejléc épségét. Az RTF-text generációk olvasható előtagokat és forrás/megállási jelentéseket tartalmaznak. A nem értelmezett szimbólumok látható hiányként jelennek meg; ismeretlen beolvasási bájtokon vagy kódoláson át nem találgatjuk az értelmezési állapotot. A további szöveg hossza ismeretlen. Ezek NEM javított DOC/RTF eredetik, teljes dokumentumok vagy helyreállított formázás. Nem növelik a teljes fájlok számát, és nem vesznek részt a szokásos konverzióban. Használat előtt olvassa el a native, word-text és rtf-text jelentéseket.\r\n\r\nA RecoverySelection jelentések megindokolják az előnyben részesített, azonos beolvasáshoz tartozó adatmentési generációt; a korábbi eredmények megmaradnak. A DeliveryCleanup jelentések nyomon követik a helyi Recovery/DeliveryQuarantine mappába helyezett, egyenértékű elavult eredeti másolatokat. A karantén és a belső tulajdonosi naplók nem részei ennek a csomagnak; a módosított/nem nyilvántartott eredetik és korábbi konverziók megmaradnak.\r\n"
+    )
 }
 
 fn readme_text(project_name: &str, file_count: usize, total_bytes: u64) -> String {
@@ -768,7 +818,7 @@ mod tests {
         fs::create_dir_all(project.join("Extracted").join("001")).unwrap();
         fs::create_dir_all(project.join("Reports")).unwrap();
         fs::create_dir_all(&destination).unwrap();
-        fs::write(project.join("project.json"), "{}").unwrap();
+        crate::project::ProjectState::create_without_session(project.clone()).unwrap();
         fs::write(project.join("Images").join("001.img"), b"image").unwrap();
         fs::write(project.join("Images").join("001.partial.img"), b"partial").unwrap();
         let flux_recovery = project.join("Flux").join("Recovery");
@@ -884,6 +934,13 @@ mod tests {
         assert_eq!(result.total_bytes, 29);
         assert!(result.sha256_path.is_file());
         let mut zip = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
+        let mut readme = String::new();
+        zip.by_name("README.txt")
+            .unwrap()
+            .read_to_string(&mut readme)
+            .unwrap();
+        assert!(readme.starts_with("FluxVault archiválási csomag"));
+        assert!(readme.contains("NEM teljes") && readme.contains("SHA-256"));
         assert_eq!(
             zip.by_name("Images/001.img").unwrap().compression(),
             CompressionMethod::Deflated
@@ -973,6 +1030,55 @@ mod tests {
         );
         assert!(result.unwrap_err().contains("outside"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_english_package_is_verified_and_does_not_translate_original_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-package-language-{}-{}",
+            std::process::id(),
+            crate::external_tools::current_unix_ms()
+        ));
+        let p = crate::project::ProjectState::create_without_session(root.join("project")).unwrap();
+        let original = b"FluxVault archival package: customer original, never translated";
+        fs::write(p.extracted_dir().join("original.txt"), original).unwrap();
+        let destination = root.join("delivery");
+        fs::create_dir(&destination).unwrap();
+        let result = build_package_in_language(
+            &PackageRequest {
+                project_root: p.root().to_owned(),
+                destination,
+                project_name: "English test".into(),
+            },
+            false,
+            crate::final_report::Language::English,
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(result.customer_language, "en");
+        assert_eq!(hash_file(&result.zip_path).unwrap(), result.sha256);
+        let mut archive = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
+        let mut readme = String::new();
+        archive
+            .by_name("README.txt")
+            .unwrap()
+            .read_to_string(&mut readme)
+            .unwrap();
+        assert!(
+            readme.starts_with("FluxVault archival package")
+                && readme.contains("NOT repaired DOC/RTF")
+        );
+        let mut recovered = Vec::new();
+        archive
+            .by_name("Extracted/original.txt")
+            .unwrap()
+            .read_to_end(&mut recovered)
+            .unwrap();
+        assert_eq!(recovered, original);
+        assert_eq!(
+            fs::read(p.extracted_dir().join("original.txt")).unwrap(),
+            original
+        );
     }
     #[test]
     fn customer_reports_include_native_recovery_exceptions_not_internal_markers() {

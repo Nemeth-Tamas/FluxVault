@@ -312,7 +312,7 @@ pub(crate) fn refresh(project: &ProjectState, disk: u32) -> Result<serde_json::V
     )?;
     let mut audit = crate::audit::run_audit(project, &|s| eprintln!("{s}"))?;
     let report =
-        crate::final_report::export(project, &audit, crate::final_report::Language::Hungarian)?;
+        crate::final_report::export(project, &audit, crate::project_settings::language(project)?)?;
     crate::final_report::reconcile_audit(&mut audit, &report);
     Ok(
         serde_json::json!({"native_extraction":native,"native_error":native_error,"manifest":manifest.path,"audit":audit.json_path,"workbook":report.workbook,"attention_required":native_error.is_some()||audit.attention_disks>0,"physical_media_access":false,"office_conversion_performed":false,"customer_delivery_certified":false}),

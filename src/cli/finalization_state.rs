@@ -21,6 +21,8 @@ pub(super) struct Options {
     pub destination: PathBuf,
     pub workers: usize,
     pub allow_attention: bool,
+    #[serde(default)]
+    pub customer_language: crate::final_report::Language,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

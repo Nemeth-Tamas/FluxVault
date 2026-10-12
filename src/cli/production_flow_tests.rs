@@ -34,6 +34,7 @@ impl Fixture {
             error: None,
             package: None,
             acquisition_attention: false,
+            customer_language: crate::final_report::Language::Hungarian,
         }
     }
 }
@@ -221,4 +222,62 @@ fn archive_destination_cannot_be_the_project_or_an_ancestor() {
     }
     let dest = destination(&root, None).unwrap();
     assert_eq!(dest, f.0.join("project-Delivery").canonicalize().unwrap());
+}
+
+#[test]
+fn customer_language_is_saved_separately_from_scan_options_and_resume_rejects_changes() {
+    let f = Fixture::new();
+    let parsed = parse(
+        &[
+            "production".into(),
+            "start".into(),
+            "--last-disk".into(),
+            "1".into(),
+            "--language".into(),
+            "en".into(),
+        ],
+        f.1.root(),
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.language,
+        Some(crate::final_report::Language::English)
+    );
+    assert!(parsed.persistent.is_empty());
+    let mut record = f.record(false);
+    record.customer_language = crate::final_report::Language::English;
+    save(&f.1, &record).unwrap();
+    assert_eq!(
+        load(&f.1).unwrap().unwrap().customer_language,
+        crate::final_report::Language::English
+    );
+    let before = fs::read(f.1.root().join("project.json")).unwrap();
+    let error = run(
+        &[
+            "production".into(),
+            "resume".into(),
+            "--language".into(),
+            "hu".into(),
+        ],
+        f.1.root(),
+    )
+    .unwrap_err();
+    assert!(error.contains("saved range/stations/options"));
+    assert_eq!(before, fs::read(f.1.root().join("project.json")).unwrap());
+    assert!(
+        parse(
+            &[
+                "production".into(),
+                "start".into(),
+                "--language".into(),
+                "en".into(),
+                "--language".into(),
+                "hu".into()
+            ],
+            f.1.root()
+        )
+        .err()
+        .unwrap()
+        .contains("Duplicate")
+    );
 }

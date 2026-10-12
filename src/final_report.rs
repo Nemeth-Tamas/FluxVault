@@ -75,10 +75,12 @@ mod tests;
 #[path = "final_report_writer.rs"]
 mod writer;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Language {
     #[default]
+    #[serde(rename = "hu")]
     Hungarian,
+    #[serde(rename = "en")]
     English,
 }
 impl Language {
@@ -89,8 +91,65 @@ impl Language {
             _ => Err("--language requires hu or en".into()),
         }
     }
-    fn text<'a>(self, hu: &'a str, en: &'a str) -> &'a str {
+    pub(crate) fn text<'a>(self, hu: &'a str, en: &'a str) -> &'a str {
         if self == Self::Hungarian { hu } else { en }
+    }
+    pub(crate) fn code(self) -> &'static str {
+        self.text("hu", "en")
+    }
+    pub(crate) fn limits(self) -> &'static str {
+        self.text("Az OK állapot azt jelenti, hogy a rögzített lemezkép, a kiválasztott visszanyert fájlok és a rögzített átadási/konverziós eredmények teljesítették az integritásellenőrzést. Ez nem igazolja az eredeti lemez teljességét, a dokumentum jelentésének épségét, a történeti fájltulajdont vagy a korábbi script/DMDE visszanyerési eredményekkel való azonosságot. A nem nyilvántartott átadási fájlok továbbra is figyelmet igényelnek. A törölt fájljelöltek, nyers töredékek és szövegkimentések nem számítanak teljes visszanyert fájlnak.",LIMITS)
+    }
+    pub(crate) fn header(self, key: &str) -> &str {
+        if self == Self::English {
+            return key;
+        }
+        match key {
+            "Floppy" => "Lemez",
+            "AuditStatus" => "Audit állapota",
+            "Image" => "Lemezkép",
+            "ImageBytes" => "Lemezkép mérete (bájt)",
+            "ImageSHA256" => "Lemezkép SHA-256",
+            "ImagingStatus" => "Beolvasás állapota",
+            "BadSectors" => "Hibás szektorok",
+            "ExtractionStatus" => "Kinyerés állapota",
+            "NativeFilesystemStatus" => "Fájlrendszer állapota",
+            "NativeDeletedEntries" => "Törölt bejegyzések",
+            "SourceRecoveredFiles" => "Visszanyert forrásfájlok",
+            "CustomerDeliveryFiles" => "Átadási fájlok",
+            "ConvertibleFiles" => "Konvertálható fájlok",
+            "ConversionOk" => "Sikeres konverziók",
+            "ConversionPartial" => "Részleges konverziók",
+            "ConversionFailed" => "Sikertelen konverziók",
+            "IntegrityInvalid" => "Érvénytelen integritásellenőrzések",
+            "EvidenceStatus" => "Bizonyíték állapota",
+            "Issues" => "Figyelmet igénylő tételek",
+            "RecoveredPath" => "Visszanyert fájl útvonala",
+            "RecoveryMethod" => "Visszanyerés módja",
+            "SizeBytes" => "Méret (bájt)",
+            "SHA256" => "SHA-256",
+            "SourceImageSha256" => "Forráslemez SHA-256",
+            "ManagedInventoryVerified" => "Fájljegyzék ellenőrizve",
+            "DeliveryEligible" => "Átadásra kiválasztható",
+            "OriginalForensicPath" => "Eredeti bizonyíték útvonala",
+            "SourceSHA256" => "Forrás SHA-256",
+            "ModernPath" => "Korszerű formátum útvonala",
+            "PdfPath" => "PDF útvonala",
+            "RecordedStatus" => "Rögzített állapot",
+            "Status" => "Állapot",
+            "ModernOk" => "Korszerű másolat ellenőrizve",
+            "PdfOk" => "PDF ellenőrizve",
+            "DurationSec" => "Időtartam (másodperc)",
+            "DeliveryPath" => "Átadási útvonal",
+            "FileRole" => "Fájl szerepe",
+            "Integrity" => "Integritás",
+            "Format" => "Formátum",
+            "RecordedSuccess" => "Rögzített sikeresség",
+            "ExpectedSha256" => "Várt SHA-256",
+            "ActualSha256" => "Tényleges SHA-256",
+            "Detail" => "Részletek",
+            _ => key,
+        }
     }
 }
 

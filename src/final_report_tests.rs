@@ -226,6 +226,66 @@ fn generation_publication_keeps_complete_previous_exports_and_bound_artifact_has
 }
 
 #[test]
+fn hungarian_presentation_has_localized_headers_and_scope_without_changing_machine_keys() {
+    let f = Fixture::files(false);
+    let audit = audit::run_audit(&f.0, &|_| {}).unwrap();
+    let hu = export(&f.0, &audit, Language::Hungarian).unwrap();
+    let mut workbook = ZipArchive::new(fs::File::open(&hu.workbook).unwrap()).unwrap();
+    let mut strings = String::new();
+    std::io::Read::read_to_string(
+        &mut workbook.by_name("xl/sharedStrings.xml").unwrap(),
+        &mut strings,
+    )
+    .unwrap();
+    assert!(
+        strings.contains("Lemezkép mérete (bájt)") && strings.contains("Visszanyert fájl útvonala")
+    );
+    assert!(strings.contains("Az OK állapot") && !strings.contains("OK means recorded image"));
+    assert!(
+        fs::read_to_string(hu.directory.join("FloppyFinalAudit.txt"))
+            .unwrap()
+            .contains("Az OK állapot")
+    );
+    assert!(
+        fs::read_to_string(hu.directory.join("FloppyFinalAudit.csv"))
+            .unwrap()
+            .contains("AuditStatus")
+    );
+    let before = fs::read(&hu.workbook).unwrap();
+    let en = export(&f.0, &audit, Language::English).unwrap();
+    assert!(
+        fs::read_to_string(en.directory.join("FloppyFinalAudit.txt"))
+            .unwrap()
+            .contains("OK means recorded image")
+    );
+    assert_eq!(before, fs::read(&hu.workbook).unwrap());
+}
+
+#[test]
+fn package_language_must_match_the_selected_report_without_rewriting_it() {
+    let f = Fixture::files(false);
+    let audit = audit::run_audit(&f.0, &|_| {}).unwrap();
+    let hu = export(&f.0, &audit, Language::Hungarian).unwrap();
+    let before = fs::read(&hu.workbook).unwrap();
+    let destination = f.0.root().with_extension("language-package");
+    fs::create_dir(&destination).unwrap();
+    let error = crate::package::build_package_in_language(
+        &crate::package::PackageRequest {
+            project_root: f.0.root().to_owned(),
+            destination: destination.clone(),
+            project_name: "Mismatch".into(),
+        },
+        false,
+        Language::English,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(error.contains("report export --language en"));
+    assert_eq!(before, fs::read(&hu.workbook).unwrap());
+    assert_eq!(fs::read_dir(destination).unwrap().count(), 0);
+}
+
+#[test]
 fn cancelled_export_cannot_replace_the_last_complete_generation() {
     let f = Fixture::files(false);
     let audit = audit::run_audit(&f.0, &|_| {}).unwrap();

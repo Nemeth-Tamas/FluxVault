@@ -19,6 +19,18 @@ DESCRIPTION
     readable on Windows without a Unix man command. Examples are PowerShell.
     The command catalog is NOT a script to run from top to bottom.
 
+CUSTOMER LANGUAGE
+    Operator prompts/help remain English. Customer package instructions and
+    selected final-report presentation default to Hungarian. --language hu|en
+    is accepted by production start/resume, process, finalize/resume, report
+    export and package build. Production/finalization save the choice; resume
+    refuses a conflicting language. Existing archives/editions are preserved,
+    not translated in place. Optional default: project settings set
+    customer-language en; clear customer-language restores Hungarian for new
+    work. Machine keys/status codes, original content and raw logs stay intact.
+    Recovery-edition/remaining diagnostic translation is a later polish slice.
+    Full coverage: docs/guides/CUSTOMER_LANGUAGE.md.
+
 SAFETY
     scan, acquire, greaseweazle capture and greaseweazle recover read physical
     media. Confirm the inserted disk's identity and open write-protect hole.

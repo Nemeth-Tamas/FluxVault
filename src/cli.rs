@@ -71,7 +71,7 @@ Usage:
   fluxvault project settings        Show optional project defaults / historical tool versions
   fluxvault project settings set KEY VALUE
   fluxvault project settings clear KEY
-                                    Keys: operator, conversion-workers, sevenzip, libreoffice, greaseweazle
+                                    Keys: operator, conversion-workers, customer-language, sevenzip, libreoffice, greaseweazle
   fluxvault disk select N [--project PATH]
   fluxvault disk next [--project PATH]
                                     Select the current/next disk number (no drive access)
@@ -190,6 +190,8 @@ Options:
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
   --allow-attention                 finalize: explicitly archive partial results with warnings (exit 3)
+  --language hu|en                  Customer report/package language; operator CLI remains English
+                                    production, process, finalize, report export, package build
   --drive LETTER:                   Enumerated removable drive for read-only probe
   --disk N                          Disk number for acquisition
   --retries N                       USB retry passes (0-10; acquire default 2, scan default 0)
@@ -387,6 +389,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             }
             "--details" => details = true,
             "--language" => {
+                if report_language.is_some() {
+                    return Err("Duplicate --language option".into());
+                }
                 index += 1;
                 report_language = Some(crate::final_report::Language::parse(
                     args.get(index).ok_or("--language requires hu or en")?,
@@ -983,8 +988,14 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
 
     let mut needs_attention = false;
-    if report_language.is_some() && positional != ["report", "export"] {
-        return Err("--language is only valid with report export".into());
+    if report_language.is_some()
+        && !(positional == ["report", "export"]
+            || positional == ["package", "build"]
+            || positional == ["finalize", "resume"]
+            || positional == ["finalize"]
+            || positional == ["process"])
+    {
+        return Err("--language is valid with report export, production start/resume, process, finalize/resume and package build".into());
     }
     if baseline_zip.is_some()
         && !(positional.len() == 2 && positional[0] == "benchmark" && positional[1] == "compare")
@@ -2462,7 +2473,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let final_report = crate::final_report::export(
                 &project,
                 &result,
-                crate::final_report::Language::Hungarian,
+                crate::project_settings::language(&project)?,
             )?;
             crate::final_report::reconcile_audit(&mut result, &final_report);
             let raw_exceptions = crate::flux_recovery::format_exceptions(&project)?.len();
@@ -2598,6 +2609,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let _control = crate::run_control::Session::start(&project, "report export")?;
+            if let Some(language) = report_language {
+                crate::project_settings::set_language_owned(&project, language)?;
+            }
             let _snapshot = crate::project_work::snapshot(project.root())?;
             let audit = crate::audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
             let statistics = imaging::load_project_statistics(&project.images_dir())?;
@@ -2607,8 +2621,11 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 &project.images_dir(),
                 &statistics,
             )?;
-            let final_report =
-                crate::final_report::export(&project, &audit, report_language.unwrap_or_default())?;
+            let final_report = crate::final_report::export(
+                &project,
+                &audit,
+                report_language.unwrap_or(crate::project_settings::language(&project)?),
+            )?;
             if json_output {
                 Ok(
                     json!({"project": project.root(), "workbook": final_report.workbook,
@@ -2629,6 +2646,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         Some("process") if positional.len() == 1 && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            if let Some(language) = report_language {
+                crate::project_settings::set_language_owned(&project, language)?;
+            }
             return process::run(
                 &project,
                 conversion_workers.unwrap_or(project.default_workers()?),
@@ -2647,10 +2667,11 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 return Err("finalize resume uses saved conversion workers; start a new finalize to change settings".into());
             }
             let root = resolve_project_root(cwd, project_override.as_deref())?;
-            return finalize::resume(
+            return finalize::resume_in_language(
                 &ProjectState::open_without_session(root)?,
                 allow_attention,
                 json_output,
+                report_language,
             );
         }
         Some("finalize") if positional.len() == 1 => {
@@ -2658,13 +2679,14 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let destination = destination.ok_or("finalize requires --destination PATH")?;
             let default_workers =
                 ProjectState::open_without_session(root.clone())?.default_workers()?;
-            return finalize::run(
+            return finalize::run_in_language(
                 cwd,
                 root,
                 destination,
                 conversion_workers.unwrap_or(default_workers),
                 allow_attention,
                 json_output,
+                report_language,
             );
         }
         Some("package") if positional == ["package", "publish"] && destination.is_none() => {
@@ -2684,19 +2706,20 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             } else {
                 cwd.join(destination)
             };
-            let result = package::build_package_with_staging(
+            let result = package::build_package_in_language(
                 &PackageRequest {
                     project_root: project.root().to_path_buf(),
                     destination,
                     project_name: project.name().to_owned(),
                 },
                 keep_staging,
+                report_language.unwrap_or(crate::project_settings::language(&project)?),
                 &|stage| eprintln!("{stage}"),
             )?;
             if json_output {
                 Ok(json!({"zip": result.zip_path, "sha256_file": result.sha256_path,
                     "sha256": result.sha256, "files": result.file_count, "bytes": result.total_bytes,
-                    "staging": result.staging_path, "customer_delivery_certified": false}).to_string())
+                    "staging": result.staging_path, "customer_language":result.customer_language, "customer_delivery_certified": false}).to_string())
             } else {
                 Ok(format!(
                     "Verified archival ZIP (not customer-certified): {}\nFiles: {} | Source bytes: {}\nSHA-256: {}{}",
@@ -2914,7 +2937,7 @@ mod tests {
         assert!(Path::new(json["workbook"].as_str().unwrap()).is_file());
         assert!(Path::new(json["final_report"]["latest"].as_str().unwrap()).is_file());
         let invalid = run(&["status".into(), "--language".into(), "en".into()], &root).unwrap_err();
-        assert!(invalid.contains("only valid with report export"));
+        assert!(invalid.contains("--language is valid with report export"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

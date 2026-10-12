@@ -500,7 +500,7 @@ fn packages_include_replay_reports_exclude_reservations_and_refuse_changed_linea
         .unwrap()
         .read_to_string(&mut readme)
         .unwrap();
-    assert!(readme.contains("Offline DERIVED images"));
+    assert!(readme.contains("DERIVED lemezképek"));
     drop(archive);
     fs::write(&attempts[0].log_file, b"changed lineage").unwrap();
     assert!(crate::package::build_package(&request, &|_| {}).is_err());

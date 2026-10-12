@@ -42,9 +42,12 @@ struct Record {
     package: Option<Value>,
     #[serde(default)]
     acquisition_attention: bool,
+    #[serde(default)]
+    customer_language: crate::final_report::Language,
 }
 #[derive(Default)]
 struct Parsed {
+    language: Option<crate::final_report::Language>,
     root: Option<PathBuf>,
     destination: Option<PathBuf>,
     last: Option<u32>,
@@ -73,6 +76,7 @@ fn parse(args: &[String], cwd: &Path) -> Result<Parsed, String> {
             }
             "--source-write-protected" => {} // custody prompts still assert the tab on each disk
             "--project"
+            | "--language"
             | "--destination"
             | "--last-disk"
             | "--conversion-workers"
@@ -86,6 +90,12 @@ fn parse(args: &[String], cwd: &Path) -> Result<Parsed, String> {
                 i += 1;
                 let value = args.get(i).ok_or_else(|| format!("{a} requires a value"))?;
                 match a.as_str() {
+                    "--language" => {
+                        if p.language.is_some() {
+                            return Err("Duplicate --language option".into());
+                        }
+                        p.language = Some(crate::final_report::Language::parse(value)?);
+                    }
                     "--project" => p.root = Some(cwd.join(value)),
                     "--destination" => p.destination = Some(cwd.join(value)),
                     "--last-disk" => {
@@ -340,7 +350,8 @@ pub(super) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         return Err("No production workflow to resume; use production start --last-disk N".into());
     }
     let mut record = if let Some(r) = old {
-        if parsed.last.is_some_and(|n| n != r.last)
+        if parsed.language.is_some_and(|l| l != r.customer_language)
+            || parsed.last.is_some_and(|n| n != r.last)
             || parsed.workers.is_some_and(|n| n != r.workers)
             || (!parsed.persistent.is_empty() && parsed.persistent != r.scan_args)
             || parsed
@@ -379,6 +390,9 @@ pub(super) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             error: None,
             package: None,
             acquisition_attention: false,
+            customer_language: parsed
+                .language
+                .unwrap_or(crate::project_settings::language(&project)?),
         }
     };
     if record.dual && parsed.ephemeral.iter().any(|a| a == "--no-verify") {
@@ -418,6 +432,7 @@ pub(super) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         });
     }
     record.destination = destination(&root, Some(record.destination.clone()))?;
+    crate::project_settings::set_language_owned(&project, record.customer_language)?;
     let control = crate::run_control::Session::start(&project, "production_start")?;
     let started = Instant::now();
     let mut outcome = crate::project_work::with_owner(project.root(), &owner, || {

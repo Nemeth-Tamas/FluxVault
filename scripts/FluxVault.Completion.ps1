@@ -14,8 +14,9 @@ $fluxVaultCompleter = {
         'disk' = @('list','show','note','select','next','prefer')
         'project' = @('show','import','settings')
         'project settings' = @('set','clear')
-        'project settings set' = @('operator','conversion-workers','sevenzip','libreoffice','greaseweazle')
-        'project settings clear' = @('operator','conversion-workers','sevenzip','libreoffice','greaseweazle')
+        'project settings set' = @('operator','conversion-workers','customer-language','sevenzip','libreoffice','greaseweazle')
+        'project settings set customer-language' = @('hu','en')
+        'project settings clear' = @('operator','conversion-workers','customer-language','sevenzip','libreoffice','greaseweazle')
         'drive' = @('list','probe')
         'tools' = @('check','show','set','clear')
         'greaseweazle' = @('preview','info','capture','decode','identify','status','diagnose','compare','consensus','plan','recover','scan')
@@ -45,13 +46,13 @@ $fluxVaultCompleter = {
         }
     }
     $scan = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--sound','--usb','--double','--plan','--drive','--retries','--write-blocker-verified')
-    $production = @('--last-disk','--destination','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--no-verify','--color','--sound','--double')
+    $production = @('--last-disk','--destination','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--no-verify','--color','--sound','--double','--language')
     $options = @{
         'project import' = @('--source','--destination','--plan')
         'scan' = $scan
         'start' = $scan
         'production start' = $production
-        'production resume' = @('--no-verify','--color','--sound','--write-blocker-verified')
+        'production resume' = @('--no-verify','--color','--sound','--write-blocker-verified','--language')
         'greaseweazle scan' = @('--last-disk','--count','--no-verify','--conversion-workers','--gw-drive','--profile','--profile-map','--policy','--capture-storage','--processing-mode','--acquisition-only','--source-write-protected','--color','--sound')
         'disk show' = @('--details')
         'drive probe' = @('--drive')
@@ -69,13 +70,13 @@ $fluxVaultCompleter = {
         'conversion run' = @('--conversion-workers')
         'conversion retry' = @('--conversion-workers')
         'report export' = @('--language')
-        'process' = @('--conversion-workers')
+        'process' = @('--conversion-workers','--language')
         'processing resume' = @('--conversion-workers')
         'storage pack' = @('--capture-attempt','--retire-raw')
         'benchmark compare' = @('--baseline','--include-deleted')
-        'finalize' = @('--destination','--conversion-workers','--allow-attention')
-        'finalize resume' = @('--allow-attention')
-        'package build' = @('--destination','--keep-staging')
+        'finalize' = @('--destination','--conversion-workers','--allow-attention','--language')
+        'finalize resume' = @('--allow-attention','--language')
+        'package build' = @('--destination','--keep-staging','--language')
     }
     $values = @{
         '--profile' = @('auto','ibm.1440','ibm.720')
@@ -124,7 +125,7 @@ $fluxVaultCompleter = {
     $prefix = ([string]$wordToComplete).Trim([char[]](39,34))
     if ($numericImpact) { $children['recovery impact'] = @() }
     if ($context -eq 'production start' -and $flags -contains '--double') {
-        $options[$context] = @('--drive','--gw-drive','--last-disk','--destination','--write-blocker-verified','--conversion-workers','--color','--sound')
+        $options[$context] = @('--drive','--gw-drive','--last-disk','--destination','--write-blocker-verified','--conversion-workers','--color','--sound','--language')
     }
     if ($context -in @('scan','start')) {
         if ($flags -contains '--double') {

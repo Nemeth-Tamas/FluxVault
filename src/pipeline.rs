@@ -498,7 +498,7 @@ fn run_pipeline_mode(
         &statistics,
     )?;
     let final_report =
-        crate::final_report::export(project, &audit, crate::final_report::Language::Hungarian)?;
+        crate::final_report::export(project, &audit, crate::project_settings::language(project)?)?;
     crate::final_report::reconcile_audit(&mut audit, &final_report);
     let workbook_path = final_report.workbook;
     Ok(PipelineResult {

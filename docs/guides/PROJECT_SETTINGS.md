@@ -18,6 +18,8 @@ Restore the default with `fv project settings clear conversion-workers`. Setting
 
 ## Advanced: project-specific tools
 
+Customer text also has an optional remembered default: `fv project settings set customer-language en`; clear it with `fv project settings clear customer-language`. This never changes the English operator interface or rewrites old artifacts. An existing production/finalization resume keeps its bound choice. [Command flags and current coverage](CUSTOMER_LANGUAGE.md).
+
 ```powershell
 fv project settings set sevenzip 'C:\Program Files\7-Zip\7z.exe'
 fv project settings set libreoffice 'C:\Program Files\LibreOffice\program\soffice.com'

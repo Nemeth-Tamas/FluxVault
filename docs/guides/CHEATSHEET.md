@@ -6,6 +6,8 @@ New here? Follow [the tutorial](TUTORIAL.md). This is the quick reference after 
 
 ## Beginner: everyday commands
 
+Hungarian customer delivery is the default; use `fv production start --last-disk 136 --language en` for English and resume with `fv production resume`. Operator prompts stay English. [Languages and saved choices](CUSTOMER_LANGUAGE.md).
+
 ### Install or refresh once
 
 ```powershell

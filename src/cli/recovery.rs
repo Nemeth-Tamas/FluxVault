@@ -357,7 +357,7 @@ pub(super) fn run_advanced(
                 let report = crate::final_report::export(
                     project,
                     &audit,
-                    crate::final_report::Language::Hungarian,
+                    crate::project_settings::language(project)?,
                 )?;
                 crate::final_report::reconcile_audit(&mut audit, &report);
                 json!({"audit_json":audit.json_path,"audit_csv":audit.csv_path,"workbook":report.workbook,"attention":audit.attention_disks,"customer_delivery_certified":false})

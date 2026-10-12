@@ -1,5 +1,7 @@
 # Production: feed disks, finish automatically
 
+Customer delivery text defaults to Hungarian; add `--language en` on first production start for English. The receipt saves the choice, so ordinary resume restores it and refuses a conflicting language. Operator prompts stay English. [Language coverage](CUSTOMER_LANGUAGE.md).
+
 `fv production start` joins the existing read-only scanner, automatic recovery and
 background file processing to verified ZIP creation. Every required label and
 USB-to-GW transfer must be saved first. Physical labels/safe swaps remain your

@@ -14,6 +14,8 @@ pub(crate) struct Settings {
     #[serde(default)]
     pub conversion_workers: Option<usize>,
     #[serde(default)]
+    pub customer_language: Option<crate::final_report::Language>,
+    #[serde(default)]
     pub tools: ToolSettings,
     #[serde(default)]
     pub observed_versions: BTreeMap<String, serde_json::Value>,
@@ -55,6 +57,66 @@ pub(crate) fn effective_tools(project: &ProjectState) -> Result<ToolSettings, St
     }
     Ok(effective)
 }
+
+pub(crate) fn language(project: &ProjectState) -> Result<crate::final_report::Language, String> {
+    language_at(project.root())
+}
+
+/// Read only the optional language extension. Packaging historically accepts
+/// archival roots independently of the application metadata schema; absent
+/// settings keep that compatibility without guessing an invalid language.
+pub(crate) fn language_at(root: &std::path::Path) -> Result<crate::final_report::Language, String> {
+    let path = root.join("project.json");
+    let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() > 65536 {
+        return Err("Unsafe/oversized project language metadata".into());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("Linked project language metadata refused".into());
+        }
+    }
+    let bytes = crate::document_salvage::regular_read(&path)?;
+    if bytes.len() > 65536 {
+        return Err("Oversized project language metadata".into());
+    }
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if !value.is_object() {
+        return Err("Project language metadata must be an object".into());
+    }
+    let Some(settings) = value.get(KEY) else {
+        return Ok(Default::default());
+    };
+    if !settings.is_object() {
+        return Err("Invalid project customer-language settings".into());
+    }
+    match settings.get("customer_language") {
+        None | Some(serde_json::Value::Null) => Ok(Default::default()),
+        Some(serde_json::Value::String(s)) => crate::final_report::Language::parse(s),
+        _ => Err("Invalid project customer-language value".into()),
+    }
+}
+
+/// Caller must hold the project processing owner before changing the choice.
+pub(crate) fn set_language_owned(
+    project: &ProjectState,
+    language: crate::final_report::Language,
+) -> Result<(), String> {
+    let _snapshot = crate::project_work::snapshot(project.root())?;
+    let mut fresh = ProjectState::open_without_session(project.root().to_owned())?;
+    let mut settings = get(&fresh)?;
+    if settings.customer_language == Some(language) {
+        return Ok(());
+    }
+    settings.customer_language = Some(language);
+    crate::cancellation::check()?;
+    fresh.save_extension(
+        KEY,
+        serde_json::to_value(settings).map_err(|e| e.to_string())?,
+    )
+}
 pub(crate) fn update(
     project: &ProjectState,
     key: &str,
@@ -65,6 +127,11 @@ pub(crate) fn update(
     let mut fresh = ProjectState::open_without_session(project.root().to_owned())?;
     let mut settings = get(&fresh)?;
     match key {
+        "customer-language" => {
+            settings.customer_language = value
+                .map(crate::final_report::Language::parse)
+                .transpose()?
+        }
         "operator" => settings.operator = value.map(str::to_owned),
         "conversion-workers" => {
             settings.conversion_workers = value
@@ -89,7 +156,7 @@ pub(crate) fn update(
         }
         _ => {
             return Err(
-                "Settings keys: operator, conversion-workers, sevenzip, libreoffice, greaseweazle"
+                "Settings keys: operator, conversion-workers, customer-language, sevenzip, libreoffice, greaseweazle"
                     .into(),
             );
         }
@@ -164,6 +231,32 @@ mod tests {
                 .default_workers()
                 .unwrap(),
             4
+        );
+    }
+
+    #[test]
+    fn customer_language_defaults_persists_validates_and_busy_updates_do_not_change_it() {
+        let p = project();
+        assert_eq!(
+            language(&p).unwrap(),
+            crate::final_report::Language::Hungarian
+        );
+        update(&p, "customer-language", Some("en")).unwrap();
+        assert_eq!(
+            language(&p).unwrap(),
+            crate::final_report::Language::English
+        );
+        let before = std::fs::read(p.project_file()).unwrap();
+        assert!(update(&p, "customer-language", Some("de")).is_err());
+        assert_eq!(before, std::fs::read(p.project_file()).unwrap());
+        let owner = crate::project_work::reserve(p.root()).unwrap();
+        assert!(update(&p, "customer-language", Some("hu")).is_err());
+        assert_eq!(before, std::fs::read(p.project_file()).unwrap());
+        drop(owner);
+        update(&p, "customer-language", None).unwrap();
+        assert_eq!(
+            language(&p).unwrap(),
+            crate::final_report::Language::Hungarian
         );
     }
     #[test]
