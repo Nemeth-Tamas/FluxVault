@@ -2,6 +2,8 @@
 
 **PowerShell · Windows · `fv` = `fluxvault`**
 
+Need batch visibility? `fv production benchmark` shows saved timings/actions; `fv production estimate` gives evidence-limited phase ranges; `fv recovery ranges 59` shows exact missing bytes. These are optional diagnostics, not extra steps needed to finish a normal production job. [Advanced saved-batch tools](SAVED_BATCH_TOOLS.md).
+
 New here? Follow [the tutorial](TUTORIAL.md). This is the quick reference after setup. Physical scanning defaults to the tested Greaseweazle/Mitsumi station on selector B. USB commands are in the advanced reference.
 
 ## Beginner: everyday commands

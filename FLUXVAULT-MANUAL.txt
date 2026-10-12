@@ -8,6 +8,22 @@ SYNOPSIS
     fluxvault COMMAND [SUBCOMMAND] [DISK] [OPTIONS]
 
 DESCRIPTION
+    Optional saved-batch additions:
+      fv production estimate
+      fv production benchmark
+      fv recovery ranges N [--attempt N]
+      fv storage benchmark N [--capture-attempt N]
+      fv benchmark legacy --baseline ZIP
+    Expert-only other-format/selected-track operations:
+      fv greaseweazle expert capture N --format NAME [--diskdefs FILE]
+        [--cylinders 0-79] [--heads 0|1|both] [--step 1|2]
+        --source-write-protected [--plan]
+      fv greaseweazle expert decode N --format NAME [--diskdefs FILE]
+        --input SAVED.scp --expected-bytes N [--plan]
+    Expert results remain separate, unverified and attention; no automatic
+    donor/cursor promotion. Normal production commands/defaults are unchanged.
+    Bounds, forecast caveats and examples: docs/guides/SAVED_BATCH_TOOLS.md.
+
     FluxVault stores acquisition evidence, recovered files, conversions and
     reports in a project folder. Run project commands from that folder, or
     select it explicitly with --project PATH where supported.

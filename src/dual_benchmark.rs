@@ -226,6 +226,7 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
     let mut timings = Vec::new();
     let mut warnings = Vec::new();
     let mut confirmations = 0;
+    let mut action_ledger = BTreeMap::new();
     let mut removals = 0;
     let mut identity_releases = 0;
     let mut same_disk_confirmations = 0;
@@ -340,6 +341,18 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                         return Err("Duplicated/invalid dual reader ticket".into());
                     }
                     confirmations += 1;
+                    crate::production_metrics::count(
+                        &mut action_ledger,
+                        disk,
+                        "read_confirmations",
+                    );
+                    if e.data["retry"] == true {
+                        crate::production_metrics::count(
+                            &mut action_ledger,
+                            disk,
+                            "retry_confirmations",
+                        );
+                    }
                 }
                 "dual_receipt_saved" | "dual_read_failed" => {
                     let generation = number(&e.data, "generation")?;
@@ -394,9 +407,15 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                     }
                 }
                 "dual_removal_confirmed" => {
-                    number(&e.data, "disk")?;
+                    let disk =
+                        u32::try_from(number(&e.data, "disk")?).map_err(|e| e.to_string())?;
                     station(&e.data)?;
                     removals += 1;
+                    crate::production_metrics::count(
+                        &mut action_ledger,
+                        disk,
+                        "removal_confirmations",
+                    );
                 }
                 "dual_identity_released" => {
                     let disk = number(&e.data, "disk")?;
@@ -410,6 +429,11 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                         return Err("Invalid/misplaced dual identity release".into());
                     }
                     identity_releases += 1;
+                    crate::production_metrics::count(
+                        &mut action_ledger,
+                        disk as u32,
+                        "identity_releases",
+                    );
                 }
                 "dual_same_disk_confirmed" => {
                     if starts.values().any(|(_, _, s)| s == "GW") || feed.is_some() {
@@ -417,6 +441,11 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                     }
                     same_disk_event(&e.data)?;
                     same_disk_confirmations += 1;
+                    crate::production_metrics::count(
+                        &mut action_ledger,
+                        number(&e.data, "disk")? as u32,
+                        "same_disk_confirmations",
+                    );
                 }
                 "dual_pause" => {
                     if paused_at.is_none() {
@@ -505,6 +534,7 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
         "unique_timed_receipts":receipts.len(),"numbered_read_confirmations":confirmations,
         "explicit_removal_confirmations":removals,"reader_failures":failures,
         "identity_release_actions":identity_releases,"same_disk_confirmation_actions":same_disk_confirmations,
+        "operator_actions":crate::production_metrics::actions(&action_ledger,&state),
         "finished_session_elapsed_ms":finished_elapsed,"finished_feeding_elapsed_ms":finished_feed,
         "finished_invocations_timed_saved_unique_labels":finished_labels.len(),
         "finished_invocations_saved_labels_per_hour":if finished_feed>0 && !finished_labels.is_empty(){Some(finished_labels.len() as f64*3_600_000.0/finished_feed as f64)} else {None},

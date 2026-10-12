@@ -1,5 +1,7 @@
 # FluxVault CLI — advanced reference
 
+Saved-only additions: `production estimate`, per-label actions in `production benchmark`, `recovery ranges N [--attempt N]`, exact-attempt `storage benchmark N --capture-attempt N`, and `benchmark legacy --baseline ZIP`. Optional `greaseweazle expert capture|decode` exposes other definitions and bounded track/head/step settings without changing normal scanning or promoting unverified donors. [Commands, bounds and measured examples](SAVED_BATCH_TOOLS.md).
+
 Customer delivery text defaults to Hungarian while the operator interface stays English. `--language hu|en` selects it for `production start/resume`, `process`, `finalize/resume`, `report export`, `package build` and `recovery documents/extract`; resume must match its saved language. [Coverage, remembered defaults and immutable snapshots](CUSTOMER_LANGUAGE.md).
 
 Optional PowerShell 7 command/flag completion: `fluxvault completions powershell` prints the static trusted script. [Enable it in one line](SHELL_COMPLETION.md); no project or media access, no automatic profile changes.

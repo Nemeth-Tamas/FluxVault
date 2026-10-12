@@ -430,6 +430,46 @@ fn complementary_usb_and_gw_catalog_sources_replay_through_processing_and_reuse(
 }
 
 #[test]
+fn third_usb_retry_attempt_and_flux_donor_join_one_automatic_derived_image() {
+    let f = mixed();
+    let path = f.project.images_dir().join("001_attempt_001.json");
+    let mut m: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    let image = f.project.images_dir().join("001_attempt_003.img");
+    let log = f.project.logs_dir().join("001_attempt_003.log");
+    let mut b = f.original.clone();
+    b[34 * 512..35 * 512].fill(0);
+    let sha = hash(&b);
+    fs::write(&image, &b).unwrap();
+    fs::write(&log,format!("BEGIN | disk=1 | attempt=3\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track=18 | bytes_per_sector=512 | total_sectors=2880 | total_bytes=1474560\nRECOVERED | lba=33 | cylinder=0 | head=1 | sector=16 | attempt=1\nBAD_SECTOR | lba=34 | cylinder=0 | head=1 | sector=17\nEND | status=PARTIAL | bytes=1474560 | sha256={sha}\n")).unwrap();
+    m["attempt_number"] = json!(3);
+    m["image_file"] = json!(image);
+    m["log_file"] = json!(log);
+    m["sha256"] = json!(sha);
+    m["retry_recovered_sectors"] = json!(1);
+    m["bad_sectors"] = json!([{"lba":34,"cylinder":0,"head":1,"sector":17}]);
+    fs::write(
+        f.project.images_dir().join("001_attempt_003.json"),
+        serde_json::to_vec(&m).unwrap(),
+    )
+    .unwrap();
+    let initial = fs::read(&image).unwrap();
+    let first = pipeline::run_pipeline(&request(&f.project), &|_| {}).unwrap();
+    assert_eq!(first.published_recovery_images, 1);
+    let all = imaging::load_attempts_for_disk(&f.project.images_dir(), 1).unwrap();
+    let best = imaging::best_attempt(&all).unwrap();
+    assert_eq!(best.status, "DERIVED");
+    assert!(best.bad_sectors.is_empty());
+    assert_eq!(
+        fs::read(f.project.images_dir().join(&best.image_file)).unwrap(),
+        f.original
+    );
+    assert_eq!(all.len(), 4);
+    assert_eq!(fs::read(image).unwrap(), initial);
+    let again = pipeline::run_pipeline(&request(&f.project), &|_| {}).unwrap();
+    assert_eq!(again.reused_recovery_images, 1);
+}
+
+#[test]
 fn packed_sources_and_historical_publications_do_not_depend_on_latest_job() {
     let f = mixed();
     crate::flux_archive::pack(&f.project, 1, 1, true).unwrap();

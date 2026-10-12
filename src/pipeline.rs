@@ -429,6 +429,9 @@ fn run_pipeline_mode(
         });
     }
     let recovery_decisions_path = project.reports_dir().join("OfflineRecoveryDecisions.json");
+    // Severe damage is a per-disk evidence outcome, never an empty-success claim.
+    // Capture exact unavailable ranges automatically, before the saved-file tail.
+    crate::recovery_ranges::publish_all(project, stage)?;
     let report = serde_json::json!({
         "schema_version": 1,
         "customer_delivery_certified": false,

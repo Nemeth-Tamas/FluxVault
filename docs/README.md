@@ -21,6 +21,7 @@ Command examples use the repository or an acquisition project as their working d
 - [Recovery policies](guides/POLICIES.md)
 - [PowerShell Tab completion](guides/SHELL_COMPLETION.md)
 - [Import an original script archive](guides/LEGACY_IMPORT.md)
+- [Saved-batch visibility, performance and expert GW settings](guides/SAVED_BATCH_TOOLS.md)
 
 ## Recovery and evidence
 

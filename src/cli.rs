@@ -4,6 +4,7 @@ mod acquire;
 mod audible;
 mod completion;
 mod dual_scan;
+mod expert_flux;
 mod finalize;
 mod flux;
 mod flux_scan;
@@ -53,7 +54,7 @@ Usage:
                                     Export recorded pilot timings and recovery outcomes offline
   fluxvault benchmark compare --baseline ZIP [--include-deleted] [--project PATH]
                                     Compare recovered source payloads with a script archive offline
-  fluxvault storage benchmark N [--project PATH]
+  fluxvault storage benchmark N [--project PATH] [--capture-attempt N]
                                     Measure verified lossless capture compression; no evidence changed
   fluxvault storage pack N [--capture-attempt N] [--retire-raw]
                                     Pack a saved SCP; retain raw unless retirement explicitly requested
@@ -97,6 +98,7 @@ Usage:
   fluxvault production resume       Resume saved production settings/finishing
   fluxvault production queue        Rank saved USB partials for GW; no physical read
   fluxvault production benchmark    Inspect durable dual-session timings offline
+  fluxvault production estimate     Rough saved-evidence phase estimates; no media access
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
                                     Guided read-only USB loop; confirm each numbered label
   fluxvault tools check [--project PATH]
@@ -105,6 +107,17 @@ Usage:
   fluxvault tools set NAME PATH     Configure sevenzip/libreoffice/greaseweazle
   fluxvault tools clear NAME        Return a tool to auto-discovery
   fluxvault greaseweazle preview    Show safe raw-capture and decode command examples
+  fluxvault greaseweazle expert capture N --format NAME [--diskdefs FILE]
+      [--cylinders 0-79] [--heads 0|1|both] [--step 1|2] [--revs 3]
+      [--gw-drive B] --source-write-protected [--plan]
+                                    Separate bounded raw expert evidence; no automatic donor
+  fluxvault greaseweazle expert decode N --format NAME [--diskdefs FILE]
+      --input SAVED.scp --expected-bytes N [--cylinders 0-79] [--heads both] [--step 1]
+      [--plan]                      Offline expert interpretation; exact asserted size, attention
+  fluxvault benchmark legacy --baseline ZIP
+                                    Verify/reproduce archived script inventories/counts read-only
+  fluxvault recovery ranges N [--attempt N]
+                                    Exact missing/disputed image byte ranges and filesystem impact
   fluxvault greaseweazle info [--project PATH]
                                     Query device/firmware with audited read-only gw info
   fluxvault greaseweazle capture N [--gw-drive A|B] [--profile ibm.1440|ibm.720]
@@ -303,6 +316,11 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     if args.first().is_some_and(|arg| arg == "completions") {
         return completion::run(args);
+    }
+    if args.first().is_some_and(|s| s == "greaseweazle")
+        && args.get(1).is_some_and(|s| s == "expert")
+    {
+        return expert_flux::run(args, cwd);
     }
     let mut json_output = false;
     let mut project_override: Option<PathBuf> = None;
@@ -646,8 +664,48 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     let sector_inspector =
         positional.len() == 3 && positional[0] == "recovery" && positional[1] == "sector";
+    if positional == ["benchmark", "legacy"] {
+        if args
+            .iter()
+            .filter(|a| a.starts_with("--"))
+            .any(|a| !matches!(a.as_str(), "--baseline" | "--json"))
+        {
+            return Err("benchmark legacy accepts only --baseline ZIP and --json".into());
+        }
+        let source = baseline_zip
+            .as_deref()
+            .ok_or("benchmark legacy requires --baseline ZIP")?;
+        let path = if source.is_absolute() {
+            source.to_owned()
+        } else {
+            cwd.join(source)
+        };
+        let result = crate::legacy_inventory::inspect(&path)?;
+        let attention = result["discrepancies"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty());
+        return Ok(CliResponse {
+            exit_code: if attention { 3 } else { 0 },
+            output: if json_output {
+                result.to_string()
+            } else {
+                format!(
+                    "Historical archive inventory / saved ZIP only\n{} source records / {} extracted members\n{} conversion jobs: {}\n{} indexed disks: {}\nDiscrepancies: {}\n{}",
+                    result["source_records"],
+                    result["extracted_members"],
+                    result["conversion_rows"],
+                    result["conversion_statuses"],
+                    result["archive_index_rows"],
+                    result["archive_index_statuses"],
+                    result["discrepancies"],
+                    result["note"].as_str().unwrap_or("")
+                )
+            },
+        });
+    }
     let evidence_impact = positional.first().is_some_and(|s| s == "recovery")
-        && (positional.len() == 3 && matches!(positional[1].as_str(), "impact" | "investigate")
+        && (positional.len() == 3
+            && matches!(positional[1].as_str(), "impact" | "investigate" | "ranges")
             || positional.len() == 4 && positional[1] == "trace");
     if evidence_impact {
         if sector_lba.is_some()
@@ -663,7 +721,8 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             );
         }
         let investigation = positional[1] == "investigate";
-        let all = positional[1] != "trace" && positional[2] == "all";
+        let all =
+            matches!(positional[1].as_str(), "impact" | "investigate") && positional[2] == "all";
         if all && sector_attempt.is_some() {
             return Err("Batch impact/investigate selects each disk's preferred/default image; --attempt is per-disk only".into());
         }
@@ -682,7 +741,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         }
         let root = resolve_project_root(cwd, project_override.as_deref())?;
         let project = crate::sector_inspection::open_project(root)?;
-        let result = if investigation && all {
+        let result = if positional[1] == "ranges" {
+            crate::recovery_ranges::inspect(&project, disk, sector_attempt)?
+        } else if investigation && all {
             crate::recovery_investigation::inspect_all(&project, |done, total, disk| {
                 eprintln!("[INVESTIGATE] {done}/{total}: disk {disk:03} / saved evidence only")
             })?
@@ -703,6 +764,8 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         return Ok(CliResponse {
             output: if json_output {
                 result.to_string()
+            } else if positional[1] == "ranges" {
+                crate::recovery_ranges::render(&result)
             } else if investigation {
                 crate::recovery_investigation::render(&result)
             } else if all {
@@ -960,7 +1023,13 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if (gw_drive.is_some() || source_write_protected) && !(gw_capture || gw_recover || gw_scan) {
         return Err("--gw-drive and --source-write-protected are only valid with greaseweazle capture/recover/scan".to_owned());
     }
-    if gw_capture_attempt.is_some() && !(gw_decode || gw_identify || storage_pack) {
+    if gw_capture_attempt.is_some()
+        && !(gw_decode
+            || gw_identify
+            || storage_pack
+            || positional.first().is_some_and(|s| s == "storage")
+                && positional.get(1).is_some_and(|s| s == "benchmark"))
+    {
         return Err("--capture-attempt is only valid with greaseweazle decode/identify".to_owned());
     }
     if automatic_format == Some(true) && !(gw_recover || gw_scan) {
@@ -1047,6 +1116,17 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         None
     };
     let output = match positional.first().map(String::as_str) {
+        Some("production") if positional == ["production", "estimate"] && destination.is_none() => {
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let report = crate::dual_benchmark::report(&project)?;
+            let estimate = crate::production_metrics::estimate(&project, &report)?;
+            Ok(if json_output {
+                estimate.to_string()
+            } else {
+                crate::production_metrics::render(&estimate)
+            })
+        }
         Some("production")
             if positional == ["production", "benchmark"] && destination.is_none() =>
         {
@@ -1262,8 +1342,12 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .ok_or("storage benchmark requires a positive disk number")?;
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
-            let result =
-                crate::flux_storage::benchmark(&project, disk, |stage| eprintln!("{stage}"))?;
+            let result = crate::flux_storage::benchmark_capture(
+                &project,
+                disk,
+                gw_capture_attempt,
+                |stage| eprintln!("{stage}"),
+            )?;
             if json_output {
                 Ok(serde_json::to_string(&result).map_err(|e| e.to_string())?)
             } else {

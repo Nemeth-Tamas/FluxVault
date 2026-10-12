@@ -113,3 +113,10 @@ if ($Executable) {
     if (@($native.CompletionMatches.CompletionText) -notcontains '--no-verify') { throw 'Native full-path completion registration failed' }
 }
 Write-Output 'PowerShell completion checks passed.'
+Check 'fv production ' @('estimate','benchmark')
+Check 'fv recovery ranges 59 --' @('--attempt') @('--lba','--sectors')
+Check 'fv storage benchmark 5 --' @('--capture-attempt') @('--retire-raw')
+Check 'fv benchmark legacy --' @('--baseline') @('--include-deleted')
+Check 'fv greaseweazle expert ' @('capture','decode') @('recover','write')
+Check 'fv greaseweazle expert capture 1 --' @('--format','--cylinders','--heads','--step','--diskdefs','--source-write-protected') @('--input','--expected-bytes')
+Check 'fv greaseweazle expert decode 1 --' @('--format','--input','--expected-bytes') @('--source-write-protected','--gw-drive')

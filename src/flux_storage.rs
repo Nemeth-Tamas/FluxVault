@@ -23,6 +23,8 @@ pub struct CompressionMeasurement {
     pub verification_seconds: f64,
     pub roundtrip_sha256: String,
     pub roundtrip_verified: bool,
+    pub compression_resources: crate::process_measurement::Measurement,
+    pub verification_resources: crate::process_measurement::Measurement,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,12 +43,25 @@ pub fn benchmark(
     disk: u32,
     mut stage: impl FnMut(&str),
 ) -> Result<StorageBenchmark, String> {
+    benchmark_capture(project, disk, None, &mut stage)
+}
+
+pub fn benchmark_capture(
+    project: &ProjectState,
+    disk: u32,
+    attempt: Option<u32>,
+    mut stage: impl FnMut(&str),
+) -> Result<StorageBenchmark, String> {
     stage("Checking saved capture hashes; no hardware access...");
     let inspected = flux_capture::inspect_disk(project, disk)?;
     let capture = inspected
         .captures
         .iter()
-        .filter(|capture| capture.status == "complete" && capture.hash_matches)
+        .filter(|capture| {
+            capture.status == "complete"
+                && capture.hash_matches
+                && attempt.is_none_or(|a| capture.attempt == a)
+        })
         .max_by_key(|capture| capture.bytes)
         .ok_or("No hash-verified complete raw capture available")?;
     let path = capture.raw_flux.as_ref().ok_or("Capture has no raw path")?;
@@ -80,7 +95,11 @@ pub fn benchmark(
         measurements,
         source_modified: false,
         physical_media_access: false,
-        scope: "largest_verified_capture_sample_not_entire_project",
+        scope: if attempt.is_some() {
+            "explicit_verified_capture_sample_not_entire_project"
+        } else {
+            "largest_verified_capture_sample_not_entire_project"
+        },
     })
 }
 
@@ -94,6 +113,7 @@ fn measure(
         return Err("Invalid sample size".to_owned());
     }
     let started = Instant::now();
+    let compression_meter = crate::process_measurement::Meter::start();
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     writer
         .start_file(
@@ -107,6 +127,7 @@ fn measure(
     let mut total = 0u64;
     let mut buffer = [0; 64 * 1024];
     loop {
+        crate::cancellation::check()?;
         let read = input.read(&mut buffer).map_err(|e| e.to_string())?;
         if read == 0 {
             break;
@@ -126,12 +147,15 @@ fn measure(
     let compressed = writer.finish().map_err(|e| e.to_string())?.into_inner();
     let compressed_bytes = compressed.len() as u64;
     let compression_seconds = started.elapsed().as_secs_f64();
+    let compression_resources = compression_meter.finish();
     let verification = Instant::now();
+    let verification_meter = crate::process_measurement::Meter::start();
     let mut archive = ZipArchive::new(Cursor::new(compressed)).map_err(|e| e.to_string())?;
     let mut decoded = archive.by_index(0).map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     let mut total = 0u64;
     loop {
+        crate::cancellation::check()?;
         let read = decoded.read(&mut buffer).map_err(|e| e.to_string())?;
         if read == 0 {
             break;
@@ -156,6 +180,8 @@ fn measure(
         verification_seconds: verification.elapsed().as_secs_f64(),
         roundtrip_sha256,
         roundtrip_verified: true,
+        compression_resources,
+        verification_resources: verification_meter.finish(),
     })
 }
 
