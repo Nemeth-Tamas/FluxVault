@@ -60,7 +60,9 @@ Both older 085/131 source images and embedded native-report hashes verify. All f
 
 The saved native impact inspection maps 13 known live-file dependencies and 16 incomplete/ambiguous chains, including disks 017/022/027/033/040/052/066/123/128/133. Some files have metadata dependencies rather than wholly unavailable payloads. Existing forensic fragments and Word text/HTML editions remain separate from intact-original counts.
 
-Disk 133 still has two USB/GW disagreements at LBAs 17/773 and a dependent `V_xB5MOSANG.DOC` payload. The operator confirmed the same physical label. Preserve both byte editions and inspect exact metadata/file offsets; no unsupported winner, guessed bytes or clean-customer certificate follows.
+The 2026-10-12 [17-record case review](DAMAGED_BATCH_CASES.md) completes the specific investigation of all 13 dependencies / 16 incomplete chains. Six supported Word records retain every declared main position; five have exact gaps; RTF retains its verified prefix. Raw/unsupported cases, zero-length and Windows-metadata entries are distinguished without an intact-original claim. The shared pipeline published/reused current readable editions and preserved 2,474 earlier evidence/handoff files.
+
+Disk 133 retains two USB/GW disagreements at LBAs 17/773, but their [exact scope is now reviewed](DISK_133_REVIEW.md). The second-FAT disagreement has no known allocation claim in the selected analysis; the Word6 disagreement is outside all 1,519 mapped main-body position bytes, which also agree at readable USB physical positions. Both editions remain preserved, with no inferred code page, independently mapped USB filesystem, byte winner or clean-customer certificate.
 
 ### Focused saved-image recovery — 2026-10-11
 

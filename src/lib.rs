@@ -50,6 +50,7 @@ mod project_settings;
 mod project_work;
 mod read_conflicts;
 pub mod recovery_backup;
+pub mod recovery_investigation;
 pub mod recovery_plan;
 pub mod report;
 mod resource_budget;

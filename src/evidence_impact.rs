@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 #[path = "evidence_impact_batch.rs"]
 mod batch;
+pub(crate) use batch::inventory;
 pub use batch::{inspect_all, render_all};
 
 const WARNING: &str = "Saved evidence only. Mapped dependencies are not proof of original content, independent flux CRC, or customer completeness. A disputed readable sector keeps its observed bytes; it is not silently zeroed or repaired. Unknown directory entries and unmapped tails cannot be attributed to invented files. Deleted, carved, manual and converted files are outside this live FAT-chain map.";
@@ -88,6 +89,7 @@ fn base(snapshot: &sector_inspection::Snapshot, disk: u32) -> Value {
     json!({"schema_version":1,"disk":disk,"attempt":snapshot.metadata()["attempt_number"],
         "source_image":snapshot.metadata()["image_file"],"source_image_sha256":snapshot.metadata()["sha256"],
         "source_backend":snapshot.metadata()["source_backend"],"map_verified":snapshot.map_known,
+        "snapshot_binding":snapshot.binding(),
         "physical_media_access":false,"files_written":0,"customer_delivery_certified":false,
         "independent_flux_crc_verified":false,"warning":WARNING,
         "flux_stages":snapshot.flux.as_ref().map(|v| &v["stages"]),
@@ -117,7 +119,16 @@ pub fn inspect(
 ) -> Result<Value, String> {
     let requested = file.map(normalize).transpose()?;
     let snapshot = sector_inspection::load_snapshot(project, disk, attempt)?;
-    let trouble = troubles(&snapshot)?;
+    inspect_snapshot(&snapshot, disk, requested.as_deref())
+}
+
+pub(crate) fn inspect_snapshot(
+    snapshot: &sector_inspection::Snapshot,
+    disk: u32,
+    file: Option<&str>,
+) -> Result<Value, String> {
+    let requested = file.map(normalize).transpose()?;
+    let trouble = troubles(snapshot)?;
     let analysis = if !snapshot.map_known {
         Err("Saved acquisition map lacks a complete matching log; file attribution refused".into())
     } else if snapshot.metadata()["geometry"]["bytes_per_sector"] != 512 {
@@ -131,7 +142,7 @@ pub fn inspect(
             .collect::<Result<Vec<_>, _>>()?;
         fat12::analyze(&snapshot.bytes, &bad)
     };
-    let mut result = base(&snapshot, disk);
+    let mut result = base(snapshot, disk);
     result["mode"] = json!(if requested.is_some() {
         "file_trace"
     } else {
@@ -156,13 +167,13 @@ pub fn inspect(
         }
         let (f, incomplete) = matches[0];
         let data = f.data_lbas.iter().enumerate().map(|(i,lba)|json!({"lba":lba,"file_offset":i*512,
-            "bytes":f.bytes.saturating_sub(i*512).min(512),"problem":trouble.get(lba),"origin":origin(&snapshot,*lba)})).collect::<Vec<_>>();
+            "bytes":f.bytes.saturating_sub(i*512).min(512),"problem":trouble.get(lba),"origin":origin(snapshot,*lba)})).collect::<Vec<_>>();
         let metadata = f
             .metadata_lbas
             .iter()
             .map(|lba| {
                 json!({"lba":lba,"region":role(Some(&analysis.layout),*lba),
-            "problem":trouble.get(lba),"origin":origin(&snapshot,*lba)})
+            "problem":trouble.get(lba),"origin":origin(snapshot,*lba)})
             })
             .collect::<Vec<_>>();
         let affected = f
@@ -218,7 +229,7 @@ pub fn inspect(
         let sectors = trouble.iter().map(|(lba,problem)|{
             let references=edges.remove(lba).unwrap_or_default();
             json!({"lba":lba,"problem":problem,"region":role(analysis.as_ref().ok().map(|a|&a.layout),*lba),
-                "origin":origin(&snapshot,*lba),"file_dependencies":references,
+                "origin":origin(snapshot,*lba),"file_dependencies":references,
                 "attribution":if !references.is_empty() {"known_live_file_dependencies"} else {"no_known_file_dependency_not_proof_of_unused_or_harmless"}})
         }).collect::<Vec<_>>();
         result["sectors"] = json!(sectors);
@@ -337,14 +348,14 @@ pub fn render(value: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
     use std::{fs, path::Path};
 
-    struct Fixture(ProjectState);
+    pub(crate) struct Fixture(pub(crate) ProjectState);
     impl Fixture {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self(
                 ProjectState::create_without_session(std::env::temp_dir().join(format!(
                         "fv-impact-{}-{}",
@@ -357,10 +368,10 @@ mod tests {
                 .unwrap(),
             )
         }
-        fn save(&self, attempt: u32, original: &[u8], bad: &[u64]) {
+        pub(crate) fn save(&self, attempt: u32, original: &[u8], bad: &[u64]) {
             self.save_disk(1, attempt, original, bad);
         }
-        fn save_disk(&self, disk: u32, attempt: u32, original: &[u8], bad: &[u64]) {
+        pub(crate) fn save_disk(&self, disk: u32, attempt: u32, original: &[u8], bad: &[u64]) {
             let mut bytes = original.to_vec();
             for lba in bad {
                 bytes[*lba as usize * 512..(*lba as usize + 1) * 512].fill(0);
@@ -383,7 +394,7 @@ mod tests {
             fs::remove_dir_all(self.0.root()).unwrap();
         }
     }
-    fn image() -> Vec<u8> {
+    pub(crate) fn image() -> Vec<u8> {
         let mut bytes = fat12::tests::image();
         fat12::tests::file(&mut bytes, 19 * 512, b"CHAIN   TXT", 2, &vec![b'A'; 1100]);
         for copy in 0..2 {
@@ -396,7 +407,7 @@ mod tests {
         bytes[34 * 512..35 * 512].fill(b'C');
         bytes
     }
-    fn tree(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    pub(crate) fn tree(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
         let mut rows = Vec::new();
         for e in fs::read_dir(root).unwrap() {
             let e = e.unwrap();

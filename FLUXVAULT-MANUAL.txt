@@ -19,6 +19,17 @@ DESCRIPTION
     readable on Windows without a Unix man command. Examples are PowerShell.
     The command catalog is NOT a script to run from top to bottom.
 
+SAVED DAMAGE INVESTIGATION
+    recovery investigate all reviews known affected/incomplete file records.
+    recovery investigate 133 reviews one saved disk; --attempt N is per-disk
+    only. Add --json for exact source bindings, text gaps, compound stream
+    roles and both disputed sector versions. This is read-only: no physical
+    disk, host tool, preferred-image change or output file. Legacy Word6
+    results map bytes only, not guessed encoding or an editable repair.
+    Exit 3 is normal attention. recovery documents N publishes/reuses the
+    existing supported readable editions separately. Guide:
+    docs/recovery/RECOVERY_INVESTIGATION.md.
+
 CUSTOMER LANGUAGE
     Operator prompts/help remain English. Customer package instructions and
     selected final-report presentation default to Hungarian. --language hu|en

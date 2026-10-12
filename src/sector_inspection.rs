@@ -68,6 +68,16 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn image_path(&self) -> &Path {
+        &self.image
+    }
+
+    pub(crate) fn binding(&self) -> Value {
+        json!({"metadata_sha256":hash(&self.selected.snapshot),
+            "log_sha256":self.log_snapshot.as_ref().map(|b|hash(b)),
+            "flux_provenance_sha256":self.flux_snapshot.as_ref().map(|(_,b)|hash(b))})
+    }
+
     pub(crate) fn metadata(&self) -> &Value {
         &self.selected.value
     }

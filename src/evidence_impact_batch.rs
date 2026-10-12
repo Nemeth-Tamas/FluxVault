@@ -14,7 +14,7 @@ const MAX_ENTRIES: usize = 100_000;
 const MAX_REPORT_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
-struct Inventory {
+pub(crate) struct Inventory {
     disks: BTreeSet<u32>,
     entries: BTreeMap<PathBuf, (u64, SystemTime)>,
 }
@@ -38,7 +38,7 @@ fn label(name: &str, flux: bool) -> Option<u32> {
     stem.parse::<u32>().ok().filter(|n| *n > 0)
 }
 
-fn inventory(project: &ProjectState) -> Result<Inventory, String> {
+pub(crate) fn inventory(project: &ProjectState) -> Result<Inventory, String> {
     sector_inspection::regular(project.root(), true)?;
     let mut result = Inventory {
         disks: BTreeSet::new(),

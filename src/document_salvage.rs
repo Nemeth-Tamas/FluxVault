@@ -18,8 +18,11 @@ pub const ENGINE_VERSION: u32 = 5;
 #[path = "document_cfb.rs"]
 mod cfb_recovery;
 pub use cfb_recovery::Evidence as CfbEvidence;
+#[path = "document_probe.rs"]
+mod probe;
 #[path = "document_recovery_html.rs"]
 mod readable_html;
+pub(crate) use probe::inspect as inspect_record;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadableEdition {

@@ -85,6 +85,29 @@ fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+pub(crate) fn inspect_record(
+    image: &[u8],
+    parent: &fat12::FileRecord,
+    excluded: &BTreeSet<u64>,
+) -> serde_json::Value {
+    use serde_json::json;
+    if parent.metadata_lbas.iter().any(|l| excluded.contains(l)) {
+        return json!({"state":"refused","reason":"Parent metadata depends on missing/disputed sectors"});
+    }
+    match prefix(image, parent, excluded) {
+        Ok((bytes, extents, boundary)) => {
+            let decoded = text::decode(&bytes, &boundary);
+            json!({"state":if decoded.text.is_empty(){"refused"}else{"mapped_forensic_prefix"},
+                "readable_prefix_bytes":bytes.len(),"readable_prefix_sha256":hash(&bytes),
+                "source_extents":extents,"decoded_through_file_byte":decoded.through,"stop_reason":decoded.stop,
+                "readable_utf16_positions":decoded.text.encode_utf16().count(),"text_sha256":hash(decoded.text.as_bytes()),
+                "unsupported_font_gaps":decoded.gaps,"remaining_file_bytes_uninterpreted":parent.bytes.saturating_sub(decoded.through),
+                "remaining_text_length_known":false,"repaired_original":false})
+        }
+        Err(reason) => json!({"state":"refused","reason":reason}),
+    }
+}
+
 fn prefix(
     image: &[u8],
     parent: &fat12::FileRecord,

@@ -97,6 +97,35 @@ fn word_mapping(image: &[u8], parent: &fat12::FileRecord) -> SparseStream {
     trace.lock().unwrap().allow_holes = true;
     stream(&mut c, "/WordDocument", &trace, &bytes, &sources).unwrap()
 }
+
+#[test]
+fn read_only_document_probe_excludes_disputed_text_and_refuses_disputed_parent_metadata() {
+    let (image, parent, _) = fixture(false, true);
+    let word = word_mapping(&image, &parent);
+    let lba = (word.sources[1536].unwrap() / 512) as u64;
+    let value = inspect_record(&image, &parent, &BTreeSet::new(), &BTreeSet::from([lba]));
+    assert_eq!(value["word_text"]["readable_positions"], 644);
+    assert_eq!(value["word_text"]["missing_positions"], 256);
+    assert_eq!(value["files_written"], 0);
+    assert_eq!(value["semantics_certified"], false);
+    assert!(
+        value["compound"]["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "/WordDocument" && s["disputed_sectors"][0]["lba"] == lba)
+    );
+    for segment in value["word_text"]["segments"].as_array().unwrap() {
+        for extent in segment["source_extents"].as_array().unwrap() {
+            let begin = extent["source_byte_offset"].as_u64().unwrap() as usize;
+            let end = begin + extent["bytes"].as_u64().unwrap() as usize;
+            assert!((begin..end).all(|at| (at / 512) as u64 != lba));
+        }
+    }
+    let value = inspect_record(&image, &parent, &BTreeSet::new(), &BTreeSet::from([0]));
+    assert_eq!(value["word_text"]["state"], "refused");
+    assert_eq!(value["compound"]["state"], "refused");
+}
 #[test]
 fn unicode_text_on_both_sides_of_a_missing_sector_has_precise_positions_and_extents() {
     let (mut image, parent, _) = fixture(false, true);

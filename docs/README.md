@@ -29,6 +29,7 @@ Command examples use the repository or an acquisition project as their working d
 - [Deleted candidates and readable fragments](recovery/DELETED_AND_FRAGMENT_RECOVERY.md)
 - [Deeper directory, fragmented-file and Word/RTF text recovery](recovery/DEEP_RECOVERY.md)
 - [Damage impact and file dependencies](recovery/EVIDENCE_IMPACT.md)
+- [Read-only damaged-file and dispute investigations](recovery/RECOVERY_INVESTIGATION.md)
 - [Saved-flux diagnostics](recovery/FLUX_DIAGNOSTICS.md)
 - [Saved-sector inspection](recovery/SECTOR_INSPECTION.md)
 - [Improved images flowing into offline recovery](recovery/OFFLINE_RECOVERY_HANDOFF.md)
@@ -39,6 +40,8 @@ Command examples use the repository or an acquisition project as their working d
 The saved-batch review records results; pilot/runbook documents also retain earlier test recipes. They are not instructions to rescan an existing archive or run a physical test without checking the disk identity.
 
 - [Measured 136-disk batch review](testing/BATCH_136_REVIEW.md)
+- [All 17 damaged/ambiguous file records](testing/DAMAGED_BATCH_CASES.md)
+- [Disk 133's exact USB/GW disagreement scope](testing/DISK_133_REVIEW.md)
 - [Comparison with the original script/DMDE archive](testing/BASELINE_COMPARISON.md)
 - [Single-GW readiness gates](testing/SINGLE_GW_READINESS.md)
 - [Greaseweazle setup and recorded hardware validation](testing/GREASEWEAZLE_PREFLIGHT.md)
