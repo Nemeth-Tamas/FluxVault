@@ -79,3 +79,37 @@ pub(super) fn render(doc: &Document, source: &str, sha: &str) -> Result<String, 
     }
     Ok(html)
 }
+
+pub(super) fn render_in_language(
+    doc: &Document,
+    source: &str,
+    sha: &str,
+    language: crate::final_report::Language,
+) -> Result<String, String> {
+    if language == crate::final_report::Language::English {
+        return render(doc, source, sha);
+    }
+    let mut slots = crate::edition_language::Slots::default();
+    let mut masked = doc.clone();
+    masked.parent.path = slots.protect(escaped(&doc.parent.path));
+    for (original, segment) in doc.segments.iter().zip(&mut masked.segments) {
+        segment.text = slots.protect(escaped(&original.text));
+        segment.encoding = slots.protect(escaped(&original.encoding));
+    }
+    for gap in &mut masked.missing_text {
+        gap.reason=slots.protect("Ez a szövegtartomány az olvasható forrásbájtokból nem volt igazolható. A pontos műszaki okot és forrástérképet a word-text.json tartalmazza.".into());
+    }
+    if let Some(note) = &mut masked.content_detection {
+        *note=slots.protect("A fájl tartalma Word-adatfolyamokat tartalmaz a megtévesztő kiterjesztés ellenére. Az eredeti név és bájtok változatlanok; a szükséges Word/táblázat/FIB/CLX leképezések ellenőrizve vannak, de a teljes eredeti dokumentum épsége nem igazolt.".into());
+    }
+    if let Some(evidence) = &mut masked.cfb_recovery {
+        evidence.warning=slots.protect("A szöveg csak a külön ellenőrizhető, olvasható Word- és tábla-adatfolyamokból származik. Hiányzó, független metaadatok áthidalása nem igazolja a teljes összetett tároló épségét vagy minden történeti tulajdonviszonyt. Kötelező metaadat vagy kiosztási kapcsolat nem lett kitalálva.".into());
+    }
+    if let Some(evidence) = &mut masked.incomplete_fib {
+        evidence.warning=slots.protect("A Word-fejléc nem teljesen olvasható. Csak a külön igazolt közös fejlécmezők és CLX-leképezés alapján történt főszövegkimentés. A hiányzó bővítményszám, tényleges verzió és teljes fejlécérvényesség ismeretlen marad; nem kerültek kitalálásra.".into());
+    }
+    let source = slots.protect(escaped(source));
+    let sha = slots.protect(escaped(sha));
+    let template = render(&masked, &source, &sha)?;
+    slots.expand(&crate::edition_language::hungarian_markup(template))
+}

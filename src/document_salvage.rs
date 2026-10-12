@@ -14,7 +14,7 @@ use std::{
 const MAX_CHARACTERS: usize = 200_000;
 const MAX_SEGMENTS: usize = 4096;
 const MAX_WORK: usize = 64 * 1024 * 1024;
-pub const ENGINE_VERSION: u32 = 4;
+pub const ENGINE_VERSION: u32 = 5;
 #[path = "document_cfb.rs"]
 mod cfb_recovery;
 pub use cfb_recovery::Evidence as CfbEvidence;
@@ -89,6 +89,8 @@ pub struct Document {
 struct Report {
     schema_version: u32,
     engine_version: u32,
+    #[serde(default)]
+    customer_language: String,
     disk: u32,
     attempt: u32,
     source_image: String,
@@ -100,6 +102,7 @@ struct Report {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct SalvageResult {
+    pub customer_language: String,
     pub engine_version: u32,
     pub selectively_mapped_documents: usize,
     pub readable_editions: usize,
@@ -699,6 +702,7 @@ pub(crate) fn preserve(
         return Ok(None);
     }
     let bad = a.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
+    let language = crate::edition_language::source_language(source)?;
     let mut documents = vec![];
     let mut limits = false;
     let mut positions = 0;
@@ -746,7 +750,12 @@ pub(crate) fn preserve(
         }
         positions += d.main_characters.unwrap_or(0);
         if !d.segments.is_empty() {
-            match readable_html::render(&d, &native.source_image, &native.source_sha256) {
+            match readable_html::render_in_language(
+                &d,
+                &native.source_image,
+                &native.source_sha256,
+                language,
+            ) {
                 Ok(html) if edition_bytes + html.len() <= fat12::MAX_IMAGE_BYTES * 2 => {
                     edition_bytes += html.len();
                     let sha = hash(html.as_bytes());
@@ -778,15 +787,16 @@ pub(crate) fn preserve(
     if documents.is_empty() {
         return Ok(None);
     }
-    let report=Report{schema_version:1,engine_version:ENGINE_VERSION,disk:native.disk,attempt:native.attempt,source_image:native.source_image.clone(),source_sha256:native.source_sha256.clone(),bad_lbas:a.bad_lbas.clone(),documents,limits_reached:limits,
+    let report=Report{schema_version:1,engine_version:ENGINE_VERSION,customer_language:language.code().into(),disk:native.disk,attempt:native.attempt,source_image:native.source_image.clone(),source_sha256:native.source_sha256.clone(),bad_lbas:a.bad_lbas.clone(),documents,limits_reached:limits,
         warning:"FORENSIC TEXT SALVAGE, NOT A REPAIRED DOC OR COMPLETE DOCUMENT. Only readable main-document characters with validated CFB/FIB/CLX mappings are decoded to separate UTF-8 segments. Character-position gaps remain explicit in text reports and generated offline HTML editions; segments are not silently concatenated, unknown bytes never become text, and invalid UTF-16 is not replaced. Formatting, tables, revisions, headers/footnotes, objects, field interpretation and original semantics are not recovered/certified. Encrypted/unsupported documents or missing required metadata are refused. Selective mapping may bypass unrelated missing directory entries, but never certifies the entire compound container. No dictionary/brute-force guessing; original images/native results remain unchanged. Text/editions are excluded from normal whole-file counts, conversion and delivery.".into()};
     let serialized = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
     if serialized.len() > 16 * 1024 * 1024 {
         return Err("Document provenance ceiling; no publication".into());
     }
     let output = recovery_disk.join(format!(
-        "attempt_{:03}_word_text_v{ENGINE_VERSION}",
-        native.attempt
+        "attempt_{:03}_word_text_v{ENGINE_VERSION}_{}",
+        native.attempt,
+        language.code()
     ));
     let report_path = output.join("word-text.json");
     let segments = report
@@ -849,6 +859,7 @@ pub(crate) fn preserve(
             .map_err(|e| format!("Document salvage staging retained: {e}"))?;
     }
     Ok(Some(SalvageResult {
+        customer_language: language.code().into(),
         engine_version: ENGINE_VERSION,
         selectively_mapped_documents: report
             .documents

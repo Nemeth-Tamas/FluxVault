@@ -406,7 +406,7 @@ fn native_service_case(short_name: &[u8; 11]) {
     assert_eq!(text.readable_editions, 1);
     let edition = &text.readable_edition_paths[0];
     let edition_bytes = fs::read(edition).unwrap();
-    assert!(String::from_utf8_lossy(&edition_bytes).contains("MISSING / INVALID TEXT"));
+    assert!(String::from_utf8_lossy(&edition_bytes).contains("HIÁNYZÓ / ÉRVÉNYTELEN SZÖVEG"));
     assert!(!text.reused);
     // Old generations are operator/evidence-owned and must never be migrated in place.
     let legacy = text
@@ -467,6 +467,58 @@ fn native_service_case(short_name: &[u8; 11]) {
     assert_eq!(value["physical_media_access"], false);
     assert_eq!(value["document_salvage"]["text_segments"], 2);
     assert_eq!(value["document_salvage"]["readable_editions"], 1);
+    assert_eq!(value["document_salvage"]["customer_language"], "hu");
+    let english = crate::cli::run(
+        &[
+            "recovery".into(),
+            "documents".into(),
+            "1".into(),
+            "--language".into(),
+            "en".into(),
+            "--json".into(),
+        ],
+        p.root(),
+    )
+    .unwrap();
+    assert_eq!(english.exit_code, 3);
+    let english: serde_json::Value = serde_json::from_str(&english.output).unwrap();
+    assert_eq!(english["document_salvage"]["customer_language"], "en");
+    let english_dir = PathBuf::from(
+        english["document_salvage"]["output_directory"]
+            .as_str()
+            .unwrap(),
+    );
+    assert_ne!(english_dir, text.output_directory);
+    let english_report: Report =
+        serde_json::from_slice(&fs::read(english_dir.join("word-text.json")).unwrap()).unwrap();
+    assert_eq!(english_report.customer_language, "en");
+    let mut hu_documents = serde_json::to_value(&report.documents).unwrap();
+    let mut en_documents = serde_json::to_value(&english_report.documents).unwrap();
+    for documents in [&mut hu_documents, &mut en_documents] {
+        for document in documents.as_array_mut().unwrap() {
+            document.as_object_mut().unwrap().remove("readable_edition");
+        }
+    }
+    assert_eq!(
+        hu_documents, en_documents,
+        "Only edition presentation/hash may differ"
+    );
+    let english_html = fs::read_to_string(
+        english_dir.join(
+            &english_report.documents[0]
+                .readable_edition
+                .as_ref()
+                .unwrap()
+                .path,
+        ),
+    )
+    .unwrap();
+    assert!(
+        english_html.contains("<html lang=\"en\">")
+            && english_html.contains("MISSING / INVALID TEXT")
+    );
+    assert_eq!(fs::read(edition).unwrap(), edition_bytes);
+    crate::project_settings::update(&p, "customer-language", Some("hu")).unwrap();
     let human = crate::cli::run(
         &["recovery".into(), "documents".into(), "1".into()],
         p.root(),
@@ -515,7 +567,7 @@ fn native_service_case(short_name: &[u8; 11]) {
     assert!(
         archive
             .by_name(&format!(
-                "Recovery/001/attempt_{:03}_word_text_v{ENGINE_VERSION}/{name}",
+                "Recovery/001/attempt_{:03}_word_text_v{ENGINE_VERSION}_hu/{name}",
                 attempt.attempt_number
             ))
             .is_ok()
@@ -523,7 +575,7 @@ fn native_service_case(short_name: &[u8; 11]) {
     assert!(
         archive
             .by_name(&format!(
-                "Recovery/001/attempt_{:03}_word_text_v{ENGINE_VERSION}/{}",
+                "Recovery/001/attempt_{:03}_word_text_v{ENGINE_VERSION}_hu/{}",
                 attempt.attempt_number,
                 edition.file_name().unwrap().to_string_lossy()
             ))

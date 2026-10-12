@@ -364,7 +364,8 @@ fn native_pipeline_cli_reuse_tamper_and_archival_evidence_keep_zero_whole_files(
     let html_path = &text.readable_edition_paths[0];
     let html = fs::read_to_string(html_path).unwrap();
     assert!(
-        html.contains("STOPPED / REMAINDER NOT INTERPRETED") && html.contains("default-src 'none'")
+        html.contains("MEGÁLLT / A FENNMARADÓ RÉSZ NEM ÉRTELMEZETT")
+            && html.contains("default-src 'none'")
     );
     assert!(!html.contains("<script>"));
     fs::write(html_path, b"operator changed edition").unwrap();
@@ -438,7 +439,7 @@ fn glyph_gaps_publish_separate_hash_bound_text_segments_and_tamper_refuses_reuse
         "FIRST"
     );
     let html = fs::read_to_string(&salvage.readable_edition_paths[0]).unwrap();
-    assert!(html.contains("UNINTERPRETED SYMBOL-FONT GLYPH"));
+    assert!(html.contains("NEM ÉRTELMEZETT SZIMBÓLUMKARAKTER"));
     assert!(!html.contains("FIRSTSECOND"));
     assert!(run().unwrap().rtf_salvage.unwrap().reused);
     let destination = p.root().with_extension("rtf-segments-package");
@@ -513,7 +514,95 @@ fn readable_rtf_signature_selects_decoder_despite_doc_extension() {
     assert!(
         fs::read_to_string(&salvage.readable_edition_paths[0])
             .unwrap()
-            .contains("despite the filename extension")
+            .contains("megtévesztő fájlkiterjesztés")
+    );
+    assert_eq!(fs::read(p.images_dir().join("001.img")).unwrap(), image);
+}
+
+#[test]
+fn cli_language_switch_keeps_rtf_source_and_both_immutable_editions() {
+    let prefix = [br"{\rtf1{\fonttbl{\f0 Known;}{\f1\fcharset2 Symbol;}}STOPPED / REMAINDER NOT INTERPRETED __FV_LOCALE_SLOT_0__ <script>{\f1\'a1}TAIL ".as_slice(), &vec![b'x'; 1200]].concat();
+    let (p, _, image) = fixture_with_prefix(prefix);
+    let metadata = fs::read(p.root().join("project.json")).unwrap();
+    let missing = crate::cli::run(
+        &[
+            "recovery".into(),
+            "documents".into(),
+            "999".into(),
+            "--language".into(),
+            "en".into(),
+        ],
+        p.root(),
+    )
+    .unwrap_err();
+    assert!(missing.contains("saved"));
+    assert_eq!(fs::read(p.root().join("project.json")).unwrap(), metadata);
+    let run = |language: &str| {
+        let response = crate::cli::run(
+            &[
+                "recovery".into(),
+                "documents".into(),
+                "1".into(),
+                "--language".into(),
+                language.into(),
+                "--json".into(),
+            ],
+            p.root(),
+        )
+        .unwrap();
+        assert_eq!(response.exit_code, 3);
+        let result: serde_json::Value = serde_json::from_str(&response.output).unwrap();
+        assert_eq!(result["physical_media_access"], false);
+        assert_eq!(result["native_recovery"]["files"], 0);
+        let directory = PathBuf::from(result["rtf_salvage"]["output_directory"].as_str().unwrap());
+        let report: Report =
+            serde_json::from_slice(&fs::read(directory.join("rtf-text.json")).unwrap()).unwrap();
+        assert_eq!(report.customer_language, language);
+        (directory, report, result)
+    };
+    let (hu_dir, hu, _) = run("hu");
+    let hu_doc = &hu.documents[0];
+    let hu_html = fs::read(hu_dir.join(hu_doc.edition_path.as_ref().unwrap())).unwrap();
+    let (en_dir, en, _) = run("en");
+    assert_ne!(hu_dir, en_dir);
+    let en_html =
+        fs::read_to_string(en_dir.join(en.documents[0].edition_path.as_ref().unwrap())).unwrap();
+    assert!(
+        en_html.contains("<html lang=\"en\">")
+            && en_html.contains("UNINTERPRETED SYMBOL-FONT GLYPH")
+    );
+    let hu_text = String::from_utf8(hu_html.clone()).unwrap();
+    assert!(
+        hu_text.contains("<html lang=\"hu\">")
+            && hu_text.contains("NEM ÉRTELMEZETT SZIMBÓLUMKARAKTER")
+    );
+    for html in [&hu_text, &en_html] {
+        assert!(
+            html.contains(
+                "STOPPED / REMAINDER NOT INTERPRETED __FV_LOCALE_SLOT_0__ &lt;script&gt;"
+            )
+        );
+        assert!(!html.contains("<script>"));
+    }
+    let mut hu_proof = serde_json::to_value(&hu.documents).unwrap();
+    let mut en_proof = serde_json::to_value(&en.documents).unwrap();
+    for docs in [&mut hu_proof, &mut en_proof] {
+        for doc in docs.as_array_mut().unwrap() {
+            doc.as_object_mut().unwrap().remove("edition_sha256");
+            doc.as_object_mut().unwrap().remove("edition_path");
+        }
+    }
+    assert_eq!(hu_proof, en_proof);
+    for segment in &hu_doc.text_segments {
+        assert_eq!(
+            fs::read(hu_dir.join(&segment.path)).unwrap(),
+            fs::read(en_dir.join(&segment.path)).unwrap()
+        );
+    }
+    assert!(run("hu").2["rtf_salvage"]["reused"].as_bool().unwrap());
+    assert_eq!(
+        fs::read(hu_dir.join(hu_doc.edition_path.as_ref().unwrap())).unwrap(),
+        hu_html
     );
     assert_eq!(fs::read(p.images_dir().join("001.img")).unwrap(), image);
 }
@@ -629,9 +718,15 @@ fn saved_damaged_rtf_prefixes_replay_acquisition_bytes_and_published_editions() 
                 assert!(decoded.text.encode_utf16().count() >= 5318);
                 assert!(!decoded.gaps.is_empty());
             }
-            for engine in [1, ENGINE_VERSION] {
+            for (engine, language) in [
+                (1, None),
+                (2, None),
+                (3, Some(crate::final_report::Language::Hungarian)),
+                (3, Some(crate::final_report::Language::English)),
+            ] {
+                let suffix = language.map_or(String::new(), |l| format!("_{}", l.code()));
                 let published = project.recovery_dir().join(format!(
-                    "{label:03}/attempt_{attempt:03}_rtf_text_v{engine}/rtf-text.json"
+                    "{label:03}/attempt_{attempt:03}_rtf_text_v{engine}{suffix}/rtf-text.json"
                 ));
                 if published.exists() {
                     let decoded = if engine == 1 {
@@ -641,6 +736,9 @@ fn saved_damaged_rtf_prefixes_replay_acquisition_bytes_and_published_editions() 
                     };
                     let report: Report =
                         serde_json::from_slice(&fs::read(&published).unwrap()).unwrap();
+                    if let Some(language) = language {
+                        assert_eq!(report.customer_language, language.code());
+                    }
                     let d = report
                         .documents
                         .iter()
@@ -684,17 +782,24 @@ fn saved_damaged_rtf_prefixes_replay_acquisition_bytes_and_published_editions() 
                     if let Some(path) = &d.edition_path {
                         let html = fs::read(published.parent().unwrap().join(path)).unwrap();
                         assert_eq!(hash(&html), d.edition_sha256);
-                        assert_eq!(
-                            html,
-                            edition(
+                        let replay = match language {
+                            Some(language) => edition_in_language(
                                 d,
                                 &decoded.text,
                                 &report.source_image,
                                 &report.source_sha256,
-                                engine
+                                language,
                             )
-                            .as_bytes()
-                        );
+                            .unwrap(),
+                            None => edition(
+                                d,
+                                &decoded.text,
+                                &report.source_image,
+                                &report.source_sha256,
+                                engine,
+                            ),
+                        };
+                        assert_eq!(html, replay.as_bytes());
                     }
                 }
             }

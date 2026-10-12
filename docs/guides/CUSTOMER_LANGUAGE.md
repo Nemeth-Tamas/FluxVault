@@ -30,9 +30,11 @@ fv finalize --destination 'C:\Archives\English-Delivery' --allow-attention --lan
 fv finalize resume
 fv report export --language en
 fv package build --destination 'C:\Archives\English-Delivery' --language en
+fv recovery documents 22 --language en
+fv recovery extract 128 --language hu
 ```
 
-`production`, `process`, `finalize` and explicit `report export` remember the choice in the project. Finalization additionally binds it into its saved options. `package build --language en` selects the new archive's README language without rewriting previous exports; if the selected final report uses another language, it refuses and asks for a matching `report export`. Production/finalization create matching reports automatically. `package publish` copies the already verified snapshot exactly, not a translated/rebuilt substitute.
+`production`, `process`, `finalize`, explicit `report export` and `recovery documents/extract` remember the choice in the project. Finalization additionally binds it into its saved options. `package build --language en` selects the new archive's README language without rewriting previous exports; if the selected final report uses another language, it refuses and asks for a matching `report export`. Production/finalization create matching reports automatically. `package publish` copies the already verified snapshot exactly, not a translated/rebuilt substitute.
 
 An optional remembered default is also available:
 
@@ -48,7 +50,10 @@ Clearing restores Hungarian for new work, not for an already-bound production/fi
 - Package `README.txt`: complete Hungarian/default and explicit English versions, including partial/derived/forensic recovery warnings.
 - Selected final workbook: language-selected sheet names, summary metrics, column labels and scope warning. Final audit text uses the same scope language.
 - Automatic final-report refreshes: use the saved project choice rather than silently reverting to Hungarian.
+- Word/RTF readable recovery HTML: Hungarian/default or explicit English labels, scope warnings, missing-text panels and parser-stop explanations. The recovered source text is never translated. Word engine 5 and RTF engine 3 publish separate `_hu` / `_en` folders and hash-verify reuse; earlier generations remain untouched. Raw text/JSON provenance keeps its original technical content.
 - JSON/CSV keys, status identifiers, filenames, hashes, source document content and raw evidence/tool diagnostics: unchanged, not translated.
 - Prior report generations, packages and recovery editions: preserved byte-for-byte; a new export/archive is a separate snapshot.
 
-This is the first delivery-language slice. The broader polish item remains open for localized Word/RTF recovery editions, remaining human diagnostic prose and legacy acquisition-workbook language selection. Technical status codes/raw warnings are not presented as already fully translated. `--language` is not yet accepted by `recovery documents`.
+For an existing saved disk, run `fv recovery documents N` and open the printed HTML path. Use `--language en` for an additional English edition; switching back to `hu` verifies/reuses the Hungarian edition without replacing either. Attention exit 3 is normal: a translated presentation does not repair or certify the original document. To refresh an old completed package, create a new matching report/archive snapshot explicitly; old archives are not silently changed.
+
+The broader polish item remains open for remaining human diagnostic prose and legacy acquisition-workbook language selection. Technical status codes/raw warnings are not presented as already fully translated.

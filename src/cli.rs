@@ -152,7 +152,7 @@ Usage:
                                     Reconstruct only provable mirrored FAT sectors
   fluxvault recovery extract N [--include-deleted] [--project PATH]
                                     Recover intact/signature files offline; deleted opt-in stays forensic-only
-  fluxvault recovery documents N [--project PATH]
+  fluxvault recovery documents N [--project PATH] [--language hu|en]
                                     Native recovery plus forensic Word/RTF prefix text
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
@@ -190,7 +190,7 @@ Options:
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
   --allow-attention                 finalize: explicitly archive partial results with warnings (exit 3)
-  --language hu|en                  Customer report/package language; operator CLI remains English
+  --language hu|en                  Customer report/package/recovery edition language; operator CLI remains English
                                     production, process, finalize, report export, package build
   --drive LETTER:                   Enumerated removable drive for read-only probe
   --disk N                          Disk number for acquisition
@@ -993,9 +993,12 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             || positional == ["package", "build"]
             || positional == ["finalize", "resume"]
             || positional == ["finalize"]
-            || positional == ["process"])
+            || positional == ["process"]
+            || (positional.len() == 3
+                && positional[0] == "recovery"
+                && matches!(positional[1].as_str(), "documents" | "extract")))
     {
-        return Err("--language is valid with report export, production start/resume, process, finalize/resume and package build".into());
+        return Err("--language is valid with report export, production start/resume, process, finalize/resume, package build and recovery documents/extract".into());
     }
     if baseline_zip.is_some()
         && !(positional.len() == 2 && positional[0] == "benchmark" && positional[1] == "compare")
@@ -2269,6 +2272,21 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
+            if let Some(language) = report_language {
+                let number = positional[2]
+                    .parse::<u32>()
+                    .map_err(|_| "Disk number must be a positive integer")?;
+                if number == 0
+                    || !imaging::load_project_statistics(&project.images_dir())?
+                        .disks
+                        .iter()
+                        .any(|d| d.disk_number == number)
+                {
+                    return Err("Disk has no saved images".into());
+                }
+                crate::processing::validate_workspace(&project)?;
+                crate::project_settings::set_language_owned(&project, language)?;
+            }
             return recovery::run_advanced(
                 &positional,
                 &project,

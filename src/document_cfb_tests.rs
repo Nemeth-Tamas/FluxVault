@@ -564,7 +564,41 @@ fn readable_html_escapes_untrusted_markup_and_shows_gap_and_partial_metadata_war
 }
 
 #[test]
-#[ignore = "requires FLUXVAULT_WORD_TEST_PROJECT; read-only replay of saved v2/v3 Word text/HTML reports"]
+fn localized_word_presentation_preserves_source_labels_markers_and_escaping() {
+    let (image, parent, bad) = fixture_sparse(true, false);
+    let mut doc = extract(&image, &parent, &BTreeSet::from([bad as u64])).unwrap();
+    doc.parent.path = "READABLE SEGMENT __FV_LOCALE_SLOT_0__ <script>.doc".into();
+    doc.segments[0].text =
+        "Generated edition — not the original document __FV_LOCALE_SLOT_3__ <img> &\u{13}".into();
+    let original = serde_json::to_value(&doc).unwrap();
+    for language in [
+        crate::final_report::Language::Hungarian,
+        crate::final_report::Language::English,
+    ] {
+        let html = readable_html::render_in_language(
+            &doc,
+            "Source image: __FV_LOCALE_SLOT_1__ <unsafe>",
+            &"f".repeat(64),
+            language,
+        )
+        .unwrap();
+        assert!(html.contains("READABLE SEGMENT __FV_LOCALE_SLOT_0__ &lt;script&gt;.doc"));
+        assert!(html.contains("Generated edition — not the original document __FV_LOCALE_SLOT_3__ &lt;img&gt; &amp;\\u{0013}"));
+        assert!(html.contains("Source image: __FV_LOCALE_SLOT_1__ &lt;unsafe&gt;"));
+        assert!(html.contains(&format!("<html lang=\"{}\">", language.code())));
+        assert!(!html.contains("<script>") && !html.contains("<img>"));
+        if language == crate::final_report::Language::Hungarian {
+            assert!(
+                html.contains("OLVASHATÓ SZÖVEGRÉSZ")
+                    && html.contains("Hiányos összetettfájl-metaadatok")
+            );
+        }
+    }
+    assert_eq!(original, serde_json::to_value(&doc).unwrap());
+}
+
+#[test]
+#[ignore = "requires FLUXVAULT_WORD_TEST_PROJECT; read-only replay of saved Word text/HTML generations"]
 fn saved_word_reports_replay_source_extents_and_readable_editions() {
     let project = crate::project::ProjectState::open_without_session(std::path::PathBuf::from(
         std::env::var("FLUXVAULT_WORD_TEST_PROJECT").unwrap(),
@@ -590,6 +624,14 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                         .file_name()
                         .to_string_lossy()
                         .ends_with("_word_text_v4")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v5_hu")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v5_en")
             {
                 continue;
             }
@@ -597,6 +639,19 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                 serde_json::from_slice(&fs::read(folder.path().join("word-text.json")).unwrap())
                     .unwrap();
             assert!((2..=ENGINE_VERSION).contains(&report.engine_version));
+            let language = if report.engine_version >= 5 {
+                let language =
+                    crate::final_report::Language::parse(&report.customer_language).unwrap();
+                assert!(
+                    folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with(language.code())
+                );
+                Some(language)
+            } else {
+                None
+            };
             let image = fs::read(project.images_dir().join(&report.source_image)).unwrap();
             assert_eq!(hash(&image), report.source_sha256);
             let bad = report.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
@@ -680,12 +735,17 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                 let html = fs::read(folder.path().join(&edition.path)).unwrap();
                 assert_eq!(html.len(), edition.bytes);
                 assert_eq!(hash(&html), edition.sha256);
-                assert_eq!(
-                    html,
-                    readable_html::render(doc, &report.source_image, &report.source_sha256)
-                        .unwrap()
-                        .as_bytes()
-                );
+                let replay = match language {
+                    Some(language) => readable_html::render_in_language(
+                        doc,
+                        &report.source_image,
+                        &report.source_sha256,
+                        language,
+                    ),
+                    None => readable_html::render(doc, &report.source_image, &report.source_sha256),
+                }
+                .unwrap();
+                assert_eq!(html, replay.as_bytes());
                 assert!(!edition.repaired_original);
             }
         }

@@ -1,6 +1,6 @@
 # Deeper recovery: directories, file tails and Word/RTF text
 
-Native recovery generation **5** adds automatic saved-image recovery paths. Word-text engine **4** also finds supported compound Word content despite a misleading extension. RTF-text engine **2** detects readable RTF1 content and continues around explicitly marked unsupported single-byte symbol glyphs, without guessing their meaning. Both retain the previous conservative mapping/prefix limits and publish separate forensic editions. Normal `fv scan` / `fv process` invokes these when native recovery is needed. No floppy, new policy, DMDE step or recovery decision is required.
+Native recovery generation **5** adds automatic saved-image recovery paths. Word-text engine **5** retains content-based compound Word detection; RTF-text engine **3** retains readable RTF1 detection and explicit unsupported-symbol gaps without guessing their meaning. Both now publish Hungarian/default or English forensic editions with unchanged text/mapping limits. Normal `fv scan` / `fv process` invokes these when native recovery is needed. No floppy, new policy, DMDE step or recovery decision is required.
 
 ## Beginner: use it
 
@@ -17,9 +17,12 @@ For one saved disk, without external tools:
 ```powershell
 fv recovery extract 24
 fv recovery documents 24
+fv recovery documents 24 --language en
 ```
 
 Both run native recovery; `documents` focuses its output on the additional forensic Word/RTF-text results. Add `--json` for machine-readable counts/paths. **Exit 3 is expected attention**, including successful reuse: the original disk/document remains damaged. Filename extensions are hints, not format proof: eligible partial files with a readable compound/RTF1 signature also get the appropriate metadata checks.
+
+Generated HTML labels/warnings default to Hungarian; `--language en` selects English and remembers it for later work. Operator output stays English, recovered document text stays exactly in its original language, and raw JSON/UTF-8 evidence is not translated. Separate language folders preserve both editions and every older generation. [Language selection](../guides/CUSTOMER_LANGUAGE.md).
 
 If text survives, the command prints **Open readable edition: ...html**. Open that file in your browser: one page presents the segments in order, with a red block for each missing range. There is no manual text assembly or Office repair step. The page works offline, does not execute macros or fetch pictures/links, and is clearly labeled as a generated recovery edition, not the original DOC. It remains forensic evidence under `Recovery`, not an automatically certified delivery original.
 
@@ -33,10 +36,10 @@ Do not initialize/reset the old project, edit its internal reports, or copy reco
 | Validated missing-link tail alternatives | Same generation, under `FragmentRecovery` | Separately marked `Fragment-Hypotheses`; historical association unproven |
 | Intact signature candidate | Same generation, under `SignatureRecovery` | Existing `Signature-Recovered` treatment |
 | Readable pieces of an incomplete file | `Recovery/NNN/attempt_NNN_fragments_v2` | Raw evidence only, not complete documents |
-| Word main-text segments, readable HTML and report | `Recovery/NNN/attempt_NNN_word_text_v4` | Forensic evidence/generated presentation only; no routine conversion or original replacement |
-| RTF readable-prefix text segments, HTML and stopping report | `Recovery/NNN/attempt_NNN_rtf_text_v2` | Forensic text only; unsupported glyphs are gaps, remaining text length unknown |
+| Word main-text segments, readable HTML and report | `Recovery/NNN/attempt_NNN_word_text_v5_hu` or `_en` | Forensic evidence/generated presentation only; no routine conversion or original replacement |
+| RTF readable-prefix text segments, HTML and stopping report | `Recovery/NNN/attempt_NNN_rtf_text_v3_hu` or `_en` | Forensic text only; unsupported glyphs are gaps, remaining text length unknown |
 
-Legacy images use `legacy_native_v5` rather than an attempt extraction name. The native report is `Recovery/NNN/attempt_NNN_fat12_v5.json`. Older native generations, fragment-v1 folders, Word-text-v1/v2/v3 and RTF-v1 folders, and forensic deleted-v1 results stay intact. Same-acquisition selection cannot replace an ordinary reachable file solely with reconstructed/hypothetical copies. The archival ZIP includes forensic recovery evidence and generated HTML with warnings; inclusion is not customer-delivery certification.
+Legacy images use `legacy_native_v5` rather than an attempt extraction name. The native report is `Recovery/NNN/attempt_NNN_fat12_v5.json`. Older native generations, fragment-v1 folders, Word-text-v1/v2/v3/v4 and RTF-v1/v2 folders, and forensic deleted-v1 results stay intact. Same-acquisition selection cannot replace an ordinary reachable file solely with reconstructed/hypothetical copies. The archival ZIP includes forensic recovery evidence and generated HTML with warnings; inclusion is not customer-delivery certification.
 
 ## Advanced: lost directories
 

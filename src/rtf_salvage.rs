@@ -9,7 +9,7 @@ use std::{
 };
 #[path = "rtf_text.rs"]
 mod text;
-const ENGINE_VERSION: u32 = 2;
+const ENGINE_VERSION: u32 = 3;
 const MAX_PREFIX: usize = 256 * 1024;
 const WARNING_V1: &str = "FORENSIC RTF PREFIX TEXT, NOT A REPAIRED ORIGINAL. Only a source-mapped readable prefix is decoded; parsing stops at the first unreadable/unmapped byte, unsupported encoding/control or malformed structure. No state is guessed across holes and no later fragments are silently joined. Remaining text length, original formatting, tables, objects and semantics are unknown. Hidden/deleted text, fields and non-body destinations are excluded. UTF-8/HTML are separate generated evidence, not whole-file counts, normal Office conversions or customer-certified documents.";
 const WARNING: &str = "FORENSIC RTF PREFIX TEXT, NOT A REPAIRED ORIGINAL. Only a source-mapped readable prefix is decoded. Known single-byte symbol-font glyphs with unsupported meanings are explicit gaps; later readable text uses continuously verified RTF state, not parser resynchronization or guessed glyphs. Separate UTF-8 segments are never silently joined across these gaps. Parsing still stops at the first acquisition-unreadable/unmapped byte, unknown encoding/control or malformed structure. Remaining text length, original formatting, tables, objects and semantics are unknown. Hidden/deleted text, fields and non-body destinations are excluded. UTF-8/HTML are separate generated evidence, not whole-file counts, normal Office conversions or customer-certified documents.";
@@ -54,6 +54,8 @@ struct Document {
 struct Report {
     schema_version: u32,
     engine_version: u32,
+    #[serde(default)]
+    customer_language: String,
     source_image: String,
     source_sha256: String,
     disk: u32,
@@ -65,6 +67,7 @@ struct Report {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct SalvageResult {
+    pub customer_language: String,
     pub engine_version: u32,
     pub documents_examined: usize,
     pub documents_with_text: usize,
@@ -197,6 +200,42 @@ fn edition(doc: &Document, body: &str, source: &str, sha: &str, engine: u32) -> 
     )
 }
 
+fn edition_in_language(
+    doc: &Document,
+    body: &str,
+    source: &str,
+    sha: &str,
+    language: crate::final_report::Language,
+) -> Result<String, String> {
+    if language == crate::final_report::Language::English {
+        return Ok(edition(doc, body, source, sha, 2));
+    }
+    let mut slots = crate::edition_language::Slots::default();
+    let mut masked = doc.clone();
+    masked.parent.record.path = slots.protect(escaped(&doc.parent.record.path));
+    masked.stop_reason =
+        slots.protect(escaped(&crate::edition_language::stop_hu(&doc.stop_reason)));
+    masked.content_detection = doc.content_detection.as_ref().map(|_| slots.protect("Olvasható RTF-tartalmat találtunk a megtévesztő fájlkiterjesztés ellenére. Az eredeti név és bájtok változatlanok.".into()));
+    let mut masked_body = String::new();
+    let mut start = 0;
+    for (original, gap) in doc
+        .unsupported_font_gaps
+        .iter()
+        .zip(&mut masked.unsupported_font_gaps)
+    {
+        masked_body.push_str(&slots.protect(escaped(&body[start..original.output_utf8_offset])));
+        gap.output_utf8_offset = masked_body.len();
+        start = original.output_utf8_offset;
+    }
+    masked_body.push_str(&slots.protect(escaped(&body[start..])));
+    let source = slots.protect(escaped(source));
+    let sha = slots.protect(escaped(sha));
+    let warning=slots.protect("BIZONYÍTÉKALAPÚ RTF-ELŐTAGSZÖVEG, NEM JAVÍTOTT EREDETI. Csak forráshoz visszaköthető, olvasható bájtokat értelmezünk. A nem támogatott egybájtos szimbólumok látható hiányok; a későbbi ismert betűtípusú szöveg csak folyamatosan olvasható állapotból folytatható. A külön szövegrészek nem lettek észrevétlenül összefűzve. Hiányzó beolvasási bájtnál, ismeretlen kódolásnál/vezérlőelemnél vagy hibás szerkezetnél megállunk. A fennmaradó szöveghossz, eredeti formázás, táblázatok, objektumok és jelentés ismeretlen. Rejtett/törölt szöveg, mezők és nem főszöveg-tartalom kimarad. Ezek külön szöveg/HTML bizonyítékok, nem teljes visszanyert fájlok, szokásos Office-konverziók vagy hitelesített ügyféldokumentumok. A formátumot az olvasható tartalom alapján ellenőrizzük; eredeti név/bájtok nem változtak.".into());
+    let template =
+        edition(&masked, &masked_body, &source, &sha, 2).replace(&escaped(WARNING), &warning);
+    slots.expand(&crate::edition_language::hungarian_markup(template))
+}
+
 /// Caller owns the native per-disk lock and verified acquisition/report roots.
 pub(crate) fn preserve(
     image: &[u8],
@@ -211,6 +250,7 @@ pub(crate) fn preserve(
         return Ok(None);
     }
     let bad = a.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
+    let language = crate::edition_language::source_language(source)?;
     let mut docs = Vec::new();
     let mut payloads = Vec::new();
     let mut limits = false;
@@ -330,13 +370,20 @@ pub(crate) fn preserve(
                     start = end;
                 }
             }
-            let html = edition(
+            let html = match edition_in_language(
                 &doc,
                 &decoded.text,
                 &native.source_image,
                 &native.source_sha256,
-                ENGINE_VERSION,
-            );
+                language,
+            ) {
+                Ok(html) => html,
+                Err(_) => {
+                    limits = true;
+                    docs.push(doc);
+                    continue;
+                }
+            };
             if html.len() <= fat12::MAX_IMAGE_BYTES
                 && edition_bytes + html.len() <= fat12::MAX_IMAGE_BYTES * 2
             {
@@ -361,6 +408,7 @@ pub(crate) fn preserve(
     let report = Report {
         schema_version: 1,
         engine_version: ENGINE_VERSION,
+        customer_language: language.code().into(),
         source_image: native.source_image.clone(),
         source_sha256: native.source_sha256.clone(),
         disk: native.disk,
@@ -375,8 +423,9 @@ pub(crate) fn preserve(
         return Err("RTF provenance size ceiling".into());
     }
     let output = recovery_disk.join(format!(
-        "attempt_{:03}_rtf_text_v{ENGINE_VERSION}",
-        native.attempt
+        "attempt_{:03}_rtf_text_v{ENGINE_VERSION}_{}",
+        native.attempt,
+        language.code()
     ));
     let report_path = output.join("rtf-text.json");
     let reused = output.exists();
@@ -419,6 +468,7 @@ pub(crate) fn preserve(
         fs::rename(&staging, &output).map_err(|e| format!("RTF staging retained: {e}"))?;
     }
     Ok(Some(SalvageResult {
+        customer_language: language.code().into(),
         engine_version: ENGINE_VERSION,
         documents_examined: report.documents.len(),
         documents_with_text: report

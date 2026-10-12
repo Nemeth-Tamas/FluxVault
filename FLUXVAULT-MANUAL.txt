@@ -23,12 +23,13 @@ CUSTOMER LANGUAGE
     Operator prompts/help remain English. Customer package instructions and
     selected final-report presentation default to Hungarian. --language hu|en
     is accepted by production start/resume, process, finalize/resume, report
-    export and package build. Production/finalization save the choice; resume
+    export, package build and recovery documents/extract. Production/finalization save the choice; resume
     refuses a conflicting language. Existing archives/editions are preserved,
     not translated in place. Optional default: project settings set
     customer-language en; clear customer-language restores Hungarian for new
     work. Machine keys/status codes, original content and raw logs stay intact.
-    Recovery-edition/remaining diagnostic translation is a later polish slice.
+    Word/RTF HTML labels/warnings follow the choice; original document text
+    is never translated. Remaining diagnostic prose is a later polish slice.
     Full coverage: docs/guides/CUSTOMER_LANGUAGE.md.
 
 SAFETY
@@ -886,12 +887,12 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     tail association remains unproven; competing candidates are retained, not
     silently certified. recovery documents N [--json] invokes the same native
     service and focuses output on forensic Word main-text salvage. Word-text
-    engine 4 can also detect misnamed compound Word content and selectively map
+    engine 5 can also detect misnamed compound Word content and selectively map
     surviving root Word/table regular/mini streams
     past unrelated missing CFB directory entries; missing required
     metadata/encryption/unsupported formats remain refusals. Exact CP/source
     extents, UTF-8 segments, generated offline readable HTML and the report
-    live under Recovery/NNN/attempt_NNN_word_text_v4; old v1/v2/v3 evidence stays
+    live under Recovery/NNN/attempt_NNN_word_text_v5_hu (or _en); v1-v4 evidence stays
     intact. Human output prints edition paths; JSON returns
     readable_edition_paths, readable_editions, selectively_mapped_documents and
     engine_version. Editions show explicit gaps and do not execute field
@@ -901,8 +902,8 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
 
     The same recovery documents N command and automatic native processing also
     try damaged RTF readable prefixes, including misnamed RTF1 content.
-    Engine 2 writes separate UTF-8 segments/HTML and rtf-text.json under
-    Recovery/NNN/attempt_NNN_rtf_text_v2; old v1 evidence stays intact.
+    Engine 3 writes separate UTF-8 segments/HTML and rtf-text.json under
+    Recovery/NNN/attempt_NNN_rtf_text_v3_hu (or _en); v1/v2 evidence stays intact.
     Unsupported single-byte symbol glyphs get explicit gap panels and separate
     text files on either side, never guessed icons/letters or a silently joined
     text file. JSON adds rtf_salvage, readable_utf16_positions, text_segments,
@@ -911,7 +912,9 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     No state is guessed across holes; remaining text length is
     UNKNOWN. Hidden/deleted and non-body destinations are excluded. Outputs
     are immutable warned evidence, not repaired RTFs, extra whole files or
-    normal Office jobs. Example: recovery documents 22. Exit 3 is expected.
+    normal Office jobs. Example: recovery documents 22. Add --language en
+    for an English HTML edition in a separate verified folder. Operator output
+    stays English; recovered text and raw JSON remain unchanged. Exit 3 is expected.
 
     Incomplete file-candidate readable runs automatically preserve .bin
     fragments under Recovery/NNN/attempt_NNN_fragments_v2, preserving older v1
