@@ -504,6 +504,7 @@ fn run_pipeline_mode(
     )?;
     let final_report = crate::final_report::export(project, &audit, language)?;
     crate::final_report::reconcile_audit(&mut audit, &final_report);
+    crate::cli::clear_after_audit(project)?;
     let workbook_path = final_report.workbook;
     Ok(PipelineResult {
         raw_format_exceptions,

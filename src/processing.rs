@@ -584,8 +584,13 @@ pub fn status(project: &ProjectState) -> Result<Value, String> {
         json!({"stage":"not_started"})
     };
     let active = crate::project_work::active(project.root())?;
+    let audit_pending = project
+        .root()
+        .join(".fluxvault-audit-pending.json")
+        .try_exists()
+        .map_err(|e| e.to_string())?;
     Ok(
-        json!({"worker":worker,"owner_active":active,"stale_worker_status":!active && worker["stage"] != "stopped" && worker["stage"] != "not_started","jobs":all.iter().map(|(_, j)| json!({"disk":j.disk,"attempt":j.attempt,"status":j.status,"detail":j.detail,"image_sha256":j.image_sha256})).collect::<Vec<_>>(),"pending":all.iter().filter(|(_, j)| j.pending()).count(),"attention":all.iter().filter(|(_, j)| j.status == "attention").count(),"physical_media_access":false}),
+        json!({"worker":worker,"owner_active":active,"stale_worker_status":!active && worker["stage"] != "stopped" && worker["stage"] != "not_started","jobs":all.iter().map(|(_, j)| json!({"disk":j.disk,"attempt":j.attempt,"status":j.status,"detail":j.detail,"image_sha256":j.image_sha256})).collect::<Vec<_>>(),"pending":all.iter().filter(|(_, j)| j.pending()).count(),"attention":all.iter().filter(|(_, j)| j.status == "attention").count(),"audit_refresh_pending":audit_pending,"physical_media_access":false}),
     )
 }
 
@@ -810,6 +815,59 @@ mod tests {
         assert_eq!(current["owner_active"], false);
         assert_eq!(project.current_disk_number(), 1);
         assert!(!project.logs_dir().join("audit.jsonl").exists());
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
+    fn two_reader_publications_and_foreground_admission_continue_during_blocked_office_work() {
+        let project = project();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release = std::sync::Mutex::new(Some(release_rx));
+        let worker = injected(&project, move |request, _| {
+            if let Some(receiver) = release.lock().unwrap().take() {
+                // CPU-slot saturation is tested with the isolated governor.
+                // Do not let unrelated parallel tests delay this barrier.
+                let _ = request;
+                started_tx.send(()).unwrap();
+                receiver.recv_timeout(Duration::from_secs(15)).unwrap();
+            }
+            Ok(json!({"exit_code":0}))
+        });
+        worker.enqueue(&acquisition(&project, 1)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            for disk in [2, 3] {
+                let done = done_tx.clone();
+                let project = &project;
+                let worker = &worker;
+                scope.spawn(move || {
+                    let _physical = crate::resource_budget::foreground(&[(
+                        project.root(),
+                        crate::resource_budget::MIB,
+                    )])
+                    .unwrap();
+                    let _publication = crate::project_work::snapshot(project.root()).unwrap();
+                    worker.enqueue(&acquisition(project, disk)).unwrap();
+                    done.send(disk).unwrap();
+                });
+            }
+            let mut finished = std::collections::BTreeSet::new();
+            for _ in 0..2 {
+                finished.insert(
+                    done_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("foreground publication must not wait for Office completion"),
+                );
+            }
+            assert_eq!(finished, std::collections::BTreeSet::from([2, 3]));
+            assert_eq!(status(&project).unwrap()["pending"], 3);
+            release_tx.send(()).unwrap();
+        });
+        let outcome = worker.finish();
+        assert_eq!(outcome.processed_jobs, 3);
+        assert!(outcome.errors.is_empty());
         fs::remove_dir_all(project.root()).unwrap();
     }
 

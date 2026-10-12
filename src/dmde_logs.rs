@@ -52,15 +52,11 @@ struct MapRecord {
 }
 
 pub fn parse_dmde_log_file(path: &Path) -> Result<ParsedDmdeLog, String> {
-    let content = fs::read_to_string(path).map_err(|error| {
-        format!(
-            "Nem sikerült beolvasni a DMDE naplót {}: {error}",
-            path.display()
-        )
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("Cannot read DMDE log {}: {error}", path.display()))?;
 
     parse_dmde_log(&content)
-        .map_err(|error| format!("Nem felismerhető DMDE napló {}: {error}", path.display()))
+        .map_err(|error| format!("Unrecognized DMDE log {}: {error}", path.display()))
 }
 
 pub fn parse_dmde_log(content: &str) -> Result<ParsedDmdeLog, String> {
@@ -121,7 +117,7 @@ pub fn parse_dmde_log(content: &str) -> Result<ParsedDmdeLog, String> {
         let end_lba = record
             .start_lba
             .checked_add(record.sector_count)
-            .ok_or_else(|| "DMDE szektortartomány túlcsordulás.".to_owned())?;
+            .ok_or_else(|| "DMDE sector range overflow.".to_owned())?;
         expanded_sectors = expanded_sectors
             .checked_add(record.sector_count)
             .ok_or("DMDE expansion overflow")?;
@@ -143,7 +139,7 @@ pub fn parse_dmde_log(content: &str) -> Result<ParsedDmdeLog, String> {
     }
 
     if record_count == 0 {
-        return Err("nem található DMDE C/E szektortérkép rekord".to_owned());
+        return Err("No DMDE C/E sector map records found".to_owned());
     }
 
     let bad_sectors = latest_states
@@ -215,7 +211,7 @@ fn parse_map_record(line: &str) -> Result<Option<MapRecord>, String> {
     }
 
     if fields.len() < 7 || fields[5] != ":" {
-        return Err(format!("hibás DMDE szektortérkép sor: {line}"));
+        return Err(format!("Invalid DMDE sector map row: {line}"));
     }
 
     let state = if fields[0] == "C" {
@@ -226,17 +222,17 @@ fn parse_map_record(line: &str) -> Result<Option<MapRecord>, String> {
     let direction = match (fields[2], fields[3]) {
         (">", ">") => DmdeDirection::Forward,
         ("<", "<") => DmdeDirection::Reverse,
-        _ => return Err(format!("ismeretlen DMDE olvasási irány: {line}")),
+        _ => return Err(format!("Unknown DMDE read direction: {line}")),
     };
     let start_lba = fields[4]
         .parse::<u64>()
-        .map_err(|_| format!("hibás DMDE kezdő LBA: {line}"))?;
+        .map_err(|_| format!("Invalid DMDE starting LBA: {line}"))?;
     let sector_count = fields[6]
         .parse::<u64>()
-        .map_err(|_| format!("hibás DMDE szektorszám: {line}"))?;
+        .map_err(|_| format!("Invalid DMDE sector count: {line}"))?;
 
     if sector_count == 0 {
-        return Err(format!("nulla hosszúságú DMDE szektortartomány: {line}"));
+        return Err(format!("Zero-length DMDE sector range: {line}"));
     }
 
     Ok(Some(MapRecord {

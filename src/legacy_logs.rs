@@ -54,19 +54,11 @@ pub struct ParsedArchiverLog {
 }
 
 pub fn parse_archiver_log_file(path: &Path) -> Result<ParsedArchiverLog, String> {
-    let content = fs::read_to_string(path).map_err(|error| {
-        format!(
-            "Nem sikerült beolvasni a naplót {}: {error}",
-            path.display()
-        )
-    })?;
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("Cannot read log {}: {error}", path.display()))?;
 
-    parse_archiver_log(&content).map_err(|error| {
-        format!(
-            "Nem felismerhető acquisition napló {}: {error}",
-            path.display()
-        )
-    })
+    parse_archiver_log(&content)
+        .map_err(|error| format!("Unrecognized acquisition log {}: {error}", path.display()))
 }
 
 pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
@@ -176,7 +168,7 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
     }
 
     if recognized_records == 0 {
-        return Err("nem található ismert BEGIN/GEOMETRY/BAD_SECTOR/SHA256/END rekord".to_owned());
+        return Err("No recognized BEGIN/GEOMETRY/BAD_SECTOR/SHA256/END records found".to_owned());
     }
 
     if !end_seen {

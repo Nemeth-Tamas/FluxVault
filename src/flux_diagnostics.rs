@@ -22,15 +22,20 @@ pub struct DiagnosticResult {
     pub tracks_csv: PathBuf,
     pub sectors_csv: PathBuf,
     pub note: PathBuf,
+    pub crc_observations_csv: PathBuf,
     pub report_sha256: String,
     pub disk: u32,
     pub captures: usize,
     pub decodes: usize,
     pub attention: bool,
     pub physical_media_access: bool,
+    pub crc_validated_sector_observations: usize,
+    pub crc_unconfirmed_sector_observations: usize,
+    pub crc_conflicting_sector_observations: usize,
 }
 
 fn read_control(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    crate::sector_inspection::regular(path, false)?;
     let info = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !info.file_type().is_file() || info.len() > limit {
         return Err(format!(
@@ -49,7 +54,7 @@ fn read_control(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-fn bounded_inventory(project: &ProjectState, disk: u32) -> Result<u64, String> {
+pub(crate) fn bounded_inventory(project: &ProjectState, disk: u32) -> Result<u64, String> {
     let flux = flux_capture::project_flux_dir(project)?;
     let mut captures = 0;
     let mut decodes = 0;
@@ -171,6 +176,7 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
     let mut raw = Vec::new();
     let mut scan_remaining = RAW_SCAN_BUDGET;
     let mut sources = Vec::<(PathBuf, String)>::new();
+    let mut crc_inspections = BTreeMap::new();
     let mut tracks_csv = String::from(
         "kind,capture,decode,profile,cylinder,head,revolution,reported_good,reported_unavailable,unobserved,transitions,index_duration_ns,rpm\n",
     );
@@ -212,6 +218,23 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
             capture.sha256.as_deref().ok_or("Capture hash missing")?,
         )?;
         let mut file = File::open(&source.path).map_err(|e| e.to_string())?;
+        let cell_ns = match capture.profile.as_deref() {
+            Some("ibm.1440") => Some(1000),
+            Some("ibm.720") => Some(2000),
+            _ => None,
+        };
+        let crc_report = if let Some(cell_ns) = cell_ns {
+            match crate::mfm_evidence::inspect(&mut file, size, cell_ns) {
+                Ok(value) => {
+                    let report = serde_json::to_value(&value).map_err(|e| e.to_string())?;
+                    crc_inspections.insert(capture.attempt, value);
+                    report
+                }
+                Err(reason) => json!({"measured":false,"reason":reason}),
+            }
+        } else {
+            json!({"measured":false,"reason":"unsupported_capture_profile"})
+        };
         match crate::scp_diagnostics::inspect(&mut file, size) {
             Ok(measurement) => {
                 if !measurement.checksum_matches {
@@ -235,7 +258,7 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
                         ));
                     }
                 }
-                raw.push(json!({"attempt":capture.attempt,"sha256":capture.sha256,"storage":capture.storage,"measured":true,"measurement":measurement}));
+                raw.push(json!({"attempt":capture.attempt,"sha256":capture.sha256,"storage":capture.storage,"measured":true,"measurement":measurement,"independent_mfm":crc_report}));
             }
             Err(reason) => {
                 issues.push(format!(
@@ -280,6 +303,25 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
             continue;
         }
         let (bytes, bad) = flux_capture::verified_decode(project, decode, count)?;
+        let independent = if let Some(inspection) =
+            crc_inspections.get(&decode.capture_attempt).filter(|i| {
+                i.tracks
+                    .first()
+                    .is_none_or(|t| t.nominal_cell_ns == if count == 2880 { 1000 } else { 2000 })
+            }) {
+            crate::mfm_evidence::compare(inspection, &bytes, &bad)?
+        } else {
+            json!({"measured":false,"reason":"capture_rate_or_inspection_unavailable"})
+        };
+        if independent["conflicting_crc_valid_lbas"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+        {
+            issues.push(format!(
+                "Capture {} decode {} conflicts with independently CRC-validated flux bytes",
+                decode.capture_attempt, decode.decode_attempt
+            ));
+        }
         let history = histories
             .entry(decode.profile.clone())
             .or_insert_with(|| History {
@@ -341,7 +383,7 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
             }
         }
         history.previous_good = good.clone();
-        passes.push(json!({"capture_attempt":decode.capture_attempt,"decode_attempt":decode.decode_attempt,"profile":decode.profile,"image_sha256":decode.output_sha256,"reported_good":good.len(),"reported_unavailable":observed.len()-good.len(),"unobserved":count-observed.len(),"newly_readable_after_previous_unavailable_lbas":newly_readable,"newly_unavailable_vs_previous_observed_pass_lbas":lost,"disagreeing_reported_good_lbas":conflicts,"tracks":track_rows}));
+        passes.push(json!({"capture_attempt":decode.capture_attempt,"decode_attempt":decode.decode_attempt,"profile":decode.profile,"image_sha256":decode.output_sha256,"reported_good":good.len(),"reported_unavailable":observed.len()-good.len(),"unobserved":count-observed.len(),"newly_readable_after_previous_unavailable_lbas":newly_readable,"newly_unavailable_vs_previous_observed_pass_lbas":lost,"disagreeing_reported_good_lbas":conflicts,"tracks":track_rows,"independent_mfm":independent}));
         if !conflicts.is_empty() {
             issues.push(format!(
                 "Capture {} decode {} disagrees with earlier reported-good sector bytes at {} LBAs",
@@ -467,7 +509,7 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
         summary.push_str(&format!("Capture {} / decode {} / {}: {} reported good, {} unavailable, {} unobserved.\n  Newly readable: {}; newly unavailable: {}; disagreeing reported-good bytes: {}.\n",pass["capture_attempt"],pass["decode_attempt"],pass["profile"],pass["reported_good"],pass["reported_unavailable"],pass["unobserved"],pass["newly_readable_after_previous_unavailable_lbas"],pass["newly_unavailable_vs_previous_observed_pass_lbas"],pass["disagreeing_reported_good_lbas"]));
     }
     let note = format!(
-        "FluxVault saved-flux diagnostics: disk {disk:03}\n{} captures; {} decode records.\n\n{summary}\n{}\n\nThis is a measurement snapshot, not a new recovery or repaired original. Raw RPM/pulse metrics do not prove magnetic weakness, alignment or valid CRC. Decode maps are Greaseweazle-reported: unavailable combines missing/bad CRC; duplicate IDs and per-revolution CRC are unknown. Outside targeted cylinders is unobserved, not a newly failed sector. Repeated decodes/revolutions are not independent physical captures. Final sectors are replayed from the committed job, never inferred from zero filler. No physical media accessed; no host tool launched; default recovery/delivery selection unchanged.\n",
+        "FluxVault saved-flux diagnostics: disk {disk:03}\n{} captures; {} decode records.\n\n{summary}\n{}\n\nThis is a measurement snapshot, not a new recovery or repaired original. Independent IBM MFM inspection checks address/data CRC and ordinary clocks directly from saved SCP, records duplicate/unusual IDs and differing CRC-valid payloads. Unconfirmed sectors are NOT valid by inference; no decoder filtering, guessing or automatic donor promotion. Vendor maps remain separately labelled. Raw RPM/pulse metrics do not prove magnetic weakness or alignment. Outside targeted cylinders is unobserved, not a newly failed sector. Repeated decodes/revolutions are not independent physical captures. Final sectors are replayed from the committed job, never inferred from zero filler. No physical media accessed; no host tool launched; default recovery/delivery selection unchanged.\n",
         status.captures.len(),
         status.decodes.len(),
         if issues.is_empty() {
@@ -488,10 +530,47 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
     let tracks = out.join(format!("{stem}-tracks.csv"));
     let sectors = out.join(format!("{stem}-sectors.csv"));
     let notes = out.join(format!("{stem}-notes.txt"));
+    let crc_csv = out.join(format!("{stem}-crc.csv"));
+    let mut crc_text = String::from(
+        "capture,cylinder,head,revolution,bit_offset,id_cylinder,id_head,id_sector,id_size_code,id_crc_valid,data_crc_valid,deleted_data_mark,payload_bytes,payload_sha256,clock_violations\n",
+    );
+    for (attempt, inspection) in &crc_inspections {
+        for track in &inspection.tracks {
+            for r in &track.observations {
+                crc_text.push_str(&format!(
+                    "{attempt},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    track.cylinder,
+                    track.head,
+                    r.revolution,
+                    r.bit_offset,
+                    r.id[0],
+                    r.id[1],
+                    r.id[2],
+                    r.id[3],
+                    r.id_crc_valid,
+                    r.data_crc_valid.map(|v| v.to_string()).unwrap_or_default(),
+                    r.deleted_data_mark,
+                    r.payload_bytes.map(|v| v.to_string()).unwrap_or_default(),
+                    r.payload_sha256.as_deref().unwrap_or(""),
+                    r.clock_violations
+                ));
+            }
+        }
+    }
+    write_new(&crc_csv, crc_text.as_bytes())?;
     write_new(&tracks, tracks_csv.as_bytes())?;
     write_new(&sectors, sectors_csv.as_bytes())?;
     write_new(&notes, note.as_bytes())?;
-    let value = json!({"schema_version":1,"engine":"saved-flux-diagnostics-v1","disk":disk,"physical_media_access":false,"host_tools_invoked":false,"recovery_selection_changed":false,"attention":attention,"captures":raw,"decode_passes":passes,"committed_recovery":final_summary,"recovery_binding":binding,"issues":issues,"unknown_fields":["per_revolution_sector_CRC","bad_CRC_vs_missing","duplicate_or_unusual_sector_IDs","physical_weak_bits","drive_alignment"],"exports":{"tracks_csv":tracks,"tracks_sha256":sha(&tracks)?,"sectors_csv":sectors,"sectors_sha256":sha(&sectors)?,"note":notes,"note_sha256":sha(&notes)?},"sources":sources});
+    let sum = |key: &str| {
+        passes
+            .iter()
+            .map(|p| p["independent_mfm"][key].as_array().map_or(0, Vec::len))
+            .sum::<usize>()
+    };
+    let crc_validated = sum("validated_reported_good_lbas");
+    let crc_unconfirmed = sum("unconfirmed_reported_good_lbas");
+    let crc_conflicting = sum("conflicting_crc_valid_lbas");
+    let value = json!({"schema_version":2,"engine":"saved-flux-diagnostics-v2","disk":disk,"physical_media_access":false,"host_tools_invoked":false,"recovery_selection_changed":false,"attention":attention,"captures":raw,"decode_passes":passes,"committed_recovery":final_summary,"recovery_binding":binding,"issues":issues,"unknown_fields":["physical_weak_bits","drive_alignment","unsupported_non_IBM_MFM_encodings"],"exports":{"tracks_csv":tracks,"tracks_sha256":sha(&tracks)?,"sectors_csv":sectors,"sectors_sha256":sha(&sectors)?,"crc_observations_csv":crc_csv,"crc_observations_sha256":sha(&crc_csv)?,"note":notes,"note_sha256":sha(&notes)?},"sources":sources});
     let bytes = serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?;
     if bytes.len() > 16 * 1024 * 1024 {
         return Err("Diagnostic report exceeds bounded output".into());
@@ -514,6 +593,10 @@ pub fn diagnose(project: &ProjectState, disk: u32) -> Result<DiagnosticResult, S
         decodes: status.decodes.len(),
         attention,
         physical_media_access: false,
+        crc_observations_csv: crc_csv,
+        crc_validated_sector_observations: crc_validated,
+        crc_unconfirmed_sector_observations: crc_unconfirmed,
+        crc_conflicting_sector_observations: crc_conflicting,
     })
 }
 

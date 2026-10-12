@@ -273,6 +273,9 @@ fn command(
 }
 pub(super) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let o = parse(args, cwd)?;
+    if !o.plan && !super::mutation_audit::active() {
+        return super::mutation_audit::run(args, cwd, || run(args, cwd));
+    }
     let defs = o
         .definitions
         .as_ref()

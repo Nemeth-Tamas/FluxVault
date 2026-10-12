@@ -566,7 +566,7 @@ impl ProcessGreaseweazleBackend {
     pub fn new(executable: PathBuf, audit_path: PathBuf) -> Result<Self, String> {
         if !executable.is_file() {
             return Err(format!(
-                "A Greaseweazle executable nem található: {}",
+                "Greaseweazle executable not found: {}",
                 executable.display()
             ));
         }
@@ -732,7 +732,7 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
             cmd.env(key, val);
         }
         let mut child = crate::process_supervision::spawn(&mut cmd)
-            .map_err(|error| format!("A Greaseweazle indítása sikertelen: {error}"))?;
+            .map_err(|error| format!("Cannot start Greaseweazle: {error}"))?;
         if let Some(event) = command.progress_start()
             && let Some(callback) = &mut self.progress_callback
         {
@@ -806,7 +806,7 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
                     let issue = child.terminate_tree().err();
                     let _ = child.wait();
                     return Err(format!(
-                        "Greaseweazle folyamat várakozási hiba: {error}{}",
+                        "Greaseweazle process wait error: {error}{}",
                         issue
                             .map(|i| format!(" (termination error: {i})"))
                             .unwrap_or_default()
@@ -879,7 +879,7 @@ impl GreaseweazleBackend for ProcessGreaseweazleBackend {
 
         let audit_error = external_tools::append_audit(&self.audit_path, &audit).err();
         if let Some(error) = audit_error {
-            return Err(format!("A Greaseweazle parancsnapló nem írható: {error}"));
+            return Err(format!("Cannot write Greaseweazle command audit: {error}"));
         }
 
         Ok(GreaseweazleExecution {

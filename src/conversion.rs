@@ -146,25 +146,25 @@ pub(crate) fn build_conversion_plan_reserved(
 ) -> Result<ConversionPlanningResult, String> {
     if !request.extracted_root.is_dir() {
         return Err(format!(
-            "Az Extracted mappa nem található: {}",
+            "Extracted directory not found: {}",
             request.extracted_root.display()
         ));
     }
     fs::create_dir_all(&request.converted_root).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a Converted mappát {}: {error}",
+            "Cannot create Converted directory {}: {error}",
             request.converted_root.display()
         )
     })?;
     fs::create_dir_all(&request.reports_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a Reports mappát {}: {error}",
+            "Cannot create Reports directory {}: {error}",
             request.reports_directory.display()
         )
     })?;
 
     let mut disk_directories = fs::read_dir(&request.extracted_root)
-        .map_err(|error| format!("Nem olvasható az Extracted mappa: {error}"))?
+        .map_err(|error| format!("Cannot read Extracted directory: {error}"))?
         .filter_map(Result::ok)
         .filter(|entry| entry.path().is_dir())
         .filter_map(|entry| {
@@ -190,7 +190,7 @@ pub(crate) fn build_conversion_plan_reserved(
 
     for (disk_number, disk_directory) in disk_directories {
         send_stage(&format!(
-            "Lemez {disk_number:03} delivery útvonalainak tervezése..."
+            "Planning delivery paths for disk {disk_number:03}..."
         ));
         let Some((content_root, files)) =
             selected_recovered_files(&disk_directory, &request.reports_directory, disk_number)?
@@ -205,7 +205,7 @@ pub(crate) fn build_conversion_plan_reserved(
         for source in files {
             let forensic_path = source
                 .strip_prefix(&content_root)
-                .map_err(|error| format!("Forensic relatívútvonal-hiba: {error}"))?;
+                .map_err(|error| format!("Forensic relative-path error: {error}"))?;
             let forensic_text = forensic_path.to_string_lossy().replace('/', "\\");
             let (mut delivery_relative, mut recovery_method) = clean_delivery_path(forensic_path)?;
             if native_recovery
@@ -408,13 +408,14 @@ fn collect_files(root: &Path, skip_managed_children: bool) -> Result<Vec<PathBuf
     let mut files = Vec::new();
     while let Some(directory) = pending.pop() {
         for entry in fs::read_dir(&directory)
-            .map_err(|error| format!("Nem olvasható {}: {error}", directory.display()))?
+            .map_err(|error| format!("Cannot read {}: {error}", directory.display()))?
         {
-            let entry = entry.map_err(|error| format!("Hibás recovered bejegyzés: {error}"))?;
+            let entry =
+                entry.map_err(|error| format!("Invalid recovered directory entry: {error}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|error| format!("Nem olvasható fájltípus {}: {error}", path.display()))?;
+                .map_err(|error| format!("Cannot inspect file type {}: {error}", path.display()))?;
             if file_type.is_symlink() {
                 continue;
             }
@@ -497,7 +498,7 @@ fn clean_delivery_path(path: &Path) -> Result<(PathBuf, RecoveryMethod), String>
         clean.push("Unsorted-Recovery".into());
         clean.push(
             path.file_name()
-                .ok_or_else(|| "A recovered útvonalnak nincs fájlneve.".to_owned())?
+                .ok_or_else(|| "Recovered path has no filename.".to_owned())?
                 .to_os_string(),
         );
     }
@@ -528,7 +529,7 @@ fn collision_path(path: &Path, ordinal: usize) -> Result<PathBuf, String> {
     let stem = path
         .file_stem()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("Nem képezhető collision útvonal: {}", path.display()))?;
+        .ok_or_else(|| format!("Cannot build collision-safe path: {}", path.display()))?;
     let extension = path.extension().and_then(|value| value.to_str());
     let name = match extension {
         Some(extension) => format!("{stem} [recovered copy {ordinal}].{extension}"),
@@ -584,14 +585,14 @@ fn same_file_hash(path: &Path, expected_sha256: &str) -> Result<bool, String> {
 
 pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = fs::File::open(path)
-        .map_err(|error| format!("Nem nyitható meg hash-eléshez {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot open {} for hashing: {error}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
         crate::cancellation::check()?;
         let read = file
             .read(&mut buffer)
-            .map_err(|error| format!("Hash olvasási hiba {}: {error}", path.display()))?;
+            .map_err(|error| format!("Hash read error {}: {error}", path.display()))?;
         if read == 0 {
             break;
         }
@@ -614,7 +615,7 @@ fn write_path_map(path: &Path, rows: &[PathMapRow]) -> Result<(), String> {
             escape(&row.source_sha256)
         ));
     }
-    fs::write(path, csv).map_err(|error| format!("Nem írható {}: {error}", path.display()))
+    fs::write(path, csv).map_err(|error| format!("Cannot write {}: {error}", path.display()))
 }
 
 fn write_conversion_plan(path: &Path, rows: &[ConversionPlanRow]) -> Result<(), String> {
@@ -644,7 +645,7 @@ fn write_conversion_plan(path: &Path, rows: &[ConversionPlanRow]) -> Result<(), 
         );
         csv.push_str("\r\n");
     }
-    fs::write(path, csv).map_err(|error| format!("Nem írható {}: {error}", path.display()))
+    fs::write(path, csv).map_err(|error| format!("Cannot write {}: {error}", path.display()))
 }
 
 fn escape(value: &str) -> String {

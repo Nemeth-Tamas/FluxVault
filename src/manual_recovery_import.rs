@@ -81,17 +81,17 @@ pub(crate) fn import_manual_recovery(
     send_stage: &impl Fn(&str),
 ) -> Result<ManualRecoveryImportResult, String> {
     if request.disk_number == 0 {
-        return Err("A manual recovery import lemezszáma nem lehet nulla.".to_owned());
+        return Err("Manual recovery import disk number must be positive.".to_owned());
     }
     if !request.source_directory.is_dir() {
         return Err(format!(
-            "A recovered forrásmappa nem található: {}",
+            "Recovered source directory not found: {}",
             request.source_directory.display()
         ));
     }
     if !request.dmde_log_path.is_file() {
         return Err(format!(
-            "A DMDE napló nem található: {}",
+            "DMDE log not found: {}",
             request.dmde_log_path.display()
         ));
     }
@@ -106,14 +106,14 @@ pub(crate) fn import_manual_recovery(
     let output_directory = disk_directory.join("manual_recovery");
     if output_directory.exists() {
         return Err(format!(
-            "Ehhez a lemezhez már létezik manual recovery import: {}. Semmi nem került felülírásra.",
+            "A manual recovery import already exists for this disk: {}. Nothing overwritten.",
             output_directory.display()
         ));
     }
 
     fs::create_dir_all(&request.extracted_root).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni az Extracted mappát {}: {error}",
+            "Cannot create Extracted directory {}: {error}",
             request.extracted_root.display()
         )
     })?;
@@ -125,12 +125,12 @@ pub(crate) fn import_manual_recovery(
     ));
     fs::create_dir(&temporary_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni az ideiglenes import mappát {}: {error}",
+            "Cannot create temporary import directory {}: {error}",
             temporary_directory.display()
         )
     })?;
 
-    send_stage("Recovered fájlok másolása ideiglenes import mappába...");
+    send_stage("Copying recovered files into a temporary import directory...");
     let files = match copy_tree_with_inventory(&request.source_directory, &temporary_directory) {
         Ok(files) => files,
         Err(error) => {
@@ -140,12 +140,12 @@ pub(crate) fn import_manual_recovery(
     };
     if files.is_empty() {
         cleanup_temporary(&temporary_directory);
-        return Err("A kiválasztott recovered mappa nem tartalmaz fájlokat.".to_owned());
+        return Err("Selected recovery directory contains no files.".to_owned());
     }
     let file_count = files.len();
     let total_bytes = files.iter().map(|file| file.bytes).sum();
 
-    send_stage("DMDE napló és import provenance rögzítése...");
+    send_stage("Recording DMDE log and import provenance...");
     let imported_unix_ms = current_unix_ms()?;
     let evidence_directory = request
         .recovery_root
@@ -154,7 +154,7 @@ pub(crate) fn import_manual_recovery(
     if evidence_directory.exists() {
         cleanup_temporary(&temporary_directory);
         return Err(format!(
-            "Az import evidence mappa már létezik: {}",
+            "Import evidence directory already exists: {}",
             evidence_directory.display()
         ));
     }
@@ -182,7 +182,7 @@ pub(crate) fn import_manual_recovery(
     if let Err(error) = fs::write(&embedded_manifest, &manifest_json) {
         cleanup_temporary(&temporary_directory);
         return Err(format!(
-            "Nem sikerült kiírni az import provenance fájlt {}: {error}",
+            "Cannot write import provenance {}: {error}",
             embedded_manifest.display()
         ));
     }
@@ -190,36 +190,36 @@ pub(crate) fn import_manual_recovery(
     fs::create_dir_all(&disk_directory).map_err(|error| {
         cleanup_temporary(&temporary_directory);
         format!(
-            "Nem sikerült létrehozni a lemez extraction mappáját {}: {error}",
+            "Cannot create disk extraction directory {}: {error}",
             disk_directory.display()
         )
     })?;
-    send_stage("Manual recovery import atomikus előléptetése...");
+    send_stage("Atomically publishing manual recovery import...");
     if let Err(error) = fs::rename(&temporary_directory, &output_directory) {
         cleanup_temporary(&temporary_directory);
         return Err(format!(
-            "Nem sikerült előléptetni a manual recovery importot {}: {error}",
+            "Cannot publish manual recovery import {}: {error}",
             output_directory.display()
         ));
     }
 
     fs::create_dir_all(&evidence_directory).map_err(|error| {
         format!(
-            "A recovered fájlok importálva lettek, de az evidence mappa nem hozható létre {}: {error}",
+            "Recovered files imported, but evidence directory {} could not be created: {error}",
             evidence_directory.display()
         )
     })?;
     let copied_log_path = evidence_directory.join("dmde.log");
     fs::copy(&request.dmde_log_path, &copied_log_path).map_err(|error| {
         format!(
-            "A recovered fájlok importálva lettek, de a DMDE napló másolása sikertelen {}: {error}",
+            "Recovered files imported, but DMDE log {} could not be copied: {error}",
             copied_log_path.display()
         )
     })?;
     let manifest_path = evidence_directory.join("import_manifest.json");
     fs::write(&manifest_path, manifest_json).map_err(|error| {
         format!(
-            "A recovered fájlok importálva lettek, de az evidence manifest nem írható {}: {error}",
+            "Recovered files imported, but evidence manifest {} could not be written: {error}",
             manifest_path.display()
         )
     })?;
@@ -237,7 +237,7 @@ pub(crate) fn import_manual_recovery(
 fn reject_source_inside_project(request: &ManualRecoveryImportRequest) -> Result<(), String> {
     let source = request.source_directory.canonicalize().map_err(|error| {
         format!(
-            "Nem oldható fel a recovered forrásmappa {}: {error}",
+            "Cannot resolve recovered source directory {}: {error}",
             request.source_directory.display()
         )
     })?;
@@ -246,7 +246,7 @@ fn reject_source_inside_project(request: &ManualRecoveryImportRequest) -> Result
             && source.starts_with(&destination)
         {
             return Err(format!(
-                "A recovered forrásmappa nem lehet a FluxVault célmappán belül: {}",
+                "Recovered source directory must be outside the FluxVault destination: {}",
                 source.display()
             ));
         }
@@ -264,29 +264,30 @@ fn copy_tree_with_inventory(
     while let Some(directory) = pending.pop() {
         let relative_directory = directory
             .strip_prefix(source)
-            .map_err(|error| format!("Recovered mappa relatívútvonal-hiba: {error}"))?;
+            .map_err(|error| format!("Recovered directory relative-path error: {error}"))?;
         let destination_directory = destination.join(relative_directory);
         fs::create_dir_all(&destination_directory).map_err(|error| {
             format!(
-                "Nem sikerült létrehozni az import almappát {}: {error}",
+                "Cannot create import subdirectory {}: {error}",
                 destination_directory.display()
             )
         })?;
 
         for entry in fs::read_dir(&directory).map_err(|error| {
             format!(
-                "Nem sikerült beolvasni a recovered mappát {}: {error}",
+                "Cannot read recovered directory {}: {error}",
                 directory.display()
             )
         })? {
-            let entry = entry.map_err(|error| format!("Hibás recovered bejegyzés: {error}"))?;
+            let entry =
+                entry.map_err(|error| format!("Invalid recovered directory entry: {error}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|error| format!("Nem olvasható fájltípus {}: {error}", path.display()))?;
+                .map_err(|error| format!("Cannot inspect file type {}: {error}", path.display()))?;
             if file_type.is_symlink() {
                 return Err(format!(
-                    "Szimbolikus link/reparse pont nem importálható: {}",
+                    "Cannot import a symlink/reparse point: {}",
                     path.display()
                 ));
             }
@@ -295,19 +296,16 @@ fn copy_tree_with_inventory(
                 continue;
             }
             if !file_type.is_file() {
-                return Err(format!(
-                    "Nem támogatott recovered bejegyzés: {}",
-                    path.display()
-                ));
+                return Err(format!("Unsupported recovered entry: {}", path.display()));
             }
 
             let relative_path = path
                 .strip_prefix(source)
-                .map_err(|error| format!("Recovered fájl relatívútvonal-hiba: {error}"))?;
+                .map_err(|error| format!("Recovered file relative-path error: {error}"))?;
             let destination_path = destination.join(relative_path);
             fs::copy(&path, &destination_path).map_err(|error| {
                 format!(
-                    "Recovered fájl másolási hiba {} -> {}: {error}",
+                    "Recovered file copy failed {} -> {}: {error}",
                     path.display(),
                     destination_path.display()
                 )
@@ -315,7 +313,7 @@ fn copy_tree_with_inventory(
             let bytes = fs::metadata(&destination_path)
                 .map_err(|error| {
                     format!(
-                        "Nem olvasható import metadata {}: {error}",
+                        "Cannot read import metadata {}: {error}",
                         destination_path.display()
                     )
                 })?
@@ -334,13 +332,13 @@ fn copy_tree_with_inventory(
 
 fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = fs::File::open(path)
-        .map_err(|error| format!("Nem nyitható meg hash-eléshez {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot open {} for hashing: {error}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
         let read = file
             .read(&mut buffer)
-            .map_err(|error| format!("Hash olvasási hiba {}: {error}", path.display()))?;
+            .map_err(|error| format!("Hash read error {}: {error}", path.display()))?;
         if read == 0 {
             break;
         }
@@ -362,9 +360,9 @@ fn cleanup_temporary(path: &Path) {
 fn current_unix_ms() -> Result<u64, String> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Rendszeridő hiba: {error}"))?
+        .map_err(|error| format!("System clock error: {error}"))?
         .as_millis();
-    u64::try_from(millis).map_err(|_| "A rendszeridő túl nagy.".to_owned())
+    u64::try_from(millis).map_err(|_| "System clock value is too large.".to_owned())
 }
 
 #[cfg(test)]
@@ -415,7 +413,7 @@ mod tests {
         assert!(result.manifest_path.is_file());
 
         let second = import_manual_recovery(&request, &|_| {}).unwrap_err();
-        assert!(second.contains("már létezik"));
+        assert!(second.contains("already exists"));
         assert_eq!(
             fs::read(result.output_directory.join("$Root").join("document.doc")).unwrap(),
             b"recovered"

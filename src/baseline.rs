@@ -17,6 +17,9 @@ use std::{
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRIES: usize = 100_000;
+#[path = "baseline_review.rs"]
+mod review;
+pub use review::inspect as review_evidence;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Payload {

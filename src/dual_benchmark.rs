@@ -256,7 +256,7 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
         let mut ended = false;
         let mut feed = None;
         let mut labels = BTreeSet::new();
-        let mut starts: BTreeMap<u64, (u64, u32, String)> = BTreeMap::new();
+        let mut starts: BTreeMap<u64, (u64, u32, String, Value)> = BTreeMap::new();
         let mut generations = BTreeSet::new();
         let mut intervals = Vec::new();
         let mut paused_at = None;
@@ -335,8 +335,18 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                         || feed.is_some()
                         || generation == 0
                         || !generations.insert(generation)
-                        || starts.values().any(|(_, _, old)| *old == s)
-                        || starts.insert(generation, (time, disk, s)).is_some()
+                        || starts.values().any(|(_, _, old, _)| *old == s)
+                        || starts
+                            .insert(
+                                generation,
+                                (
+                                    time,
+                                    disk,
+                                    s,
+                                    json!({"work":e.data["work"],"retry":e.data["retry"]}),
+                                ),
+                            )
+                            .is_some()
                     {
                         return Err("Duplicated/invalid dual reader ticket".into());
                     }
@@ -356,7 +366,7 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                 }
                 "dual_receipt_saved" | "dual_read_failed" => {
                     let generation = number(&e.data, "generation")?;
-                    let (start, disk, s) = starts
+                    let (start, disk, s, work) = starts
                         .remove(&generation)
                         .ok_or("Dual result without matching start")?;
                     if number(&e.data, "disk")? != disk as u64 || station(&e.data)? != s {
@@ -401,7 +411,10 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                         }
                         let receipt = (disk, s.clone(), attempt);
                         if receipts.insert(receipt, sha.into()).is_none() {
-                            timings.push(e.data.clone());
+                            let mut timing = e.data.clone();
+                            timing["work"] = work["work"].clone();
+                            timing["retry"] = work["retry"].clone();
+                            timings.push(timing);
                         }
                         labels.insert(disk);
                     }
@@ -423,7 +436,7 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                         || disk >= u32::MAX as u64
                         || station(&e.data)? != "GW"
                         || e.data["rejected_evidence_preserved"] != true
-                        || starts.values().any(|(_, _, s)| s == "GW")
+                        || starts.values().any(|(_, _, s, _)| s == "GW")
                         || feed.is_some()
                     {
                         return Err("Invalid/misplaced dual identity release".into());
@@ -436,7 +449,7 @@ pub fn report(project: &ProjectState) -> Result<Value, String> {
                     );
                 }
                 "dual_same_disk_confirmed" => {
-                    if starts.values().any(|(_, _, s)| s == "GW") || feed.is_some() {
+                    if starts.values().any(|(_, _, s, _)| s == "GW") || feed.is_some() {
                         return Err("Misplaced dual same-disk confirmation".into());
                     }
                     same_disk_event(&e.data)?;

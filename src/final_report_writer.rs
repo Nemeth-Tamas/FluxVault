@@ -322,7 +322,8 @@ pub(super) fn publish(
                     None
                 };
                 // Always literal strings: no customer path/text becomes an Excel formula.
-                let value = excel_text(value, language);
+                let value = crate::customer_language::cell(language, &headers[col], value);
+                let value = excel_text(&value, language);
                 if let Some(style) = style {
                     sheet
                         .write_string_with_format(row as u32 + 1, col as u16, &value, style)
@@ -392,6 +393,19 @@ pub(super) fn publish(
         text.push_str(&format!("{name}: {value}\n"));
     }
     if !document.floppies.is_empty() {
+        text.push_str(&format!(
+            "\n{}\n",
+            language.text("ÜGYFÉLNEK SZÓLÓ FIGYELMEZTETÉSEK", "CUSTOMER WARNINGS")
+        ));
+        for disk in &document.floppies {
+            for issue in &disk.issues {
+                text.push_str(&format!(
+                    "{}: {}\n",
+                    disk.floppy,
+                    crate::customer_language::warning_summary(language, issue)
+                ));
+            }
+        }
         text.push_str(&format!(
             "\n{}\n",
             language.text(

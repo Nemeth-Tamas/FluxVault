@@ -14,6 +14,19 @@ DESCRIPTION
       fv recovery ranges N [--attempt N]
       fv storage benchmark N [--capture-attempt N]
       fv benchmark legacy --baseline ZIP
+      fv benchmark review N --baseline ZIP [--json]
+      fv recovery crc-check N|all [--json]
+    Optional strict derived-image creation:
+      fv recovery crc-composite N [--json]
+    CRC checks validate saved observed GW bytes, not physical identity or
+    file completeness. Missing/unconfirmed/conflicting observations remain
+    explicit; USB-only labels are not applicable. Strict composites refuse
+    unqualified GW donors and publish immutable CRC proof. No automatic pin.
+    Review classifies historical candidates/compound-stream differences;
+    unknown ownership and missing placeholder bytes are not recovered files.
+    Material expert mutations refresh audit/workbook automatically. Pending
+    refresh after interruption is visible in status; process reconciles it.
+    Existing finished archives remain historical snapshots.
     Expert-only other-format/selected-track operations:
       fv greaseweazle expert capture N --format NAME [--diskdefs FILE]
         [--cylinders 0-79] [--heads 0|1|both] [--step 1|2]

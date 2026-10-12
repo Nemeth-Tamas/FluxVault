@@ -107,13 +107,13 @@ pub(crate) fn run_composite(
     send_stage: &impl Fn(&str),
 ) -> Result<CompositeResult, String> {
     if request.disk_number == 0 {
-        return Err("A kompozit lemezszáma nem lehet nulla.".to_owned());
+        return Err("Composite disk number must be positive.".to_owned());
     }
     if request.sources.len() < 2 {
-        return Err("Kompozit képhez legalább két acquisition próbálkozás szükséges.".to_owned());
+        return Err("Composite requires at least two acquisition attempts.".to_owned());
     }
 
-    send_stage("Forráspróbálkozások read-only ellenőrzése és hash-elése...");
+    send_stage("Verifying and hashing source attempts read-only...");
     let mut loaded = Vec::with_capacity(request.sources.len());
     let mut attempt_numbers = BTreeSet::new();
 
@@ -132,39 +132,39 @@ pub(crate) fn run_composite(
         )?;
         if !attempt_numbers.insert(source.attempt_number) {
             return Err(format!(
-                "A(z) {:03} próbálkozás többször szerepel a kompozit forrásai között.",
+                "Attempt {:03} occurs more than once in composite sources.",
                 source.attempt_number
             ));
         }
         if source.total_sectors == 0 {
             return Err(format!(
-                "A(z) {:03} próbálkozás szektorszáma nulla.",
+                "Attempt {:03} has zero sectors.",
                 source.attempt_number
             ));
         }
 
         let metadata = fs::symlink_metadata(&source.image_path).map_err(|error| {
             format!(
-                "Nem vizsgálható a forráskép {}: {error}",
+                "Cannot inspect source image {}: {error}",
                 source.image_path.display()
             )
         })?;
         if !metadata.file_type().is_file() {
             return Err(format!(
-                "A kompozit forrása nem közvetlen, szabályos fájl: {}",
+                "Composite source is not a regular, unlinked file: {}",
                 source.image_path.display()
             ));
         }
         if metadata.len() > 64 * 1024 * 1024 {
             return Err(format!(
-                "A kompozit forrása meghaladja a 64 MiB offline floppy méretkorlátot: {}",
+                "Composite source exceeds the 64 MiB offline floppy bound: {}",
                 source.image_path.display()
             ));
         }
 
         let bytes = fs::read(&source.image_path).map_err(|error| {
             format!(
-                "Nem sikerült read-only módban beolvasni a forrásképet {}: {error}",
+                "Cannot read source image {} read-only: {error}",
                 source.image_path.display()
             )
         })?;
@@ -175,7 +175,7 @@ pub(crate) fn run_composite(
             .is_some_and(|expected| !sha256.eq_ignore_ascii_case(expected))
         {
             return Err(format!(
-                "A(z) {:03} próbálkozás forrásképe eltér a rögzített SHA-256 értéktől: {}",
+                "Attempt {:03} source differs from its recorded SHA-256: {}",
                 source.attempt_number,
                 source.image_path.display()
             ));
@@ -184,7 +184,7 @@ pub(crate) fn run_composite(
         let bad_sectors = source.bad_sectors.iter().copied().collect::<BTreeSet<_>>();
         if bad_sectors.len() != source.bad_sectors.len() {
             return Err(format!(
-                "A(z) {:03} próbálkozás hibás LBA listája ismétlődő értéket tartalmaz.",
+                "Attempt {:03} bad-sector map contains duplicate LBAs.",
                 source.attempt_number
             ));
         }
@@ -208,21 +208,21 @@ pub(crate) fn run_composite(
     let image_length = loaded[0].bytes.len();
 
     if image_length % total_sectors != 0 {
-        return Err("A báziskép mérete nem osztható a rögzített szektorszámmal.".to_owned());
+        return Err("Base image size is not divisible by the recorded sector count.".to_owned());
     }
 
     let bytes_per_sector = image_length / total_sectors;
 
     if !matches!(bytes_per_sector, 128 | 256 | 512 | 1024 | 2048 | 4096) {
         return Err(format!(
-            "A számított szektorméret nem támogatott: {bytes_per_sector} bájt."
+            "Unsupported calculated sector size: {bytes_per_sector} bytes."
         ));
     }
 
     for source in &loaded {
         if source.source.total_sectors != total_sectors || source.bytes.len() != image_length {
             return Err(format!(
-                "A(z) {:03} próbálkozás geometriája vagy mérete eltér a bázisképtől.",
+                "Attempt {:03} geometry or size differs from the base image.",
                 source.source.attempt_number
             ));
         }
@@ -233,7 +233,7 @@ pub(crate) fn run_composite(
             .any(|lba| *lba >= total_sectors as u64)
         {
             return Err(format!(
-                "A(z) {:03} próbálkozás hibás LBA listája a képen kívüli értéket tartalmaz.",
+                "Attempt {:03} bad-sector map contains an out-of-range LBA.",
                 source.source.attempt_number
             ));
         }
@@ -252,7 +252,7 @@ pub(crate) fn run_composite(
             if let Some(first) = first_good {
                 if first.bytes[start..end] != source.bytes[start..end] {
                     return Err(format!(
-                        "A(z) {lba} LBA mindkét próbálkozásban olvasható, de eltér: #{:03} és #{:03}. A képek nem kombinálhatók biztonságosan.",
+                        "Readable LBA {lba} differs between attempts #{:03} and #{:03}. Images cannot be safely combined.",
                         first.source.attempt_number, source.source.attempt_number
                     ));
                 }
@@ -268,7 +268,7 @@ pub(crate) fn run_composite(
     let mut replacements = Vec::new();
     let mut unresolved_bad_sectors = Vec::new();
 
-    send_stage("Olvasható szektorok keresése a többi próbálkozásban...");
+    send_stage("Finding readable donor sectors in other attempts...");
 
     for target_lba in base.bad_sectors.iter().copied() {
         let replacement_source = loaded
@@ -307,7 +307,7 @@ pub(crate) fn run_composite(
         });
     }
 
-    send_stage("Külön származtatott kompozit kép és provenance készítése...");
+    send_stage("Publishing a separate derived composite image and provenance...");
     let derived_sha256 = sha256_bytes(&derived_bytes);
     let disk_directory = request
         .recovery_root
@@ -344,7 +344,7 @@ pub(crate) fn run_composite(
     }
     fs::create_dir_all(&disk_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a recovery mappát {}: {error}",
+            "Cannot create recovery directory {}: {error}",
             disk_directory.display()
         )
     })?;
@@ -377,12 +377,12 @@ pub(crate) fn run_composite(
             .to_owned(),
     };
     let provenance_json = serde_json::to_vec_pretty(&provenance)
-        .map_err(|error| format!("Kompozit provenance JSON hiba: {error}"))?;
+        .map_err(|error| format!("Composite provenance JSON error: {error}"))?;
     write_new_file(&partial_provenance, &provenance_json)?;
 
     fs::rename(&partial_image, &final_image).map_err(|error| {
         format!(
-            "A kompozit kép előléptetése sikertelen {}: {error}",
+            "Cannot publish composite image {}: {error}",
             final_image.display()
         )
     })?;
@@ -390,7 +390,7 @@ pub(crate) fn run_composite(
     if let Err(error) = fs::rename(&partial_provenance, &final_provenance) {
         let _ = fs::rename(&final_image, &partial_image);
         return Err(format!(
-            "A kompozit provenance előléptetése sikertelen {}: {error}",
+            "Cannot publish composite provenance {}: {error}",
             final_provenance.display()
         ));
     }
@@ -511,16 +511,16 @@ fn copy_sector(
     let start = usize::try_from(lba)
         .ok()
         .and_then(|value| value.checked_mul(bytes_per_sector))
-        .ok_or_else(|| "Kompozit szektor offset túlcsordulás.".to_owned())?;
+        .ok_or_else(|| "Composite sector offset overflow.".to_owned())?;
     let end = start
         .checked_add(bytes_per_sector)
-        .ok_or_else(|| "Kompozit szektor vége túlcsordulás.".to_owned())?;
+        .ok_or_else(|| "Composite sector end offset overflow.".to_owned())?;
     let source_sector = source
         .get(start..end)
-        .ok_or_else(|| "A donor szektor kívül esik a forrásképen.".to_owned())?;
+        .ok_or_else(|| "Donor sector is outside the source image.".to_owned())?;
     let target_sector = target
         .get_mut(start..end)
-        .ok_or_else(|| "A cél szektor kívül esik a kompozit képen.".to_owned())?;
+        .ok_or_else(|| "Target sector is outside the composite image.".to_owned())?;
     target_sector.copy_from_slice(source_sector);
     Ok(())
 }
@@ -530,11 +530,11 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|error| format!("Nem sikerült létrehozni {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot create {}: {error}", path.display()))?;
     file.write_all(bytes)
-        .map_err(|error| format!("Nem sikerült írni {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot write {}: {error}", path.display()))?;
     file.sync_all()
-        .map_err(|error| format!("Nem sikerült szinkronizálni {}: {error}", path.display()))
+        .map_err(|error| format!("Cannot synchronize {}: {error}", path.display()))
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {
@@ -744,7 +744,7 @@ mod tests {
         assert!(
             run_composite(&request, &|_| {})
                 .unwrap_err()
-                .contains("nem kombinálhatók")
+                .contains("cannot be safely combined")
         );
         assert!(!request.recovery_root.exists());
         fs::remove_dir_all(root).unwrap();

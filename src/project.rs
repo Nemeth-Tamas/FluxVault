@@ -64,7 +64,7 @@ impl ProjectState {
         crate::safety::workstation_path(&ancestor.canonicalize().map_err(|e| e.to_string())?)?;
         fs::create_dir_all(&root).map_err(|error| {
             format!(
-                "Nem sikerült létrehozni a projektmappát {}: {error}",
+                "Cannot create project directory {}: {error}",
                 root.display()
             )
         })?;
@@ -73,7 +73,7 @@ impl ProjectState {
 
         if project_file.exists() {
             return Err(format!(
-                "Ebben a mappában már létezik FluxVault projekt: {}",
+                "A FluxVault project already exists here: {}",
                 project_file.display()
             ));
         }
@@ -83,7 +83,7 @@ impl ProjectState {
 
             fs::create_dir_all(&path).map_err(|error| {
                 format!(
-                    "Nem sikerült létrehozni a projekt könyvtárát {}: {error}",
+                    "Cannot create project subdirectory {}: {error}",
                     path.display()
                 )
             })?;
@@ -125,7 +125,7 @@ impl ProjectState {
             .and_then(|f| f.take(MAX_METADATA_BYTES + 1).read_to_end(&mut json))
             .map_err(|error| {
                 format!(
-                    "Nem sikerült megnyitni a projektfájlt {}: {error}",
+                    "Cannot open project file {}: {error}",
                     project_file.display()
                 )
             })?;
@@ -135,14 +135,14 @@ impl ProjectState {
 
         let mut metadata: ProjectMetadata = serde_json::from_slice(&json).map_err(|error| {
             format!(
-                "Hibás FluxVault projektfájl {}: {error}",
+                "Invalid FluxVault project file {}: {error}",
                 project_file.display()
             )
         })?;
 
         if metadata.schema_version != PROJECT_SCHEMA_VERSION {
             return Err(format!(
-                "Nem támogatott projektséma: {}. A program ezt támogatja: {}.",
+                "Unsupported project schema: {}. Supported schema: {}.",
                 metadata.schema_version, PROJECT_SCHEMA_VERSION
             ));
         }
@@ -158,7 +158,7 @@ impl ProjectState {
         self.metadata.updated_unix_ms = current_unix_ms()?;
 
         let json = serde_json::to_string_pretty(&self.metadata)
-            .map_err(|error| format!("Projekt JSON generálási hiba: {error}"))?;
+            .map_err(|error| format!("Project JSON serialization error: {error}"))?;
         if json.len() as u64 > MAX_METADATA_BYTES {
             return Err("Project metadata exceeds 64 KiB".into());
         }
@@ -297,9 +297,9 @@ fn regular_metadata(path: &Path) -> Result<(), String> {
 fn current_unix_ms() -> Result<u64, String> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Rendszeridő hiba: {error}"))?;
+        .map_err(|error| format!("System clock error: {error}"))?;
 
-    u64::try_from(duration.as_millis()).map_err(|_| "A rendszeridő értéke túl nagy.".to_owned())
+    u64::try_from(duration.as_millis()).map_err(|_| "System clock value is too large.".to_owned())
 }
 
 #[cfg(test)]

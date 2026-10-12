@@ -228,13 +228,13 @@ fn run_imaging(
     MediaSafetyPolicy::assert_invariants();
 
     if disk_number == 0 {
-        return Err("A lemezszám nem lehet 000.".to_owned());
+        return Err("Disk number must not be 000.".to_owned());
     }
 
     if !geometry.looks_like_floppy() {
         return Err(format!(
-            "A(z) {} meghajto geometriája nem tunik floppy geometrianak. \
-             A teljes kepkeszites biztonsagi okbol megtagadva.",
+            "Drive {} does not report floppy geometry. \
+             Full acquisition refused for safety.",
             drive.root
         ));
     }
@@ -728,15 +728,15 @@ fn run_imaging(
 
     log_output
         .write_all(human_log_text.as_bytes())
-        .map_err(|error| format!("Napló írási hiba: {error}"))?;
+        .map_err(|error| format!("Log write error: {error}"))?;
 
     log_output
         .flush()
-        .map_err(|error| format!("Napló flush hiba: {error}"))?;
+        .map_err(|error| format!("Log flush error: {error}"))?;
 
     log_output
         .sync_all()
-        .map_err(|error| format!("Napló sync hiba: {error}"))?;
+        .map_err(|error| format!("Log sync error: {error}"))?;
 
     drop(log_output);
 
@@ -922,15 +922,11 @@ pub(crate) fn load_unselected_attempts(
     let prefix = format!("{disk_number:03}_attempt_");
     let mut attempts = Vec::new();
 
-    let entries = fs::read_dir(directory).map_err(|error| {
-        format!(
-            "Nem sikerült megvizsgálni a(z) {} mappát: {error}",
-            directory.display()
-        )
-    })?;
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("Cannot inspect directory {}: {error}", directory.display()))?;
 
     for entry in entries {
-        let entry = entry.map_err(|error| format!("Hibás captures mappa bejegyzés: {error}"))?;
+        let entry = entry.map_err(|error| format!("Invalid capture directory entry: {error}"))?;
 
         let path = entry.path();
 
@@ -945,15 +941,11 @@ pub(crate) fn load_unselected_attempts(
             continue;
         }
 
-        let json = fs::read_to_string(&path).map_err(|error| {
-            format!(
-                "Nem sikerült beolvasni a metadata fájlt {}: {error}",
-                path.display()
-            )
-        })?;
+        let json = fs::read_to_string(&path)
+            .map_err(|error| format!("Cannot read metadata file {}: {error}", path.display()))?;
 
         let metadata: AcquisitionMetadata = serde_json::from_str(&json)
-            .map_err(|error| format!("Hibás metadata JSON {}: {error}", path.display()))?;
+            .map_err(|error| format!("Invalid metadata JSON {}: {error}", path.display()))?;
 
         if metadata.disk_number != disk_number {
             continue;
@@ -1019,7 +1011,7 @@ fn load_legacy_attempt(
 ) -> Result<Option<AttemptSummary>, String> {
     let disk_stem = format!("{disk_number:03}");
     let mut candidates = fs::read_dir(directory)
-        .map_err(|error| format!("Nem sikerült megvizsgálni a legacy képeket: {error}"))?
+        .map_err(|error| format!("Cannot inspect legacy images: {error}"))?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
@@ -1066,7 +1058,7 @@ fn load_legacy_attempt(
     };
     let image_metadata = fs::metadata(&image_path).map_err(|error| {
         format!(
-            "Nem olvasható a legacy lemezkép metadata {}: {error}",
+            "Cannot read legacy image metadata {}: {error}",
             image_path.display()
         )
     })?;
@@ -1245,17 +1237,14 @@ pub fn load_project_statistics(directory: &Path) -> Result<ProjectStatistics, St
         return Ok(statistics);
     }
 
-    let entries = fs::read_dir(directory).map_err(|error| {
-        format!(
-            "Nem sikerült megvizsgálni a(z) {} mappát: {error}",
-            directory.display()
-        )
-    })?;
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("Cannot inspect directory {}: {error}", directory.display()))?;
 
     let mut disk_numbers = BTreeSet::new();
 
     for entry in entries {
-        let entry = entry.map_err(|error| format!("Hibás acquisition mappa bejegyzés: {error}"))?;
+        let entry =
+            entry.map_err(|error| format!("Invalid acquisition directory entry: {error}"))?;
         let path = entry.path();
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;

@@ -203,7 +203,7 @@ pub(super) fn run_advanced(
                 exit_code: 3,
             })
         }
-        "composite" => {
+        "composite" | "crc-composite" => {
             let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
             if attempts.len() < 2 {
                 return Err("Composite requires at least two saved attempts".to_owned());
@@ -230,6 +230,46 @@ pub(super) fn run_advanced(
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
+            let crc_proof = if positional[1] == "crc-composite" {
+                let proof = crate::flux_crc::inspect_owned(project, disk_number)?;
+                if proof["all_reported_good_bytes_independently_validated"] != true {
+                    return Err("Independent flux CRC gate refused: unconfirmed/conflicting GW sectors; no composite created".into());
+                }
+                let mut flux_count = 0;
+                for attempt in &attempts {
+                    crate::sector_inspection::regular(&attempt.metadata_path, false)?;
+                    if std::fs::metadata(&attempt.metadata_path)
+                        .map_err(|e| e.to_string())?
+                        .len()
+                        > 1024 * 1024
+                    {
+                        return Err("Strict CRC source metadata exceeds bound".into());
+                    }
+                    let metadata: serde_json::Value = serde_json::from_slice(
+                        &std::fs::read(&attempt.metadata_path).map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if metadata["source_backend"] == "offline-recovery-derived" {
+                        return Err("Strict CRC composite accepts original USB attempts and the independently verified current GW catalog image; offline inferred sources are not admitted".into());
+                    }
+                    if metadata["source_backend"] == "greaseweazle-derived"
+                        || metadata.get("flux_provenance").is_some()
+                    {
+                        flux_count += 1;
+                        if metadata["sha256"] != proof["image_sha256"]
+                            || metadata["disk_number"] != disk_number
+                        {
+                            return Err("CRC proof does not bind every selected GW catalog image; no composite created".into());
+                        }
+                    }
+                }
+                if flux_count == 0 {
+                    return Err("Strict CRC composite requires a committed, independently verified GW source".into());
+                }
+                Some(proof)
+            } else {
+                None
+            };
             let result = composite::run_composite(
                 &CompositeRequest {
                     images_directory: project.images_dir(),
@@ -239,6 +279,65 @@ pub(super) fn run_advanced(
                 },
                 &|stage| eprintln!("{stage}"),
             )?;
+            let crc_sidecar = if let (Some(proof), Some(provenance)) =
+                (&crc_proof, &result.provenance_path)
+            {
+                let value = json!({"schema_version":1,"scope":"independent_gw_donor_crc_gate_not_USB_crc_or_semantic_certification",
+                    "composite_sha256":result.derived_sha256,"composite_provenance_sha256":crate::conversion::sha256_file(provenance)?,"proof":proof});
+                let bytes = serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?;
+                let parent = provenance
+                    .parent()
+                    .ok_or("Missing composite parent")?
+                    .canonicalize()
+                    .map_err(|e| e.to_string())?;
+                let directory = parent.join("CRC");
+                if !directory.try_exists().map_err(|e| e.to_string())? {
+                    std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
+                }
+                crate::sector_inspection::regular(&directory, true)?;
+                if directory
+                    .canonicalize()
+                    .map_err(|e| e.to_string())?
+                    .parent()
+                    != Some(parent.as_path())
+                {
+                    return Err("Composite CRC output escapes recovery directory".into());
+                }
+                let path = directory.join(provenance.file_name().ok_or("Invalid composite name")?);
+                match std::fs::symlink_metadata(&path) {
+                    Ok(_) => {
+                        crate::sector_inspection::regular(&path, false)?;
+                        if std::fs::read(&path).map_err(|e| e.to_string())? != bytes {
+                            return Err(
+                                "Immutable composite CRC proof changed; existing evidence retained"
+                                    .into(),
+                            );
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        use std::io::Write;
+                        let partial = path.with_extension(format!(
+                            "{}-{}.partial",
+                            std::process::id(),
+                            crate::external_tools::current_unix_ms()
+                        ));
+                        let mut file = std::fs::OpenOptions::new()
+                            .create_new(true)
+                            .write(true)
+                            .open(&partial)
+                            .map_err(|e| e.to_string())?;
+                        file.write_all(&bytes)
+                            .and_then(|_| file.sync_all())
+                            .map_err(|e| e.to_string())?;
+                        drop(file);
+                        crate::flux_recovery::publish_image_no_replace(&partial, &path)?;
+                    }
+                    Err(e) => return Err(e.to_string()),
+                }
+                Some(path)
+            } else {
+                None
+            };
             Ok(CliResponse {
                 output: if json_output {
                     json!({
@@ -248,7 +347,8 @@ pub(super) fn run_advanced(
                         "provenance": result.provenance_path,
                         "reused": result.reused,
                         "replacements": result.replacements,
-                        "unresolved_bad_sectors": result.unresolved_bad_sectors
+                        "unresolved_bad_sectors": result.unresolved_bad_sectors,
+                        "independent_crc_proof":crc_proof,"crc_sidecar":crc_sidecar
                     })
                     .to_string()
                 } else {

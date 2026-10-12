@@ -41,6 +41,8 @@ pub struct FormatDecision {
     pub initial_profile_hint: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_profile_hint_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub independent_mfm_discovery: Option<serde_json::Value>,
 }
 
 // This is only an ordering hint, never a format/CRC certificate. Flux/BPB
@@ -286,6 +288,29 @@ pub fn identify(
         }
     }
     let (selected_profile, reason) = select(&candidates);
+    let independent_mfm_discovery = if selected_profile.is_none() {
+        progress(
+            "Supported profiles remain ambiguous; inspecting saved IBM MFM IDs/sizes (no extra physical read, no inferred image)",
+        );
+        let source = crate::flux_archive::open_source(
+            capture
+                .raw_flux
+                .as_ref()
+                .ok_or("Missing discovery raw path")?,
+            capture.bytes.ok_or("Missing discovery size")?,
+            &source_sha256,
+        )?;
+        let mut file = fs::File::open(&source.path).map_err(|e| e.to_string())?;
+        let value = crate::mfm_evidence::observe_geometry(&mut file, capture.bytes.unwrap());
+        crate::flux_archive::verify(
+            capture.raw_flux.as_ref().unwrap(),
+            capture.bytes.unwrap(),
+            &source_sha256,
+        )?;
+        Some(value)
+    } else {
+        None
+    };
     let decision = FormatDecision {
         schema_version: 1,
         disk,
@@ -297,6 +322,7 @@ pub fn identify(
         physical_media_access: false,
         initial_profile_hint,
         initial_profile_hint_error,
+        independent_mfm_discovery,
     };
     let flux = flux_capture::project_flux_dir(project)?;
     let directory = flux.join("Formats");

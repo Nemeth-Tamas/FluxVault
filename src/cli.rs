@@ -51,6 +51,8 @@ Usage:
   fluxvault init [path]             Create a project
   fluxvault status [--project PATH] Show project status
   fluxvault benchmark report [--project PATH]
+  fluxvault benchmark review N --baseline ZIP [--json]
+                                    Classify archived candidates against saved live chains
                                     Export recorded pilot timings and recovery outcomes offline
   fluxvault benchmark compare --baseline ZIP [--include-deleted] [--project PATH]
                                     Compare recovered source payloads with a script archive offline
@@ -156,6 +158,10 @@ Usage:
                                     Review damaged files and disputed bytes offline; no writes
                                     Map missing/disputed sectors to live files and filesystem regions
   fluxvault recovery trace N PATH [--attempt N] [--json]
+  fluxvault recovery crc-check N|all [--json]
+                                    Independently verify saved GW ID/data CRC and bytes
+  fluxvault recovery crc-composite N [--json]
+                                    Composite only after independent GW byte proof
                                     Trace a live FAT file's ordered bytes and metadata to saved sectors
   fluxvault recovery backup N [--project PATH]
                                     Create/reuse immutable pass-1 evidence backup
@@ -304,6 +310,12 @@ fn json_error(message: &str) -> String {
 }
 
 pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
+    run_inner(args, cwd)
+}
+
+mod mutation_audit;
+pub(crate) use mutation_audit::clear_after_audit;
+fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     // Help must never become an init path (or trigger tools/media access).
     if args
         .iter()
@@ -664,6 +676,46 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     let sector_inspector =
         positional.len() == 3 && positional[0] == "recovery" && positional[1] == "sector";
+    if positional.len() == 3 && positional[..2] == ["benchmark", "review"] {
+        if args
+            .iter()
+            .filter(|a| a.starts_with("--"))
+            .any(|a| !matches!(a.as_str(), "--baseline" | "--project" | "--json"))
+        {
+            return Err("benchmark review accepts only --baseline, --project and --json".into());
+        }
+        let disk = positional[2]
+            .parse::<u32>()
+            .ok()
+            .filter(|n| *n > 0)
+            .ok_or("benchmark review needs a positive label")?;
+        let source = baseline_zip
+            .as_deref()
+            .ok_or("benchmark review requires --baseline ZIP")?;
+        let source = if source.is_absolute() {
+            source.to_owned()
+        } else {
+            cwd.join(source)
+        };
+        let project = ProjectState::open_without_session(resolve_project_root(
+            cwd,
+            project_override.as_deref(),
+        )?)?;
+        let result = crate::baseline::review_evidence(&project, &source, disk)?;
+        return Ok(CliResponse {
+            exit_code: 3,
+            output: if json_output {
+                result.to_string()
+            } else {
+                format!(
+                    "Disk {disk:03}: {} archived candidates reviewed against saved acquisition/live chains.\nDifferent image bytes: {}. Historical acquisition map bound: {}.\nUse --json for exact classifications, CFB stream differences and byte observations. No physical media, tools, project/archive writes or guessed recovery.",
+                    result["candidates"].as_array().map_or(0, Vec::len),
+                    result["same_image_bytes"] == false,
+                    result["reference_acquisition_map_bound"]
+                )
+            },
+        });
+    }
     if positional == ["benchmark", "legacy"] {
         if args
             .iter()
@@ -705,7 +757,10 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     let evidence_impact = positional.first().is_some_and(|s| s == "recovery")
         && (positional.len() == 3
-            && matches!(positional[1].as_str(), "impact" | "investigate" | "ranges")
+            && matches!(
+                positional[1].as_str(),
+                "impact" | "investigate" | "ranges" | "crc-check"
+            )
             || positional.len() == 4 && positional[1] == "trace");
     if evidence_impact {
         if sector_lba.is_some()
@@ -721,8 +776,10 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             );
         }
         let investigation = positional[1] == "investigate";
-        let all =
-            matches!(positional[1].as_str(), "impact" | "investigate") && positional[2] == "all";
+        let all = matches!(
+            positional[1].as_str(),
+            "impact" | "investigate" | "crc-check"
+        ) && positional[2] == "all";
         if all && sector_attempt.is_some() {
             return Err("Batch impact/investigate selects each disk's preferred/default image; --attempt is per-disk only".into());
         }
@@ -741,7 +798,16 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         }
         let root = resolve_project_root(cwd, project_override.as_deref())?;
         let project = crate::sector_inspection::open_project(root)?;
-        let result = if positional[1] == "ranges" {
+        let result = if positional[1] == "crc-check" {
+            if sector_attempt.is_some() {
+                return Err("crc-check verifies the committed GW recovery, not --attempt".into());
+            }
+            if all {
+                crate::flux_crc::inspect_all(&project, |n| eprintln!("[CRC] saved disk {n:03}"))?
+            } else {
+                crate::flux_crc::inspect(&project, disk)?
+            }
+        } else if positional[1] == "ranges" {
             crate::recovery_ranges::inspect(&project, disk, sector_attempt)?
         } else if investigation && all {
             crate::recovery_investigation::inspect_all(&project, |done, total, disk| {
@@ -764,6 +830,8 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         return Ok(CliResponse {
             output: if json_output {
                 result.to_string()
+            } else if positional[1] == "crc-check" {
+                crate::flux_crc::render(&result)
             } else if positional[1] == "ranges" {
                 crate::recovery_ranges::render(&result)
             } else if investigation {
@@ -1093,6 +1161,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             || (positional.len() == 3 && positional[0] == "recovery" && positional[1] == "extract"))
     {
         return Err("--include-deleted is only valid with recovery extract or benchmark compare; default processing excludes known deleted entries".into());
+    }
+    if mutation_audit::applies(args) && !mutation_audit::active() {
+        return mutation_audit::run(args, cwd, || run_inner(args, cwd));
     }
     let workstation_write = matches!(
         positional.first().map(String::as_str),
@@ -1690,7 +1761,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     serde_json::to_string(&result).map_err(|e| e.to_string())?
                 } else {
                     format!(
-                        "Disk {disk:03}: {} captures / {} decodes inspected.\nReport: {}\nTrack/revolution CSV: {}\nCommitted-sector CSV: {}\nRecovery note: {}\nSaved evidence only; no hardware/tool calls or recovery/delivery changes.{}",
+                        "Disk {disk:03}: {} captures / {} decodes inspected.\nReport: {}\nTrack/revolution CSV: {}\nCommitted-sector CSV: {}\nRecovery note: {}\nSaved evidence only; no hardware/tool calls or recovery/delivery changes.{}\nIndependent CRC sector observations (passes can repeat): {} validated / {} unconfirmed / {} conflicting.\nCRC observation CSV: {}",
                         result.captures,
                         result.decodes,
                         result.report.display(),
@@ -1701,7 +1772,11 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                             " Diagnostic attention/partial; see note."
                         } else {
                             ""
-                        }
+                        },
+                        result.crc_validated_sector_observations,
+                        result.crc_unconfirmed_sector_observations,
+                        result.crc_conflicting_sector_observations,
+                        result.crc_observations_csv.display()
                     )
                 },
                 exit_code: if result.attention { 3 } else { 0 },
@@ -1859,6 +1934,9 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let operations = operations_status::inspect(&project, &processing)?;
             let raw_exceptions = crate::flux_recovery::format_exceptions(&project)?;
             let mut next_actions = operations_status::next_actions(&operations);
+            if processing["audit_refresh_pending"] == true {
+                next_actions.push("An interrupted expert mutation left the integrity report pending; run `process` or finish the expert operation before handing over current reports.".into());
+            }
             if next_actions.is_empty() {
                 next_actions = status_next_actions(stats.disk_count, stats.partial_disks)
                     .into_iter()
@@ -2365,7 +2443,12 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     || (positional.len() == 3
                         && matches!(
                             positional[1].as_str(),
-                            "composite" | "fat" | "import" | "extract" | "documents"
+                            "composite"
+                                | "crc-composite"
+                                | "fat"
+                                | "import"
+                                | "extract"
+                                | "documents"
                         ))) =>
         {
             let root = resolve_project_root(cwd, project_override.as_deref())?;

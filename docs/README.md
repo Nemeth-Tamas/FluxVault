@@ -44,6 +44,7 @@ The saved-batch review records results; pilot/runbook documents also retain earl
 - [All 17 damaged/ambiguous file records](testing/DAMAGED_BATCH_CASES.md)
 - [Disk 133's exact USB/GW disagreement scope](testing/DISK_133_REVIEW.md)
 - [Comparison with the original script/DMDE archive](testing/BASELINE_COMPARISON.md)
+- [009/017/020/058 historical candidate and stream review](testing/LEGACY_CASE_REVIEW.md)
 - [Single-GW readiness gates](testing/SINGLE_GW_READINESS.md)
 - [Greaseweazle setup and recorded hardware validation](testing/GREASEWEAZLE_PREFLIGHT.md)
 - [136-disk runbook](testing/PILOT_136.md)
@@ -54,6 +55,7 @@ The saved-batch review records results; pilot/runbook documents also retain earl
 ## Development and historical handoffs
 
 - [Current progress and coverage measures](development/PROGRESS.md)
+- [Latest eight bounded checklist closures](development/CHECKLIST_458.md)
 - [Windows host-process supervision](development/PROCESS_SUPERVISION.md)
 - Historical checkpoints: [85%](development/CHECKLIST_85.md), [90%](development/CHECKLIST_90.md)
 - Historical handoffs: [Gemini](handoffs/GEMINI_HANDOFF.md), [Greaseweazle chat-to-chat](handoffs/CHAT_TO_CHAT_GREASEWEAZLE.md)

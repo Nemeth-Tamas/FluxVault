@@ -92,25 +92,24 @@ pub(crate) fn run_reconstruction(
     send_stage: &impl Fn(&str),
 ) -> Result<ReconstructionResult, String> {
     if request.bad_sectors.is_empty() {
-        return Err("A FAT rekonstrukció hibás szektorlistát igényel.".to_owned());
+        return Err("FAT reconstruction requires a bad-sector map.".to_owned());
     }
 
-    send_stage("Forrás lemezkép és FAT geometria elemzése...");
+    send_stage("Analyzing saved source image and FAT geometry...");
     let metadata = fs::symlink_metadata(&request.image_path).map_err(|error| {
         format!(
-            "Nem vizsgálható a forrás lemezkép {}: {error}",
+            "Cannot inspect source image {}: {error}",
             request.image_path.display()
         )
     })?;
     if !metadata.file_type().is_file() || metadata.len() > 64 * 1024 * 1024 {
         return Err(
-            "A FAT rekonstrukció csak közvetlen, legfeljebb 64 MiB méretű lemezképen használható."
-                .to_owned(),
+            "FAT reconstruction requires a regular, unlinked image of at most 64 MiB.".to_owned(),
         );
     }
     let source_bytes = fs::read(&request.image_path).map_err(|error| {
         format!(
-            "Nem sikerült read-only módban beolvasni a forrás lemezképet {}: {error}",
+            "Cannot read source image {} read-only: {error}",
             request.image_path.display()
         )
     })?;
@@ -121,7 +120,7 @@ pub(crate) fn run_reconstruction(
         .is_some_and(|expected| !source_sha256.eq_ignore_ascii_case(expected))
     {
         return Err(format!(
-            "A forrás lemezkép SHA-256 értéke eltér a rögzített acquisition eredménytől: {}",
+            "Source image SHA-256 differs from the recorded acquisition: {}",
             request.image_path.display()
         ));
     }
@@ -130,10 +129,7 @@ pub(crate) fn run_reconstruction(
     if unique_bad.len() != request.bad_sectors.len()
         || unique_bad.iter().any(|lba| *lba >= layout.total_sectors)
     {
-        return Err(
-            "A FAT rekonstrukció hibás LBA listája ismétlődő vagy képen kívüli értéket tartalmaz."
-                .to_owned(),
-        );
+        return Err("FAT reconstruction map contains duplicate or out-of-range LBAs.".to_owned());
     }
     let filesystem = format!("FAT{}", layout.fat_bits);
     let (records, unresolved_bad_sectors) =
@@ -153,9 +149,7 @@ pub(crate) fn run_reconstruction(
         });
     }
 
-    send_stage(
-        "Bizonyíthatóan redundáns FAT szektorok helyreállítása külön származtatott képbe...",
-    );
+    send_stage("Copying evidence-supported mirrored FAT sectors into a separate derived image...");
     let mut derived_bytes = source_bytes.clone();
 
     for record in &records {
@@ -194,7 +188,7 @@ pub(crate) fn run_reconstruction(
     }
     fs::create_dir_all(&disk_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a recovery mappát {}: {error}",
+            "Cannot create recovery directory {}: {error}",
             disk_directory.display()
         )
     })?;
@@ -225,12 +219,12 @@ pub(crate) fn run_reconstruction(
             .to_owned(),
     };
     let provenance_json = serde_json::to_vec_pretty(&provenance)
-        .map_err(|error| format!("Rekonstrukciós provenance JSON hiba: {error}"))?;
+        .map_err(|error| format!("Reconstruction provenance JSON error: {error}"))?;
     write_new_file(&partial_provenance, &provenance_json)?;
 
     fs::rename(&partial_image, &final_image).map_err(|error| {
         format!(
-            "A származtatott kép előléptetése sikertelen {}: {error}",
+            "Cannot publish derived image {}: {error}",
             final_image.display()
         )
     })?;
@@ -238,7 +232,7 @@ pub(crate) fn run_reconstruction(
     if let Err(error) = fs::rename(&partial_provenance, &final_provenance) {
         let _ = fs::rename(&final_image, &partial_image);
         return Err(format!(
-            "A rekonstrukciós provenance előléptetése sikertelen {}: {error}",
+            "Cannot publish reconstruction provenance {}: {error}",
             final_provenance.display()
         ));
     }
@@ -368,7 +362,7 @@ pub(crate) fn inspect_mirrored_fat(
 impl FatLayout {
     fn parse(image: &[u8]) -> Result<Self, String> {
         if image.len() < 512 {
-            return Err("A lemezkép túl kicsi FAT BPB elemzéshez.".to_owned());
+            return Err("Image is too small for FAT BPB analysis.".to_owned());
         }
 
         let bytes_per_sector = u16::from_le_bytes([image[11], image[12]]) as usize;
@@ -388,7 +382,7 @@ impl FatLayout {
 
         if !matches!(bytes_per_sector, 128 | 256 | 512 | 1024 | 2048 | 4096) {
             return Err(format!(
-                "A BPB bytes/sector értéke nem támogatott: {bytes_per_sector}."
+                "Unsupported BPB bytes-per-sector value: {bytes_per_sector}."
             ));
         }
 
@@ -398,18 +392,16 @@ impl FatLayout {
             || sectors_per_fat == 0
             || total_sectors == 0
         {
-            return Err(
-                "A BPB nem tartalmaz használható, tükrözött FAT12/16 geometriát.".to_owned(),
-            );
+            return Err("BPB has no usable mirrored FAT12/16 geometry.".to_owned());
         }
 
         let expected_bytes = total_sectors
             .checked_mul(bytes_per_sector as u64)
-            .ok_or_else(|| "FAT lemezképméret túlcsordulás.".to_owned())?;
+            .ok_or_else(|| "FAT image size overflow.".to_owned())?;
 
         if expected_bytes > image.len() as u64 {
             return Err(format!(
-                "A BPB szerinti lemezképméret nagyobb a fájlnál: {expected_bytes} > {}.",
+                "BPB image extent exceeds the file: {expected_bytes} > {}.",
                 image.len()
             ));
         }
@@ -418,10 +410,10 @@ impl FatLayout {
         let overhead = reserved_sectors
             .checked_add(fat_count.saturating_mul(sectors_per_fat))
             .and_then(|value| value.checked_add(root_directory_sectors))
-            .ok_or_else(|| "FAT layout túlcsordulás.".to_owned())?;
+            .ok_or_else(|| "FAT layout overflow.".to_owned())?;
 
         if overhead >= total_sectors {
-            return Err("A BPB FAT területe érvénytelen.".to_owned());
+            return Err("Invalid BPB FAT extent.".to_owned());
         }
 
         let data_sectors = total_sectors - overhead;
@@ -431,7 +423,9 @@ impl FatLayout {
         } else if cluster_count < 65_525 {
             16
         } else {
-            return Err("A gyors rekonstrukció jelenleg csak FAT12/16 képeket támogat.".to_owned());
+            return Err(
+                "Mirrored-FAT reconstruction currently supports FAT12/16 images only.".to_owned(),
+            );
         };
 
         Ok(Self {
@@ -514,24 +508,24 @@ fn copy_sector(
     let source_start = usize::try_from(source_lba)
         .ok()
         .and_then(|value| value.checked_mul(bytes_per_sector))
-        .ok_or_else(|| "Forrás FAT szektor offset túlcsordulás.".to_owned())?;
+        .ok_or_else(|| "Source FAT sector offset overflow.".to_owned())?;
     let target_start = usize::try_from(target_lba)
         .ok()
         .and_then(|value| value.checked_mul(bytes_per_sector))
-        .ok_or_else(|| "Cél FAT szektor offset túlcsordulás.".to_owned())?;
+        .ok_or_else(|| "Target FAT sector offset overflow.".to_owned())?;
     let source_end = source_start
         .checked_add(bytes_per_sector)
-        .ok_or_else(|| "Forrás FAT szektor vége túlcsordulás.".to_owned())?;
+        .ok_or_else(|| "Source FAT sector end offset overflow.".to_owned())?;
     let target_end = target_start
         .checked_add(bytes_per_sector)
-        .ok_or_else(|| "Cél FAT szektor vége túlcsordulás.".to_owned())?;
+        .ok_or_else(|| "Target FAT sector end offset overflow.".to_owned())?;
 
     let source_sector = source
         .get(source_start..source_end)
-        .ok_or_else(|| "A forrás FAT szektor kívül esik a lemezképen.".to_owned())?;
+        .ok_or_else(|| "Source FAT sector is outside the image.".to_owned())?;
     let target_sector = target
         .get_mut(target_start..target_end)
-        .ok_or_else(|| "A cél FAT szektor kívül esik a lemezképen.".to_owned())?;
+        .ok_or_else(|| "Target FAT sector is outside the image.".to_owned())?;
     target_sector.copy_from_slice(source_sector);
     Ok(())
 }
@@ -541,11 +535,11 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|error| format!("Nem sikerült létrehozni {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot create {}: {error}", path.display()))?;
     file.write_all(bytes)
-        .map_err(|error| format!("Nem sikerült írni {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot write {}: {error}", path.display()))?;
     file.sync_all()
-        .map_err(|error| format!("Nem sikerült szinkronizálni {}: {error}", path.display()))
+        .map_err(|error| format!("Cannot synchronize {}: {error}", path.display()))
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {

@@ -172,7 +172,7 @@ impl ProbeResult {
             Some(signature) => {
                 format!("{:02X} {:02X}", signature[0], signature[1])
             }
-            None => "nem olvasható".to_owned(),
+            None => "unreadable".to_owned(),
         }
     }
 }
@@ -189,7 +189,7 @@ fn enumerate_removable_drives_platform() -> Result<Vec<FloppyDrive>, String> {
 
     if drive_mask == 0 {
         return Err(format!(
-            "A Windows nem adta vissza a logikai meghajtókat: {}",
+            "Windows did not return logical drives: {}",
             std::io::Error::last_os_error()
         ));
     }
@@ -268,7 +268,7 @@ fn query_geometry(_file: &File) -> Result<DiskGeometry, String> {
 pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
     let mut file = File::open(&drive.device_path).map_err(|error| {
         format!(
-            "Nem sikerült CSAK OLVASHATÓ módban megnyitni a(z) {} eszközt: {error}",
+            "Cannot open device {} READ ONLY: {error}",
             drive.device_path
         )
     })?;
@@ -283,9 +283,9 @@ pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
     let mut total_read = 0usize;
 
     while total_read < sector.len() {
-        let bytes_read = file.read(&mut sector[total_read..]).map_err(|error| {
-            format!("Olvasási hiba a(z) {} eszközön: {error}", drive.device_path)
-        })?;
+        let bytes_read = file
+            .read(&mut sector[total_read..])
+            .map_err(|error| format!("Read error on device {}: {error}", drive.device_path))?;
 
         if bytes_read == 0 {
             break;
@@ -296,7 +296,7 @@ pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {
 
     if total_read == 0 {
         return Err(format!(
-            "A(z) {} meghajtó megnyílt, de 0 bájt érkezett vissza.",
+            "Drive {} opened but returned zero bytes.",
             drive.device_path
         ));
     }

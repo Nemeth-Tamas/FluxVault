@@ -252,6 +252,9 @@ pub(crate) fn load_snapshot(
 }
 
 impl JobResult {
+    pub(crate) fn retried(&self) -> bool {
+        self.modern.retry_count > 0 || self.pdf.retry_count > 0
+    }
     pub(crate) fn status(&self) -> &'static str {
         match (self.modern.state.successful(), self.pdf.state.successful()) {
             (true, true) => "OK",
@@ -306,27 +309,26 @@ pub(crate) fn run_conversion_mode(
 ) -> Result<ConversionResult, String> {
     if !request.libreoffice_executable.is_file() {
         return Err(format!(
-            "A LibreOffice futtatható fájl nem található: {}",
+            "LibreOffice executable not found: {}",
             request.libreoffice_executable.display()
         ));
     }
     if !(10..=600).contains(&request.timeout_seconds) {
-        return Err("A konverziós időkorlát 10 és 600 másodperc között lehet.".to_owned());
+        return Err("Conversion timeout must be between 10 and 600 seconds.".to_owned());
     }
     if !(1..=16).contains(&request.workers) {
-        return Err("A konverziós munkaszálak száma 1 és 16 között lehet.".to_owned());
+        return Err("Conversion worker count must be between 1 and 16.".to_owned());
     }
     if let Some(sources) = &request.selected_sources
         && (sources.is_empty() || request.previous_result.is_none())
     {
         return Err(
-            "A kiválasztott újrapróbáláshoz korábbi eredmény és legalább egy forrás szükséges."
-                .to_owned(),
+            "Selected retry requires a previous result and at least one source.".to_owned(),
         );
     }
 
     let _reservation = crate::conversion_lock::reserve(&request.planning.reports_directory)?;
-    send_stage("Delivery eredetik és friss conversion plan készítése...");
+    send_stage("Preparing delivery originals and a fresh conversion plan...");
     let planning = {
         let root = request
             .planning
@@ -349,7 +351,7 @@ pub(crate) fn run_conversion_mode(
             .filter(|job| selected.contains(&path_identity(&job.source_path)))
             .count();
         if matched != selected.len() {
-            return Err("Egy kiválasztott fájl már nincs a friss konverziós tervben; futtassa újra a teljes sort.".to_owned());
+            return Err("A selected file is absent from the fresh conversion plan; rerun the full conversion.".to_owned());
         }
     }
     let project_root = request
@@ -385,7 +387,7 @@ pub(crate) fn run_conversion_mode(
                     })
         })
     {
-        return Err("A kiválasztott fájl forrása vagy delivery útvonala megváltozott; a korábbi konverziós eredmény nem használható biztonságos újrapróbáláshoz.".to_owned());
+        return Err("Selected source or delivery path changed; the old conversion result cannot be reused safely for retry.".to_owned());
     }
     let total = planning.jobs.len();
     let estimates = planning
@@ -404,7 +406,7 @@ pub(crate) fn run_conversion_mode(
         .collect::<Vec<_>>();
     let order = balanced_job_order(&estimates);
     send_stage(&format!(
-        "Régi Office fájlok átalakítása: {total} fájl, legfeljebb {} párhuzamos munkaszál...",
+        "Converting legacy Office files: {total} files, up to {} parallel workers...",
         request.workers
     ));
     let rows = run_bounded_events(
@@ -837,7 +839,7 @@ fn run_bounded_events<T: Sync, R: Send>(
     results
         .into_iter()
         .map(|result| {
-            result.ok_or_else(|| "A konverziós munkaszál eredmény nélkül leállt.".to_owned())
+            result.ok_or_else(|| "Conversion worker stopped without a result.".to_owned())
         })
         .collect()
 }
@@ -902,19 +904,19 @@ fn convert_output(
     let output_directory = root.join("out");
     let profile_directory = root.join("profile");
     if let Err(error) = fs::create_dir(&root) {
-        return failure(format!("Ideiglenes konverziós mappa hiba: {error}"));
+        return failure(format!("Temporary conversion directory error: {error}"));
     }
     let result = (|| {
         fs::create_dir(&output_directory)
-            .map_err(|error| format!("Ideiglenes output mappa hiba: {error}"))?;
+            .map_err(|error| format!("Temporary output directory error: {error}"))?;
         fs::create_dir(&profile_directory)
-            .map_err(|error| format!("Ideiglenes LibreOffice profil hiba: {error}"))?;
+            .map_err(|error| format!("Temporary LibreOffice profile error: {error}"))?;
         let stdout_path = root.join("stdout.txt");
         let stderr_path = root.join("stderr.txt");
         let stdout = File::create(&stdout_path)
-            .map_err(|error| format!("LibreOffice stdout fájl hiba: {error}"))?;
+            .map_err(|error| format!("LibreOffice stdout file error: {error}"))?;
         let stderr = File::create(&stderr_path)
-            .map_err(|error| format!("LibreOffice stderr fájl hiba: {error}"))?;
+            .map_err(|error| format!("LibreOffice stderr file error: {error}"))?;
         let arguments = vec![
             "--headless".to_owned(),
             "--nologo".to_owned(),
@@ -937,7 +939,7 @@ fn convert_output(
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr)),
         )
-        .map_err(|error| format!("LibreOffice indítási hiba: {error}"))?;
+        .map_err(|error| format!("Cannot start LibreOffice: {error}"))?;
         let mut timed_out = false;
         let mut termination_issue = None;
         let exit_status = loop {
@@ -950,7 +952,7 @@ fn convert_output(
                     timed_out = !crate::cancellation::requested();
                     termination_issue = child.terminate_tree().err();
                     break child.wait().map_err(|error| {
-                        format!("LibreOffice timeout utáni wait hiba: {error}")
+                        format!("Cannot wait for LibreOffice after timeout: {error}")
                     })?;
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(100)),
@@ -958,7 +960,7 @@ fn convert_output(
                     let termination_issue = child.terminate_tree().err();
                     let _ = child.wait();
                     return Err(format!(
-                        "LibreOffice wait hiba: {error}{}",
+                        "LibreOffice wait error: {error}{}",
                         termination_issue
                             .map(|issue| format!("; process-tree termination unverified: {issue}"))
                             .unwrap_or_default()
@@ -1029,14 +1031,14 @@ fn convert_output(
         }
         if target.exists() {
             return Ok(failure(format!(
-                "A cél közben létrejött; nincs felülírás: {}",
+                "Destination appeared during conversion; nothing overwritten: {}",
                 target.display()
             )));
         }
         let output_sha256 = conversion::sha256_file(&made)?;
         fs::rename(&made, target).map_err(|error| {
             format!(
-                "Érvényes konverziós output előléptetési hiba {}: {error}",
+                "Cannot publish validated conversion output {}: {error}",
                 target.display()
             )
         })?;
@@ -1072,7 +1074,7 @@ fn libreoffice_output_path(
     let stem = source
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .ok_or_else(|| "A forrásfájlnak nincs alapneve.".to_owned())?;
+        .ok_or_else(|| "Source file has no base name.".to_owned())?;
     // `with_extension` would treat the last dot inside "Dr. Anka" as an extension
     // and incorrectly look for "Dr.docx" instead of LibreOffice's "Dr. Anka.docx".
     Ok(output_directory.join(format!("{stem}.{extension}")))
@@ -1106,7 +1108,7 @@ fn terminate_process_tree(child: &mut std::process::Child) -> Result<(), String>
 fn file_uri(path: &Path) -> Result<String, String> {
     let absolute = path
         .canonicalize()
-        .map_err(|error| format!("LibreOffice profilútvonal-hiba: {error}"))?;
+        .map_err(|error| format!("LibreOffice profile-path error: {error}"))?;
     let absolute_text = absolute.to_string_lossy();
     let text = absolute_text
         .strip_prefix(r"\\?\")
@@ -1135,10 +1137,10 @@ pub(crate) fn validate_output(path: &Path, extension: &str) -> Result<bool, Stri
         "docx" => "word/document.xml",
         "xlsx" => "xl/workbook.xml",
         "pptx" => "ppt/presentation.xml",
-        _ => return Err(format!("Nem támogatott modern formátum: {extension}")),
+        _ => return Err(format!("Unsupported modern format: {extension}")),
     };
     let file = File::open(path)
-        .map_err(|error| format!("OOXML fájl nem nyitható {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot open OOXML file {}: {error}", path.display()))?;
     let mut archive = match ZipArchive::new(file) {
         Ok(archive) => archive,
         Err(_) => return Ok(false),
@@ -1148,7 +1150,7 @@ pub(crate) fn validate_output(path: &Path, extension: &str) -> Result<bool, Stri
     for index in 0..archive.len() {
         let entry = archive
             .by_index(index)
-            .map_err(|error| format!("OOXML ZIP bejegyzés hiba: {error}"))?;
+            .map_err(|error| format!("OOXML ZIP entry error: {error}"))?;
         has_content_types |= entry.name() == "[Content_Types].xml";
         has_required |= entry.name() == required;
     }
@@ -1156,18 +1158,18 @@ pub(crate) fn validate_output(path: &Path, extension: &str) -> Result<bool, Stri
 }
 
 fn validate_pdf(path: &Path) -> Result<bool, String> {
-    let mut file = File::open(path)
-        .map_err(|error| format!("PDF nem olvasható {}: {error}", path.display()))?;
+    let mut file =
+        File::open(path).map_err(|error| format!("Cannot read PDF {}: {error}", path.display()))?;
     let size = file
         .metadata()
-        .map_err(|error| format!("PDF metadata hiba {}: {error}", path.display()))?
+        .map_err(|error| format!("PDF metadata error {}: {error}", path.display()))?
         .len();
     if size < 10 {
         return Ok(false);
     }
     let mut header = [0_u8; 5];
     file.read_exact(&mut header)
-        .map_err(|error| format!("PDF fejléc olvasási hiba: {error}"))?;
+        .map_err(|error| format!("PDF header read error: {error}"))?;
     if &header != b"%PDF-" {
         return Ok(false);
     }
@@ -1182,11 +1184,11 @@ fn validate_pdf(path: &Path) -> Result<bool, String> {
 
 fn write_summary(path: &Path, rows: &[JobResult], converted_root: &Path) -> Result<(), String> {
     let mut file = File::create(path)
-        .map_err(|error| format!("ConversionSummary nem írható {}: {error}", path.display()))?;
+        .map_err(|error| format!("Cannot write ConversionSummary {}: {error}", path.display()))?;
     file.write_all(b"\xEF\xBB\xBF")
-        .map_err(|error| format!("ConversionSummary BOM hiba: {error}"))?;
+        .map_err(|error| format!("ConversionSummary BOM error: {error}"))?;
     writeln!(file, "\"Floppy\",\"OriginalForensicPath\",\"DeliveryOriginalPath\",\"RecoveryMethod\",\"SourceType\",\"SourceSHA256\",\"ModernFormat\",\"ModernOK\",\"ModernResult\",\"ModernDetail\",\"ModernPath\",\"PDFOK\",\"PDFResult\",\"PDFDetail\",\"PDFPath\",\"Status\",\"PartialReason\",\"DurationSec\",\"ModernRetries\",\"PDFRetries\"")
-        .map_err(|error| format!("ConversionSummary fejléc hiba: {error}"))?;
+        .map_err(|error| format!("ConversionSummary header error: {error}"))?;
     for row in rows {
         let modern_path = if row.modern.state.successful() {
             relative_output(&row.job.modern_path, converted_root)?
@@ -1229,7 +1231,7 @@ fn write_summary(path: &Path, rows: &[JobResult], converted_root: &Path) -> Resu
                 .collect::<Vec<_>>()
                 .join(",")
         )
-        .map_err(|error| format!("ConversionSummary sorhiba: {error}"))?;
+        .map_err(|error| format!("ConversionSummary row write error: {error}"))?;
     }
     Ok(())
 }
@@ -1250,8 +1252,12 @@ fn write_failures(path: &Path, rows: &[JobResult]) -> Result<(), String> {
             row.pdf.detail
         ));
     }
-    fs::write(path, text)
-        .map_err(|error| format!("ConversionFailures nem írható {}: {error}", path.display()))
+    fs::write(path, text).map_err(|error| {
+        format!(
+            "Cannot write ConversionFailures {}: {error}",
+            path.display()
+        )
+    })
 }
 
 fn relative_output(path: &Path, root: &Path) -> Result<String, String> {
@@ -1704,8 +1710,18 @@ mod tests {
         }
         let retry = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
         assert_eq!(retry.failed, 1);
-        assert!(retry.rows[0].modern.detail.contains("indítási hiba"));
-        assert!(retry.rows[0].pdf.detail.contains("indítási hiba"));
+        assert!(
+            retry.rows[0]
+                .modern
+                .detail
+                .contains("Cannot start LibreOffice")
+        );
+        assert!(
+            retry.rows[0]
+                .pdf
+                .detail
+                .contains("Cannot start LibreOffice")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

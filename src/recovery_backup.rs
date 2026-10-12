@@ -70,12 +70,12 @@ pub(crate) fn ensure_first_backup(
     send_stage: &impl Fn(&str),
 ) -> Result<RecoveryBackupResult, String> {
     if request.disk_number == 0 {
-        return Err("A recovery backup lemezszáma nem lehet nulla.".to_owned());
+        return Err("Recovery backup disk number must be positive.".to_owned());
     }
 
     if !request.image_path.is_file() {
         return Err(format!(
-            "A recovery backup forrásképe nem található: {}",
+            "Recovery backup source image not found: {}",
             request.image_path.display()
         ));
     }
@@ -91,7 +91,7 @@ pub(crate) fn ensure_first_backup(
 
     fs::create_dir_all(&disk_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a recovery lemezmappát {}: {error}",
+            "Cannot create disk recovery directory {}: {error}",
             disk_directory.display()
         )
     })?;
@@ -103,7 +103,7 @@ pub(crate) fn ensure_first_backup(
     ));
     fs::create_dir(&temporary_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni az ideiglenes recovery backup mappát {}: {error}",
+            "Cannot create temporary recovery backup directory {}: {error}",
             temporary_directory.display()
         )
     })?;
@@ -118,7 +118,7 @@ pub(crate) fn ensure_first_backup(
         }
     };
 
-    send_stage("Immutable pass1 recovery backup előléptetése...");
+    send_stage("Publishing immutable first-pass recovery backup...");
 
     match fs::rename(&temporary_directory, &final_directory) {
         Ok(()) => Ok(RecoveryBackupResult {
@@ -138,7 +138,7 @@ pub(crate) fn ensure_first_backup(
         Err(error) => {
             cleanup_temporary_backup(&temporary_directory);
             Err(format!(
-                "A pass1 recovery backup előléptetése sikertelen {}: {error}",
+                "Cannot publish first-pass recovery backup {}: {error}",
                 final_directory.display()
             ))
         }
@@ -152,28 +152,27 @@ fn build_temporary_backup(
     temporary_directory: &Path,
     send_stage: &impl Fn(&str),
 ) -> Result<BackupArtifacts, String> {
-    send_stage("Forráskép hash-elése és másolása az első recovery backupba...");
+    send_stage("Hashing and copying source image into the first recovery backup...");
     let image_sha256 = sha256_file(&request.image_path)?;
     let image_name = request
         .image_path
         .file_name()
-        .ok_or_else(|| "A recovery forráskép neve érvénytelen.".to_owned())?;
+        .ok_or_else(|| "Invalid recovery source image name.".to_owned())?;
     let image_backup = temporary_directory.join(image_name);
-    fs::copy(&request.image_path, &image_backup).map_err(|error| {
-        format!("Nem sikerült a forrásképet a recovery backupba másolni: {error}")
-    })?;
+    fs::copy(&request.image_path, &image_backup)
+        .map_err(|error| format!("Cannot copy source image into recovery backup: {error}"))?;
 
     let (log_backup, source_log, source_log_sha256) =
         match request.log_path.as_ref().filter(|path| path.is_file()) {
             Some(log_path) => {
-                send_stage("Forrásnapló hash-elése és megőrzése...");
+                send_stage("Hashing and preserving source log...");
                 let hash = sha256_file(log_path)?;
                 let log_name = log_path
                     .file_name()
-                    .ok_or_else(|| "A recovery forrásnapló neve érvénytelen.".to_owned())?;
+                    .ok_or_else(|| "Invalid recovery source log name.".to_owned())?;
                 let backup = temporary_directory.join(log_name);
                 fs::copy(log_path, &backup).map_err(|error| {
-                    format!("Nem sikerült a forrásnaplót a recovery backupba másolni: {error}")
+                    format!("Cannot copy source log into recovery backup: {error}")
                 })?;
                 (
                     Some(backup),
@@ -202,7 +201,7 @@ fn build_temporary_backup(
         .map_err(|error| format!("Recovery backup manifest JSON hiba: {error}"))?;
     fs::write(&manifest_path, manifest_json).map_err(|error| {
         format!(
-            "Nem sikerült menteni a recovery backup manifestet {}: {error}",
+            "Cannot save recovery backup manifest {}: {error}",
             manifest_path.display()
         )
     })?;
@@ -252,15 +251,15 @@ fn cleanup_temporary_backup(path: &Path) {
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Nem sikerült hash-elni {}: {error}", path.display()))?;
+    let mut file =
+        fs::File::open(path).map_err(|error| format!("Cannot hash {}: {error}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
 
     loop {
         let bytes_read = file
             .read(&mut buffer)
-            .map_err(|error| format!("Hash olvasási hiba {}: {error}", path.display()))?;
+            .map_err(|error| format!("Hash read error {}: {error}", path.display()))?;
 
         if bytes_read == 0 {
             break;

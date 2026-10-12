@@ -4,6 +4,19 @@ The everyday workflow does not change: `fv production start --last-disk 136`, ph
 
 ## Look at a batch
 
+### Independent saved-flux and historical candidate checks
+
+```powershell
+fv recovery crc-check all --json
+fv benchmark review 9 --baseline 'C:\archives\Original.zip' --json
+```
+
+Both inspect saved evidence only, invoke no hardware/host tool, and change no preferred image or delivery. CRC checks qualify exact observed GW bytes; USB-only labels are not applicable and missing/unconfirmed/conflicting sectors stay separate. [CRC scope / optional strict composite](../recovery/FLUX_DIAGNOSTICS.md). Historical review classifies live-chain matches, tool reports, tiny stubs, uncertain signatures and allocated compound-stream differences; a raw span containing unreadable placeholders is not an intact file. [Measured four-case review](../testing/LEGACY_CASE_REVIEW.md). Exit 3 is expected investigative attention.
+
+Direct material expert commands now refresh audit/workbook automatically after changes, even partial failures. Read-only/help/plan/no-op commands do not. If interrupted, `status` / `processing status` exposes `audit_refresh_pending`; run `fv process` to reconcile saved state before relying on current reports. Existing finished archives/root handoffs remain their original historical generation; report refresh does not silently rebuild delivery.
+
+Phase estimates now separate fresh, USB-to-GW recovery and retry observations and known conversion/retry jobs. Legacy events lacking identity remain unknown rather than mixed into fresh timing. This is still not a whole-batch ETA.
+
 From your acquisition project's folder:
 
 ```powershell

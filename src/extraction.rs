@@ -131,7 +131,7 @@ pub fn spawn_extraction(request: ExtractionRequest) -> Receiver<ExtractionEvent>
             let _ = sender.send(ExtractionEvent::Stage(message.to_owned()));
         };
 
-        send_stage("Forrás lemezkép SHA-256 ellenőrzése...");
+        send_stage("Verifying source image SHA-256...");
         let result = run_extraction(&request, &send_stage);
         let _ = sender.send(ExtractionEvent::Finished(result));
     });
@@ -309,7 +309,7 @@ fn inspect_candidate_directory(path: &Path) -> Result<ExtractionPresence, String
     if marker_path.is_file() {
         let marker_json = fs::read_to_string(&marker_path).map_err(|error| {
             format!(
-                "Nem olvasható extraction marker {}: {error}",
+                "Cannot read extraction marker {}: {error}",
                 marker_path.display()
             )
         })?;
@@ -324,7 +324,7 @@ fn inspect_candidate_directory(path: &Path) -> Result<ExtractionPresence, String
             }),
             Err(error) => Ok(ExtractionPresence::InvalidAutomatic {
                 output_directory: path.to_path_buf(),
-                detail: format!("Hibás extraction marker: {error}"),
+                detail: format!("Invalid extraction marker: {error}"),
             }),
         };
     }
@@ -353,17 +353,18 @@ fn count_manual_files(root: &Path, skip_managed_children: bool) -> Result<(usize
         crate::cancellation::check()?;
         let entries = fs::read_dir(&directory).map_err(|error| {
             format!(
-                "Nem sikerült megvizsgálni a recovery mappát {}: {error}",
+                "Cannot inspect recovery directory {}: {error}",
                 directory.display()
             )
         })?;
 
         for entry in entries {
-            let entry = entry.map_err(|error| format!("Hibás recovery bejegyzés: {error}"))?;
+            let entry =
+                entry.map_err(|error| format!("Invalid recovery directory entry: {error}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|error| format!("Nem olvasható fájltípus {}: {error}", path.display()))?;
+                .map_err(|error| format!("Cannot inspect file type {}: {error}", path.display()))?;
 
             if file_type.is_dir() {
                 if skip_managed_children && path.join(MARKER_FILE_NAME).is_file() {
@@ -385,7 +386,7 @@ fn count_manual_files(root: &Path, skip_managed_children: bool) -> Result<(usize
             }
 
             let metadata = entry.metadata().map_err(|error| {
-                format!("Nem olvasható recovery fájl {}: {error}", path.display())
+                format!("Cannot read recovery file {}: {error}", path.display())
             })?;
             file_count += 1;
             total_bytes = total_bytes.saturating_add(metadata.len());
@@ -401,14 +402,14 @@ pub(crate) fn run_extraction(
 ) -> Result<ExtractionResult, String> {
     if !request.image_path.is_file() {
         return Err(format!(
-            "A forrás lemezkép nem található: {}",
+            "Source image not found: {}",
             request.image_path.display()
         ));
     }
 
     if !request.seven_zip_executable.is_file() {
         return Err(format!(
-            "A 7-Zip futtatható fájl nem található: {}",
+            "7-Zip executable not found: {}",
             request.seven_zip_executable.display()
         ));
     }
@@ -417,7 +418,7 @@ pub(crate) fn run_extraction(
     let attempt_number = request.attempt_number;
 
     if disk_number == 0 {
-        return Err("Az extraction lemezszáma nem lehet nulla.".to_owned());
+        return Err("Extraction disk number must be positive.".to_owned());
     }
 
     let source_sha256 = sha256_file(&request.image_path)?;
@@ -444,12 +445,12 @@ pub(crate) fn run_extraction(
 
     fs::create_dir_all(&request.logs_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a naplómappát {}: {error}",
+            "Cannot create log directory {}: {error}",
             request.logs_directory.display()
         )
     })?;
 
-    send_stage("FAT olvashatóság és 7-Zip tartalomjegyzék ellenőrzése...");
+    send_stage("Checking FAT readability and the 7-Zip file listing...");
     let listing_arguments = vec![
         "l".to_owned(),
         "-slt".to_owned(),
@@ -467,12 +468,12 @@ pub(crate) fn run_extraction(
     write_listing_log(&listing_path, &listing.audit.stdout, &listing.audit.stderr)?;
 
     if let Some(error) = listing.audit_error {
-        return Err(format!("A parancsnapló nem írható: {error}"));
+        return Err(format!("Cannot write command audit log: {error}"));
     }
 
     if !listing.audit.success {
         return Err(format!(
-            "A 7-Zip nem tudta olvasni a lemezkép fájlrendszerét (kilépési kód: {:?}). Részletek: {}",
+            "7-Zip could not read the image filesystem (exit code {:?}). Details: {}",
             listing.audit.exit_code,
             concise_command_error(&listing.audit.stderr, &listing.audit.stdout)
         ));
@@ -480,7 +481,7 @@ pub(crate) fn run_extraction(
 
     fs::create_dir_all(&disk_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni az extraction mappát {}: {error}",
+            "Cannot create extraction directory {}: {error}",
             disk_directory.display()
         )
     })?;
@@ -492,19 +493,19 @@ pub(crate) fn run_extraction(
 
     if temporary_directory.exists() {
         return Err(format!(
-            "Az ideiglenes extraction mappa már létezik: {}",
+            "Temporary extraction directory already exists: {}",
             temporary_directory.display()
         ));
     }
 
     fs::create_dir_all(&temporary_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni az ideiglenes extraction mappát {}: {error}",
+            "Cannot create temporary extraction directory {}: {error}",
             temporary_directory.display()
         )
     })?;
 
-    send_stage("Fájlok kibontása ideiglenes munkamappába...");
+    send_stage("Extracting files into a temporary workspace...");
     let extraction_arguments = vec![
         "x".to_owned(),
         "-y".to_owned(),
@@ -522,19 +523,19 @@ pub(crate) fn run_extraction(
 
     if let Some(error) = extraction.audit_error {
         cleanup_temporary_directory(&temporary_directory);
-        return Err(format!("A parancsnapló nem írható: {error}"));
+        return Err(format!("Cannot write command audit log: {error}"));
     }
 
     if !extraction.audit.success {
         cleanup_temporary_directory(&temporary_directory);
         return Err(format!(
-            "A 7-Zip extraction sikertelen (kilépési kód: {:?}). Részletek: {}",
+            "7-Zip extraction failed (exit code {:?}). Details: {}",
             extraction.audit.exit_code,
             concise_command_error(&extraction.audit.stderr, &extraction.audit.stdout)
         ));
     }
 
-    send_stage("Kinyert fájlok leltározása és hash-elése...");
+    send_stage("Inventorying and hashing extracted files...");
     let files = match inventory_files(&temporary_directory) {
         Ok(files) => files,
         Err(error) => {
@@ -569,7 +570,7 @@ pub(crate) fn run_extraction(
     if let Err(error) = write_json(
         &temporary_directory.join(INVENTORY_FILE_NAME),
         &inventory,
-        "fájlleltár",
+        "file inventory",
     ) {
         cleanup_temporary_directory(&temporary_directory);
         return Err(error);
@@ -584,11 +585,11 @@ pub(crate) fn run_extraction(
         return Err(error);
     }
 
-    send_stage("Sikeres extraction atomikus előléptetése...");
+    send_stage("Atomically publishing verified extraction...");
     if let Err(error) = fs::rename(&temporary_directory, &output_directory) {
         cleanup_temporary_directory(&temporary_directory);
         return Err(format!(
-            "Nem sikerült előléptetni az extraction mappát {} -> {}: {error}",
+            "Cannot publish extraction directory {} -> {}: {error}",
             temporary_directory.display(),
             output_directory.display()
         ));
@@ -616,20 +617,20 @@ fn reuse_existing_extraction(
     let marker_path = output_directory.join(MARKER_FILE_NAME);
     let marker_json = fs::read_to_string(&marker_path).map_err(|error| {
         format!(
-            "Az extraction célmappa már létezik, de nincs olvasható FluxVault marker: {} ({error}). A mappa változatlan maradt.",
+            "Extraction destination exists without a readable FluxVault marker: {} ({error}). Directory preserved.",
             output_directory.display()
         )
     })?;
     let marker: ExtractionMarker = serde_json::from_str(&marker_json).map_err(|error| {
         format!(
-            "Hibás extraction marker {}: {error}. A mappa változatlan maradt.",
+            "Invalid extraction marker {}: {error}. Directory preserved.",
             marker_path.display()
         )
     })?;
 
     if marker.source_sha256 != source_sha256 {
         return Err(format!(
-            "Az extraction célmappa más forrás-hashhez tartozik: {}. Nem történt felülírás.",
+            "Extraction destination belongs to a different source hash: {}. Nothing overwritten.",
             output_directory.display()
         ));
     }
@@ -692,24 +693,22 @@ fn parse_attempt_name(image_path: &Path) -> Result<(u32, u32), String> {
     let stem = image_path
         .file_stem()
         .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("Érvénytelen lemezkép fájlnév: {}", image_path.display()))?;
+        .ok_or_else(|| format!("Invalid image filename: {}", image_path.display()))?;
     let Some((disk, attempt)) = stem.split_once("_attempt_") else {
         return Err(format!(
-            "A lemezkép neve nem FluxVault attempt formátumú: {}",
+            "Image filename is not a FluxVault attempt: {}",
             image_path.display()
         ));
     };
     let disk_number = disk
         .parse::<u32>()
-        .map_err(|_| format!("Érvénytelen lemezszám a fájlnévben: {stem}"))?;
+        .map_err(|_| format!("Invalid disk number in filename: {stem}"))?;
     let attempt_number = attempt
         .parse::<u32>()
-        .map_err(|_| format!("Érvénytelen próbálkozásszám a fájlnévben: {stem}"))?;
+        .map_err(|_| format!("Invalid attempt number in filename: {stem}"))?;
 
     if disk_number == 0 || attempt_number == 0 {
-        return Err(format!(
-            "A lemez- és próbálkozásszám nem lehet nulla: {stem}"
-        ));
+        return Err(format!("Disk and attempt numbers must be positive: {stem}"));
     }
 
     Ok((disk_number, attempt_number))
@@ -722,17 +721,18 @@ pub(crate) fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String>
     while let Some(directory) = pending.pop() {
         let entries = fs::read_dir(&directory).map_err(|error| {
             format!(
-                "Nem sikerült leltározni a kinyert mappát {}: {error}",
+                "Cannot inventory extracted directory {}: {error}",
                 directory.display()
             )
         })?;
 
         for entry in entries {
-            let entry = entry.map_err(|error| format!("Hibás extraction bejegyzés: {error}"))?;
+            let entry =
+                entry.map_err(|error| format!("Invalid extraction directory entry: {error}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|error| format!("Nem olvasható fájltípus {}: {error}", path.display()))?;
+                .map_err(|error| format!("Cannot inspect file type {}: {error}", path.display()))?;
             if file_type.is_symlink() {
                 return Err(format!(
                     "Extraction contains a symbolic link: {}",
@@ -762,10 +762,10 @@ pub(crate) fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String>
 
             let metadata = entry
                 .metadata()
-                .map_err(|error| format!("Nem olvasható metadata {}: {error}", path.display()))?;
+                .map_err(|error| format!("Cannot read metadata {}: {error}", path.display()))?;
             let relative_path = path
                 .strip_prefix(root)
-                .map_err(|error| format!("Extraction relatívútvonal-hiba: {error}"))?
+                .map_err(|error| format!("Extraction relative-path error: {error}"))?
                 .to_string_lossy()
                 .replace('\\', "/");
             let modified_unix_ms = metadata.modified().ok().and_then(system_time_unix_ms);
@@ -785,12 +785,8 @@ pub(crate) fn inventory_files(root: &Path) -> Result<Vec<ExtractedFile>, String>
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = fs::File::open(path).map_err(|error| {
-        format!(
-            "Nem sikerült megnyitni hash-eléshez {}: {error}",
-            path.display()
-        )
-    })?;
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Cannot open {} for hashing: {error}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
 
@@ -798,7 +794,7 @@ fn sha256_file(path: &Path) -> Result<String, String> {
         crate::cancellation::check()?;
         let bytes_read = file
             .read(&mut buffer)
-            .map_err(|error| format!("Hash olvasási hiba {}: {error}", path.display()))?;
+            .map_err(|error| format!("Hash read error {}: {error}", path.display()))?;
 
         if bytes_read == 0 {
             break;
@@ -831,24 +827,16 @@ fn write_listing_log(path: &Path, stdout: &str, stderr: &str) -> Result<(), Stri
         "FluxVault 7-Zip listing\n\n--- stdout ---\n{stdout}\n\n--- stderr ---\n{stderr}\n"
     );
 
-    fs::write(path, content).map_err(|error| {
-        format!(
-            "Nem sikerült menteni a 7-Zip listinget {}: {error}",
-            path.display()
-        )
-    })
+    fs::write(path, content)
+        .map_err(|error| format!("Cannot save 7-Zip listing {}: {error}", path.display()))
 }
 
 fn write_json(path: &Path, value: &impl Serialize, description: &str) -> Result<(), String> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|error| format!("{description} JSON hiba: {error}"))?;
 
-    fs::write(path, json).map_err(|error| {
-        format!(
-            "Nem sikerült menteni a(z) {description} fájlt {}: {error}",
-            path.display()
-        )
-    })
+    fs::write(path, json)
+        .map_err(|error| format!("Cannot save {description} file {}: {error}", path.display()))
 }
 
 fn cleanup_temporary_directory(path: &Path) {

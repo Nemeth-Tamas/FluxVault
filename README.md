@@ -10,7 +10,7 @@ Saved damaged documents also get automatic content-based Word/RTF text salvage. 
 
 Developing FluxVault? `pwsh -NoProfile -File .\scripts\check.ps1` is the fail-fast format/build/strict-lint/routine-test gate. It does not scan hardware, install tools or modify user PATH. Environment-dependent acceptance tests remain explicit opt-ins.
 
-Latest development checkpoint: **450/480 TODOs (93.8%), 30 open**. [The fifteen specific closures](docs/development/CHECKLIST_450.md), [current progress](docs/development/PROGRESS.md) and [the measured 136-disk review](docs/testing/BATCH_136_REVIEW.md) separate engineering completion, historical file differences and remaining recovery work. [Saved-batch tools](docs/guides/SAVED_BATCH_TOOLS.md) add operator-action accounting, exact missing ranges, performance measurements and isolated expert GW settings. The normal production command is unchanged. Checklist coverage is not a customer-file recovery rate; earlier checkpoints remain historical.
+Latest development checkpoint: **458/480 TODOs (95.4%), 22 open**. [Eight new specific closures](docs/development/CHECKLIST_458.md), [current progress](docs/development/PROGRESS.md) and [the measured 136-disk review](docs/testing/BATCH_136_REVIEW.md) separate engineering completion, historical file differences and remaining recovery work. [Saved-batch tools](docs/guides/SAVED_BATCH_TOOLS.md) include independent saved-flux CRC checks, legacy candidate/stream comparisons, operator-action accounting and expert GW settings. The normal production command is unchanged. Checklist coverage is not a customer-file recovery rate; earlier checkpoints remain historical.
 
 ## Start here
 

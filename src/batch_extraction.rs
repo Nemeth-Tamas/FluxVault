@@ -267,19 +267,19 @@ pub(crate) fn run_batch_extraction(
 ) -> Result<BatchExtractionResult, String> {
     if !request.seven_zip_executable.is_file() {
         return Err(format!(
-            "A 7-Zip futtatható fájl nem található: {}",
+            "7-Zip executable not found: {}",
             request.seven_zip_executable.display()
         ));
     }
 
     fs::create_dir_all(&request.reports_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a Reports mappát {}: {error}",
+            "Cannot create Reports directory {}: {error}",
             request.reports_directory.display()
         )
     })?;
 
-    send_stage("Projekt acquisition állapotának felmérése...");
+    send_stage("Inspecting project acquisition state...");
     let statistics = imaging::load_project_statistics(&request.images_directory)?;
     let total_disks = statistics.disks.len();
     let mut rows = Vec::with_capacity(total_disks);
@@ -294,7 +294,7 @@ pub(crate) fn run_batch_extraction(
         crate::cancellation::check()?;
         let disk_number = disk.disk_number;
         send_stage(&format!(
-            "Lemez {disk_number:03} feldolgozása ({}/{total_disks})...",
+            "Processing disk {disk_number:03} ({}/{total_disks})...",
             index + 1
         ));
 
@@ -444,7 +444,7 @@ pub(crate) fn run_batch_extraction(
     manual.sort_by(|left, right| left.floppy.cmp(&right.floppy));
     in_progress.sort_by(|left, right| left.floppy.cmp(&right.floppy));
 
-    send_stage("Batch extraction jelentések írása...");
+    send_stage("Writing batch extraction reports...");
     let summary_path = request.reports_directory.join("ExtractionSummary.csv");
     let broken_path = request.reports_directory.join("BrokenForDMDE.txt");
     let manual_path = request.reports_directory.join("ManuallyRecovered.txt");
@@ -476,7 +476,7 @@ pub(crate) fn run_batch_extraction(
         false,
     )?;
 
-    send_stage("MasterFileList.csv újraépítése...");
+    send_stage("Rebuilding MasterFileList.csv...");
     let manifest = manifest::build_manifest(
         &ManifestRequest {
             extracted_root: request.extracted_root.clone(),
@@ -684,8 +684,7 @@ fn write_summary(path: &Path, rows: &[SummaryRow]) -> Result<(), String> {
             if row.extracted { "True" } else { "False" }
         ));
     }
-    fs::write(path, text)
-        .map_err(|error| format!("Nem sikerült kiírni {}: {error}", path.display()))
+    fs::write(path, text).map_err(|error| format!("Cannot write {}: {error}", path.display()))
 }
 
 fn write_list(
@@ -717,8 +716,7 @@ fn write_list(
         lines.push("None.".to_owned());
     }
     let text = format!("\u{feff}{}\r\n", lines.join("\r\n"));
-    fs::write(path, text)
-        .map_err(|error| format!("Nem sikerült kiírni {}: {error}", path.display()))
+    fs::write(path, text).map_err(|error| format!("Cannot write {}: {error}", path.display()))
 }
 
 fn csv(value: &str) -> String {

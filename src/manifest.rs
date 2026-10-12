@@ -60,11 +60,11 @@ pub(crate) fn build_manifest(
     request: &ManifestRequest,
     send_stage: &impl Fn(&str),
 ) -> Result<ManifestResult, String> {
-    send_stage("Recovered fájlmappák és forrásképek összerendelése...");
+    send_stage("Associating recovered directories with source images...");
     let mut disk_directories = fs::read_dir(&request.extracted_root)
         .map_err(|error| {
             format!(
-                "Nem sikerült beolvasni az Extracted mappát {}: {error}",
+                "Cannot read Extracted directory {}: {error}",
                 request.extracted_root.display()
             )
         })?
@@ -118,11 +118,11 @@ pub(crate) fn build_manifest(
 
         for file in files {
             let metadata = fs::metadata(&file).map_err(|error| {
-                format!("Nem olvasható recovered fájl {}: {error}", file.display())
+                format!("Cannot read recovered file {}: {error}", file.display())
             })?;
             let relative_path = file
                 .strip_prefix(&content_root)
-                .map_err(|error| format!("Manifest relatívútvonal-hiba: {error}"))?
+                .map_err(|error| format!("Manifest relative-path error: {error}"))?
                 .to_string_lossy()
                 .replace('/', "\\");
             let modified = metadata
@@ -151,10 +151,10 @@ pub(crate) fn build_manifest(
     let total_bytes = rows.iter().map(|row| row.size_bytes).sum();
     let file_count = rows.len();
 
-    send_stage("MasterFileList.csv írása...");
+    send_stage("Writing MasterFileList.csv...");
     fs::create_dir_all(&request.reports_directory).map_err(|error| {
         format!(
-            "Nem sikerült létrehozni a Reports mappát {}: {error}",
+            "Cannot create Reports directory {}: {error}",
             request.reports_directory.display()
         )
     })?;
@@ -177,7 +177,7 @@ pub(crate) fn build_manifest(
 
     fs::write(&output_path, csv).map_err(|error| {
         format!(
-            "Nem sikerült menteni a recovered fájl manifestet {}: {error}",
+            "Cannot save recovered file manifest {}: {error}",
             output_path.display()
         )
     })?;
@@ -220,13 +220,13 @@ fn collect_files(root: &Path, skip_managed_children: bool) -> Result<Vec<PathBuf
 
     while let Some(directory) = pending.pop() {
         for entry in fs::read_dir(&directory)
-            .map_err(|error| format!("Nem sikerült beolvasni {}: {error}", directory.display()))?
+            .map_err(|error| format!("Cannot read {}: {error}", directory.display()))?
         {
-            let entry = entry.map_err(|error| format!("Hibás manifest bejegyzés: {error}"))?;
+            let entry = entry.map_err(|error| format!("Invalid manifest entry: {error}"))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|error| format!("Nem olvasható fájltípus {}: {error}", path.display()))?;
+                .map_err(|error| format!("Cannot inspect file type {}: {error}", path.display()))?;
 
             if file_type.is_dir() {
                 if skip_managed_children && path.join(EXTRACTION_MARKER).is_file() {

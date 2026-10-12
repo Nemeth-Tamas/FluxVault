@@ -57,10 +57,11 @@ pub fn estimate(project: &ProjectState, report: &Value) -> Result<Value, String>
     let state = &report["custody"];
     let remaining = state["remaining_unclaimed_fresh_labels"].as_u64();
     let initial = state["pending_initial_reads"].as_u64().unwrap_or(0);
-    let transfers = state["usb_transfer_pending"]
+    let mut transfers = state["usb_transfer_pending"]
         .as_array()
         .map_or(0, |a| a.len()) as u64;
     let mut station_samples = BTreeMap::<String, Vec<f64>>::new();
+    let mut categorized = BTreeMap::<String, Vec<f64>>::new();
     for row in report["timings"].as_array().into_iter().flatten() {
         if let (Some(station), Some(ms)) = (row["station"].as_str(), row["read_decode_ms"].as_u64())
         {
@@ -68,18 +69,47 @@ pub fn estimate(project: &ProjectState, report: &Value) -> Result<Value, String>
                 .entry(station.into())
                 .or_default()
                 .push(ms as f64 / 1000.0);
+            let work = if row["retry"] == true {
+                "retry"
+            } else {
+                row["work"].as_str().unwrap_or("unknown")
+            };
+            categorized
+                .entry(format!("{station}:{work}"))
+                .or_default()
+                .push(ms as f64 / 1000.0);
         }
     }
-    let mut fresh_samples = station_samples.get("USB").cloned().unwrap_or_default();
-    fresh_samples.extend(station_samples.get("GW").cloned().unwrap_or_default());
+    let sample = |key: &str| categorized.get(key).cloned().unwrap_or_default();
+    let mut fresh_samples = sample("USB:fresh");
+    fresh_samples.extend(sample("GW:fresh"));
+    let mut fresh_retries = 0;
+    let mut gw_retries = 0;
+    for disk in state["disks"]
+        .as_object()
+        .into_iter()
+        .flat_map(|m| m.values())
+    {
+        if matches!(
+            disk["phase"].as_str(),
+            Some("reserved" | "reading" | "interrupted")
+        ) && disk["ticket"]["work"] == "usb_recovery"
+        {
+            transfers += 1;
+        }
+        if disk["phase"] == "interrupted" {
+            if disk["ticket"]["work"] == "usb_recovery" {
+                gw_retries += 1;
+            } else {
+                fresh_retries += 1;
+            }
+        }
+    }
     let fresh = remaining.map_or_else(
         || json!({"seconds_range":null,"reason":"no_saved_range_endpoint"}),
         |n| quantiles(fresh_samples, n + initial),
     );
-    let gw = quantiles(
-        station_samples.get("GW").cloned().unwrap_or_default(),
-        transfers,
-    );
+    let gw = quantiles(sample("GW:usb_recovery"), transfers);
     let processing = crate::processing::status(project)?;
     let pending_files = processing["pending"].as_u64().unwrap_or(0);
     // Reused outputs have nearly-zero durations and must not predict fresh work.
@@ -98,14 +128,34 @@ pub fn estimate(project: &ProjectState, report: &Value) -> Result<Value, String>
             })
             .map(|r| r.duration_seconds)
             .collect();
-        json!({"per_fresh_job":quantiles(samples,1),"remaining_jobs":null,
-            "reason":"future_extraction_and_recovery_yield_not_yet_known"})
+        let retries = saved
+            .rows
+            .iter()
+            .filter(|r| r.retried() && r.duration_seconds > 0.0)
+            .map(|r| r.duration_seconds)
+            .collect();
+        let missing_rows = saved
+            .planning
+            .jobs
+            .iter()
+            .filter(|job| {
+                !saved.rows.iter().any(|r| {
+                    r.job.source_path == job.source_path && r.job.source_sha256 == job.source_sha256
+                })
+            })
+            .count() as u64;
+        let retry_candidates = saved.rows.iter().filter(|r| r.status() != "OK").count() as u64;
+        json!({"per_fresh_job":quantiles(samples,1),"known_unrecorded_jobs":missing_rows,
+            "observed_retry_candidate_jobs":retry_candidates,"observed_retry_serial_seconds_range":quantiles(retries,retry_candidates),
+            "future_jobs":null,"reason":"saved_planning_scope_only_future_extraction_and_recovery_yield_unknown"})
     } else {
         json!({"seconds_range":null,"reason":"no_saved_conversion_observations"})
     };
     Ok(
-        json!({"schema_version":1,"physical_media_access":false,"forecast_kind":"rough_observed_phase_ranges_not_deadline",
+        json!({"schema_version":2,"physical_media_access":false,"forecast_kind":"rough_observed_phase_ranges_not_deadline",
         "paused":state["paused"],"fresh_read_decode":fresh,"queued_gw_read_decode":gw,
+        "interrupted_fresh_retry_serial":quantiles(sample("USB:retry").into_iter().chain(sample("GW:retry")).collect(),fresh_retries),
+        "interrupted_gw_retry_serial":quantiles(sample("GW:retry"),gw_retries),"observed_reader_groups":categorized,
         "pending_saved_file_disks":pending_files,"conversion":conversion,
         "whole_batch_seconds":null,"packing_audit_package_seconds":null,
         "note":"Reader ranges use observed 25th/75th percentiles and count in-flight work at full cost. Stations/workers overlap; do not sum these ranges. Swap delays, exceptional damage, future file count, conversion contention, packing and final packaging remain unknown. Paused state does not predict a restart time."}),

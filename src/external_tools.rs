@@ -145,14 +145,14 @@ pub enum ToolCheckEvent {
 pub fn initial_statuses() -> Vec<ToolStatus> {
     ToolKind::ALL
         .into_iter()
-        .map(|kind| ToolStatus::new(kind, ToolHealth::NotChecked, "Még nincs ellenőrizve."))
+        .map(|kind| ToolStatus::new(kind, ToolHealth::NotChecked, "Not checked yet."))
         .collect()
 }
 
 pub fn checking_statuses() -> Vec<ToolStatus> {
     ToolKind::ALL
         .into_iter()
-        .map(|kind| ToolStatus::new(kind, ToolHealth::Checking, "Ellenőrzés folyamatban..."))
+        .map(|kind| ToolStatus::new(kind, ToolHealth::Checking, "Check in progress..."))
         .collect()
 }
 
@@ -163,15 +163,11 @@ pub fn load_settings() -> Result<ToolSettings, String> {
         return Ok(ToolSettings::default());
     }
 
-    let json = fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "Nem sikerült beolvasni a beállításokat {}: {error}",
-            path.display()
-        )
-    })?;
+    let json = fs::read_to_string(&path)
+        .map_err(|error| format!("Cannot read settings {}: {error}", path.display()))?;
 
     serde_json::from_str(&json)
-        .map_err(|error| format!("Hibás eszközbeállítás-fájl {}: {error}", path.display()))
+        .map_err(|error| format!("Invalid tool settings file {}: {error}", path.display()))
 }
 
 pub fn save_settings(settings: &ToolSettings) -> Result<(), String> {
@@ -180,21 +176,17 @@ pub fn save_settings(settings: &ToolSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
-                "Nem sikerült létrehozni a beállítási mappát {}: {error}",
+                "Cannot create settings directory {}: {error}",
                 parent.display()
             )
         })?;
     }
 
     let json = serde_json::to_string_pretty(settings)
-        .map_err(|error| format!("Eszközbeállítás JSON hiba: {error}"))?;
+        .map_err(|error| format!("Tool settings JSON error: {error}"))?;
 
-    fs::write(&path, json).map_err(|error| {
-        format!(
-            "Nem sikerült menteni a beállításokat {}: {error}",
-            path.display()
-        )
-    })
+    fs::write(&path, json)
+        .map_err(|error| format!("Cannot save settings {}: {error}", path.display()))
 }
 
 pub fn default_audit_path() -> PathBuf {
@@ -451,9 +443,9 @@ pub(crate) fn check_tool(
     let candidates = candidate_paths(kind, configured);
     let Some(executable) = candidates.into_iter().find(|path| path.is_file()) else {
         let detail = if let Some(path) = configured {
-            format!("A beállított fájl nem található: {}", path.display())
+            format!("Configured file not found: {}", path.display())
         } else {
-            "Nem található ismert telepítési helyen vagy a PATH változóban.".to_owned()
+            "Not found in known installation locations or PATH.".to_owned()
         };
 
         return ToolStatus::new(kind, ToolHealth::Missing, detail);
@@ -500,10 +492,7 @@ pub(crate) fn check_tool(
         executable: Some(executable),
         version,
         detail: if ready {
-            format!(
-                "Egészségügyi ellenőrzés sikeres ({} ms).",
-                result.audit.duration_ms
-            )
+            format!("Health check passed ({} ms).", result.audit.duration_ms)
         } else if result.audit.success {
             "Greaseweazle info did not report a host-tools version".to_owned()
         } else if result.audit.stderr.contains("Probe timed out") {
@@ -513,11 +502,11 @@ pub(crate) fn check_tool(
             )
         } else if result.audit.exit_code.is_some() {
             format!(
-                "A verzióellenőrzés hibakóddal tért vissza: {:?}.",
+                "Version check returned an error code: {:?}.",
                 result.audit.exit_code
             )
         } else {
-            format!("Nem sikerült elindítani: {}", result.audit.stderr)
+            format!("Cannot start tool: {}", result.audit.stderr)
         },
         audit: Some(result.audit),
         audit_error: result.audit_error,
@@ -612,35 +601,26 @@ fn add_python_script_candidates(candidates: &mut Vec<PathBuf>) {
 pub(crate) fn append_audit(path: &Path, audit: &CommandAudit) -> Result<(), String> {
     let _guard = AUDIT_WRITE_LOCK
         .lock()
-        .map_err(|_| "Az eszköznapló zárolása sikertelen.".to_owned())?;
+        .map_err(|_| "Cannot lock tool audit log.".to_owned())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
-                "Nem sikerült létrehozni az eszköznapló mappáját {}: {error}",
+                "Cannot create tool audit directory {}: {error}",
                 parent.display()
             )
         })?;
     }
 
     let line =
-        serde_json::to_string(audit).map_err(|error| format!("Eszköznapló JSON hiba: {error}"))?;
+        serde_json::to_string(audit).map_err(|error| format!("Tool audit JSON error: {error}"))?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|error| {
-            format!(
-                "Nem sikerült megnyitni az eszköznaplót {}: {error}",
-                path.display()
-            )
-        })?;
+        .map_err(|error| format!("Cannot open tool audit log {}: {error}", path.display()))?;
 
-    writeln!(file, "{line}").map_err(|error| {
-        format!(
-            "Nem sikerült írni az eszköznaplót {}: {error}",
-            path.display()
-        )
-    })
+    writeln!(file, "{line}")
+        .map_err(|error| format!("Cannot write tool audit log {}: {error}", path.display()))
 }
 
 fn settings_file_path() -> PathBuf {
