@@ -165,7 +165,7 @@ Production/finalization automatically copy the verified ZIP/checksum and archive
 
 `disk show N` summarizes saved attempts. Add `--details` for their hashes, bad-sector LBAs, retry counts, and evidence paths; JSON includes those fields without an extra flag. Neither view accesses the floppy drive.
 
-`report export [--language hu|en]` refreshes audit and writes a complete versioned final bundle without tools/media or payload changes. JSON `workbook` now points to combined `FloppyFinalReport.xlsx`; `acquisition_workbook` retains the narrower Hungarian report. `final_report` includes directory/JSON/latest-pointer paths and attention counts. Scan/process also generate it and use stronger combined checks for attention. Export itself returns 0 when a warning report was successfully written. [Files and compatibility](FINAL_REPORTS.md).
+`report export [--language hu|en]` refreshes audit and writes a complete versioned final bundle without tools/media or payload changes. JSON `workbook` now points to combined `FloppyFinalReport.xlsx`; `acquisition_workbook` retains the narrower acquisition report in the same selected language. `final_report` includes directory/JSON/latest-pointer paths and attention counts. Scan/process also generate both workbooks using the saved choice and use stronger combined checks for attention. Export itself returns 0 when a warning report was successfully written. [Files and compatibility](FINAL_REPORTS.md).
 
 ## Saved-sector inspection: optional advanced diagnostic
 

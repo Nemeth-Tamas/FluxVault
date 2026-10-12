@@ -286,6 +286,103 @@ fn package_language_must_match_the_selected_report_without_rewriting_it() {
 }
 
 #[test]
+fn localized_report_explains_raw_diagnostics_without_translating_source_or_machine_values() {
+    let f = Fixture::files(false);
+    let mut document = f.report();
+    let raw =
+        "Selected extraction cannot be verified: Projekt/Összesítő/READABLE SEGMENT <unknown>.doc";
+    document.floppies[0].issues = vec![raw.into()];
+    document.issues = vec![raw.into()];
+    let original = serde_json::to_value(&document).unwrap();
+    for language in [Language::Hungarian, Language::English] {
+        let report = writer::publish(&f.0, &document, language).unwrap();
+        let raw_json: Value = serde_json::from_slice(&fs::read(&report.json).unwrap()).unwrap();
+        assert_eq!(raw_json, original);
+        let text = fs::read_to_string(report.directory.join("FloppyFinalAudit.txt")).unwrap();
+        assert!(text.contains(raw));
+        assert!(text.contains(language.text(
+            "MŰSZAKI BIZONYÍTÉK (EREDETI NYELV)",
+            "TECHNICAL EVIDENCE (ORIGINAL LANGUAGE)"
+        )));
+        let mut workbook = ZipArchive::new(fs::File::open(&report.workbook).unwrap()).unwrap();
+        let mut strings = String::new();
+        std::io::Read::read_to_string(
+            &mut workbook.by_name("xl/sharedStrings.xml").unwrap(),
+            &mut strings,
+        )
+        .unwrap();
+        assert!(
+            strings
+                .contains(language.text("Az alábbi műszaki részletek", "Technical details below"))
+        );
+        assert!(strings.contains("Projekt/Összesítő/READABLE SEGMENT &lt;unknown&gt;.doc"));
+        let csv = fs::read_to_string(report.directory.join("FloppyFinalAudit.csv")).unwrap();
+        assert!(csv.contains("AuditStatus") && csv.contains(raw));
+    }
+}
+
+#[test]
+fn package_rejects_new_acquisition_language_mismatch_even_with_a_matching_final_report() {
+    let f = Fixture::files(false);
+    let audit = audit::run_audit(&f.0, &|_| {}).unwrap();
+    let en = export(&f.0, &audit, Language::English).unwrap();
+    let statistics = crate::imaging::load_project_statistics(&f.0.images_dir()).unwrap();
+    let hu = crate::report::export_hungarian_report(
+        f.0.name(),
+        &f.0.reports_dir(),
+        &f.0.images_dir(),
+        &statistics,
+    )
+    .unwrap();
+    let before = fs::read(&hu).unwrap();
+    let final_before = fs::read(&en.workbook).unwrap();
+    let destination = f.0.root().with_extension("acquisition-mismatch-package");
+    fs::create_dir(&destination).unwrap();
+    let request = crate::package::PackageRequest {
+        project_root: f.0.root().to_owned(),
+        destination: destination.clone(),
+        project_name: "Acquisition mismatch".into(),
+    };
+    let error =
+        crate::package::build_package_in_language(&request, false, Language::English, &|_| {})
+            .unwrap_err();
+    assert!(
+        error.contains("Acquisition report language is hu")
+            && error.contains("report export --language en")
+    );
+    assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+    assert_eq!(before, fs::read(&hu).unwrap());
+    assert_eq!(final_before, fs::read(&en.workbook).unwrap());
+    let new_en = crate::report::export_acquisition_report(
+        f.0.name(),
+        &f.0.reports_dir(),
+        &f.0.images_dir(),
+        &statistics,
+        Language::English,
+    )
+    .unwrap();
+    let package =
+        crate::package::build_package_in_language(&request, false, Language::English, &|_| {})
+            .unwrap();
+    let mut zip = ZipArchive::new(fs::File::open(package.zip_path).unwrap()).unwrap();
+    assert!(
+        zip.by_name(&format!(
+            "Reports/{}",
+            new_en.file_name().unwrap().to_string_lossy()
+        ))
+        .is_ok()
+    );
+    assert!(
+        zip.by_name(&format!(
+            "Reports/{}",
+            hu.file_name().unwrap().to_string_lossy()
+        ))
+        .is_err()
+    );
+    assert_eq!(before, fs::read(hu).unwrap());
+}
+
+#[test]
 fn cancelled_export_cannot_replace_the_last_complete_generation() {
     let f = Fixture::files(false);
     let audit = audit::run_audit(&f.0, &|_| {}).unwrap();
@@ -440,10 +537,14 @@ fn delivery_mapping_refuses_duplicate_and_escaping_paths() {
 #[test]
 fn long_unicode_excel_messages_are_display_bounded_not_dropped_from_evidence() {
     let original = "😀".repeat(30_000);
-    let display = excel_text(&original);
+    let display = excel_text(&original, Language::English);
     assert!(display.encode_utf16().count() <= 32_767);
     assert!(display.ends_with("full value in JSON/CSV]"));
     assert_eq!(original.chars().count(), 30_000);
+    let hu = excel_text(&original, Language::Hungarian);
+    assert!(hu.encode_utf16().count() <= 32_767);
+    assert!(hu.ends_with("teljes érték a JSON/CSV-ben]"));
+    assert!(hu.starts_with("😀😀"));
 }
 
 #[test]

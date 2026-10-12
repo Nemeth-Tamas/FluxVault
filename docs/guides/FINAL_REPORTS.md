@@ -74,7 +74,9 @@ Reports/FinalReports/<generation>/
 
 Customer ZIPs include only the latest complete bundle and pointer, not stale/partial report history. Packaging verifies those bindings before selection and during ZIP streaming; a changed artifact blocks final promotion and preserves the partial archive.
 
-The timestamped Hungarian acquisition workbook and `EvidenceAudit.json/.csv` remain available. Their narrower checks may differ from the combined final report; use the latter for current delivery/conversion status. Expected-output integrity rows include missing/failed requested outputs; `InvalidGeneratedOutputs` counts formerly successful outputs that now fail checks. No candidates means 0% success, not a claim conversions ran.
+The timestamped acquisition workbook and `EvidenceAudit.json/.csv` remain available. The acquisition workbook now follows the same saved `hu`/`en` customer language, including chart references and unknown-timestamp labels. New filenames use `FluxVault_Jelentes_<timestamp>_<pid>-<sequence>_<language>.xlsx`; every earlier workbook remains untouched. Its scope warning explains that clean recorded sectors are not a completeness/extraction certificate. These narrower checks may differ from the combined final report; use the latter for current delivery/conversion status. Expected-output integrity rows include missing/failed requested outputs; `InvalidGeneratedOutputs` counts formerly successful outputs that now fail checks. No candidates means 0% success, not a claim conversions ran.
+
+Final workbook/text reports label original-language technical evidence explicitly. Tool diagnostics, status codes and customer paths stay unchanged in that section and in stable JSON/CSV data. Long XLSX display values use a localized shortening notice; complete values remain in JSON/CSV.
 
 ```powershell
 fv report export --language en --json

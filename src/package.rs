@@ -173,6 +173,27 @@ fn build_package_language(
             ));
         }
     }
+    if explicit_language.is_some() {
+        for file in &files {
+            if file.archive_path.starts_with("Reports/FluxVault_Jelentes_") {
+                // New acquisition editions record the presentation language in
+                // their immutable name. Older unnamed-language reports retain
+                // their archival compatibility; do not rewrite or guess them.
+                let recorded = ["hu", "en"]
+                    .into_iter()
+                    .find(|code| file.archive_path.ends_with(&format!("_{code}.xlsx")));
+                if let Some(recorded) = recorded
+                    && recorded != language.code()
+                {
+                    return Err(format!(
+                        "Acquisition report language is {recorded}; requested customer language is {}. Run report export --language {} before package build; existing reports/archives were not rewritten.",
+                        language.code(),
+                        language.code()
+                    ));
+                }
+            }
+        }
+    }
     if files.is_empty() {
         return Err("No archival files are available to package.".to_owned());
     }

@@ -2633,17 +2633,15 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let _snapshot = crate::project_work::snapshot(project.root())?;
             let audit = crate::audit::run_audit(&project, &|stage| eprintln!("{stage}"))?;
             let statistics = imaging::load_project_statistics(&project.images_dir())?;
-            let workbook = report::export_hungarian_report(
+            let language = report_language.unwrap_or(crate::project_settings::language(&project)?);
+            let workbook = report::export_acquisition_report(
                 project.name(),
                 &project.reports_dir(),
                 &project.images_dir(),
                 &statistics,
+                language,
             )?;
-            let final_report = crate::final_report::export(
-                &project,
-                &audit,
-                report_language.unwrap_or(crate::project_settings::language(&project)?),
-            )?;
+            let final_report = crate::final_report::export(&project, &audit, language)?;
             if json_output {
                 Ok(
                     json!({"project": project.root(), "workbook": final_report.workbook,

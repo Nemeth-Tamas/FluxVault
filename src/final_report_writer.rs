@@ -128,12 +128,15 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-pub(super) fn excel_text(value: &str) -> String {
+pub(super) fn excel_text(value: &str, language: Language) -> String {
     // XLSX cells have a 32,767 UTF-16-unit limit. Keep complete evidence in JSON/CSV.
     if value.encode_utf16().count() <= 32_767 {
         return value.to_owned();
     }
-    let suffix = " [truncated display; full value in JSON/CSV]";
+    let suffix = language.text(
+        " [rövidített megjelenítés; teljes érték a JSON/CSV-ben]",
+        " [truncated display; full value in JSON/CSV]",
+    );
     let budget = 32_767 - suffix.encode_utf16().count();
     let mut used = 0;
     let mut text = String::new();
@@ -319,7 +322,7 @@ pub(super) fn publish(
                     None
                 };
                 // Always literal strings: no customer path/text becomes an Excel formula.
-                let value = excel_text(value);
+                let value = excel_text(value, language);
                 if let Some(style) = style {
                     sheet
                         .write_string_with_format(row as u32 + 1, col as u16, &value, style)
@@ -357,10 +360,15 @@ pub(super) fn publish(
         .map_err(|e| e.to_string())?;
     for (i, issue) in document.issues.iter().enumerate() {
         limits
-            .write_string(i as u32 + 2, 0, excel_text(issue))
+            .write_string(i as u32 + 3, 0, excel_text(issue, language))
             .map_err(|e| e.to_string())?;
     }
     limits.set_column_width(0, 120).map_err(|e| e.to_string())?;
+    limits.write_string_with_format(1, 0, language.text(
+        "Az alábbi műszaki részletek az eredeti bizonyítéknyelven szerepelnek. Állapotkódokat, fájlneveket és eszközdiagnosztikát nem fordítunk vagy írunk át. A teljes nyers adatok a JSON/CSV-jelentésekben találhatók.",
+        "Technical details below retain their original evidence language. Status codes, filenames and tool diagnostics are not translated or rewritten. Complete raw values remain in the JSON/CSV reports."
+    ), &Format::new().set_text_wrap()).map_err(|e| e.to_string())?;
+    limits.set_row_height(1, 45).map_err(|e| e.to_string())?;
     let workbook_name = "FloppyFinalReport.xlsx";
     workbook
         .save(partial.join(workbook_name))
@@ -382,6 +390,15 @@ pub(super) fn publish(
     );
     for (name, value) in metrics {
         text.push_str(&format!("{name}: {value}\n"));
+    }
+    if !document.floppies.is_empty() {
+        text.push_str(&format!(
+            "\n{}\n",
+            language.text(
+                "MŰSZAKI BIZONYÍTÉK (EREDETI NYELV)",
+                "TECHNICAL EVIDENCE (ORIGINAL LANGUAGE)"
+            )
+        ));
     }
     for disk in &document.floppies {
         text.push_str(&format!(

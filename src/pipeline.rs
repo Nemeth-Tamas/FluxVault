@@ -491,14 +491,15 @@ fn run_pipeline_mode(
     let mut audit = audit::run_audit(project, &|message| stage(&format!("4/5: {message}")))?;
     stage("5/5: Creating the acquisition and full final-audit workbooks...");
     let statistics = imaging::load_project_statistics(&project.images_dir())?;
-    report::export_hungarian_report(
+    let language = crate::project_settings::language(project)?;
+    report::export_acquisition_report(
         project.name(),
         &project.reports_dir(),
         &project.images_dir(),
         &statistics,
+        language,
     )?;
-    let final_report =
-        crate::final_report::export(project, &audit, crate::project_settings::language(project)?)?;
+    let final_report = crate::final_report::export(project, &audit, language)?;
     crate::final_report::reconcile_audit(&mut audit, &final_report);
     let workbook_path = final_report.workbook;
     Ok(PipelineResult {

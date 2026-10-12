@@ -448,7 +448,8 @@ INSTALLATION AND COMMAND CATALOG
     report export [--language hu|en] refreshes audit and writes a complete
     versioned final bundle without tools/media or payload changes. JSON
     workbook now points to combined FloppyFinalReport.xlsx;
-    acquisition_workbook retains the narrower Hungarian report. final_report
+    acquisition_workbook retains the narrower report in the same saved hu/en
+    language, with acquisition-only scope and matching chart labels. final_report
     includes directory/JSON/latest-pointer paths and attention counts.
     Scan/process also generate it and use stronger combined checks for
     attention. Export itself returns 0 when a warning report was successfully
