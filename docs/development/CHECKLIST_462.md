@@ -1,5 +1,7 @@
 # Four closures — 2026-10-13, 462/480
 
+Later scope adjustment on 2026-10-13: the operator removed automatic swap detection from the TODO, retaining explicit physical confirmations. Current count is **462/479 (96.5%), 17 open**; no extra feature was completed and no code changed. The 480-item checkpoint below is historical.
+
 Baseline **458/480**, now **462/480 (96.3%), 18 open**. Four existing boxes closed, unchanged denominator. The ten-box target was not met; universal power-loss/custody, broader damaged-document/layout reconstruction and historical recovery parity are not replaced by narrower tests.
 
 | Existing item | Completion contract |
@@ -23,7 +25,7 @@ Baseline **458/480**, now **462/480 (96.3%), 18 open**. Four existing boxes clos
 
 Two post-gate lineage-only reruns fast-failed with `0xc0000409`. A bounded repeated run with `RUST_BACKTRACE=full` reproduced the failure on round four: parallel fixtures reused the same timestamp-only root, recovery correctly refused another fixture's operator files, then `Drop` panicked because the shared root had already been removed. The double panic aborted the harness. Exclusive root reservation plus a per-process atomic suffix fixes that new isolation defect; cleanup no longer replaces a first panic with a second one. The older storage occurrence has no matching original stack and is not declared solved by this diagnosis.
 
-The optional USB presence watcher observed **stale PRESENT after confirmed removal**. It requests no data/write access and never changes custody or starts acquisition. Stable automatic swap detection therefore remains open; normal confirmations are unchanged. This is neither a write-protect enforcement test nor proof that cached driver metadata can identify physical labels.
+The optional USB presence watcher observed **stale PRESENT after confirmed removal**. It requests no data/write access and never changes custody or starts acquisition. Automatic swap detection was subsequently removed from the requirements; explicit confirmations remain the intended workflow. This is neither a write-protect enforcement test nor proof that cached driver metadata can identify physical labels.
 
 The actual 136-disk benchmark's throughput/contention/yield acceptance, unexplained historical Windows fast-fail, every crash/power-loss publication boundary, deleted/carved historical-classification reconciliation and full same-evidence DMDE yield parity remain separate. A/B serial preload is still deferred for cabling; no simultaneous captures on one GW board or unconfirmed third drive is introduced.
 

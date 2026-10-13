@@ -1,8 +1,10 @@
-# FluxVault progress — 2026-10-13, 462/480
+# FluxVault progress — 2026-10-13, 462/479
+
+Current scope: **462/479 (96.5%), 17 open**. The operator removed automatic swap detection from the requirements after the checkpoint below. Explicit insertion/removal/identity confirmations remain the intended workflow. This changes the denominator, not the number of implemented features; no code changed for this scope adjustment.
 
 Current: **462/480 (96.3%), 18 open**, four existing boxes closed with no added boxes. Uniform managed-file provenance, conditional measured completion estimates, English-operator/Hungarian-default customer presentation and supported clean/damaged/DD/program-media live smoke are documented in [CHECKLIST_462](CHECKLIST_462.md). **750 routine tests / 32 opt-ins**, strict format/check/lint gates and actual PowerShell completion acceptance pass. Fresh captured-image hashes and prior final/customer-script archives remain unchanged.
 
-The USB metadata watcher found stale presence after removal; reliable automatic media-change acceptance stays open. This checkpoint is implementation/test coverage, not full damaged-file repair, historical DMDE yield parity or all-hardware/power-loss certification. [Live results](../testing/HARDWARE_20261013.md).
+The USB metadata watcher found stale presence after removal; the later operator decision removes automatic media-change acceptance from scope. Existing diagnostics are unchanged. This checkpoint is implementation/test coverage, not full damaged-file repair, historical DMDE yield parity or all-hardware/power-loss certification. [Live results](../testing/HARDWARE_20261013.md).
 
 ## Previous checkpoint — 2026-10-12, 458/480
 
