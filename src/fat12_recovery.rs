@@ -32,6 +32,8 @@ pub struct RecoveryReport {
     #[serde(default)]
     pub filesystem_error: Option<String>,
     #[serde(default)]
+    pub layout_competition: Option<fat12::LayoutCompetition>,
+    #[serde(default)]
     pub deleted: Option<fat12::DeletedAnalysis>,
     pub warning: String,
 }
@@ -392,8 +394,9 @@ fn recover_with_mode(
     }
     let report = RecoveryReport { schema_version:1, native_engine_version:fat12::RECOVERY_ENGINE_VERSION, method:if include_deleted {"native_fat12_deleted_candidates"} else {"native_fat12_and_validated_carving"}.into(),
         source_image:image.file_name().unwrap_or_default().to_string_lossy().to_string(), source_sha256:source_sha256.clone(),
-        disk, attempt:attempt.attempt_number, analysis, carving:Some(carved), filesystem_error,
+        disk, attempt:attempt.attempt_number, layout_competition:if analysis.is_none() {fat12::competing_layouts(&snapshot,&attempt.bad_sectors).ok()} else {None}, analysis, carving:Some(carved), filesystem_error,
         warning:deleted.as_ref().map_or_else(|| "Recovered bytes came only from acquisition-reported readable sectors. Layout hypotheses never fabricate boot bytes. Carved names/paths and lost-directory wrappers are reconstructed, not original; original directory parent/name/live-versus-deleted status may be unknown. Missing-FAT-link suffix hypotheses remain non-authoritative alternatives, not certified original file associations. Recorded extents bind every payload to the saved image. No missing bytes are guessed or joined across holes. Known deleted/free allocation is excluded when readable FAT metadata exists; raw fallback cannot determine live/deleted status. Pixel/CRC/container validation does not prove document semantics or original custody. Single-capture confidence is unchanged; disk/customer completeness remains unverified.".into(), |d| d.warning.clone()), deleted };
+    crate::cancellation::check()?;
     let staging = publication_root.join(format!(
         ".tmp-native-{disk:03}-{}-{}",
         std::process::id(),
@@ -1661,7 +1664,7 @@ mod tests {
         assert!(
             recovered
                 .output_directory
-                .ends_with("attempt_001_native_v5")
+                .ends_with("attempt_001_native_v6")
         );
         fs::remove_dir_all(project.root()).unwrap();
     }
@@ -1813,13 +1816,13 @@ mod tests {
         let mut archive = zip::ZipArchive::new(fs::File::open(package.zip_path).unwrap()).unwrap();
         assert!(
             archive
-                .by_name("Extracted/001/attempt_001_native_v5/Árvíztűrő.txt")
+                .by_name("Extracted/001/attempt_001_native_v6/Árvíztűrő.txt")
                 .is_ok()
         );
-        assert!(archive.by_name("Extracted/001/attempt_001_native_v5/System Volume Information/IndexerVolumeGuid").is_err());
+        assert!(archive.by_name("Extracted/001/attempt_001_native_v6/System Volume Information/IndexerVolumeGuid").is_err());
         assert!(
             archive
-                .by_name("Recovery/001/attempt_001_fat12_v5.json")
+                .by_name("Recovery/001/attempt_001_fat12_v6.json")
                 .is_ok()
         );
         drop(archive);
@@ -1976,6 +1979,72 @@ mod tests {
     }
 
     #[test]
+    fn content_supported_custom_layout_is_managed_hash_bound_and_reusable() {
+        let (project, attempt, _) = fixture(&[0]);
+        let mut bytes = fat12::tests::image();
+        let first = b"{\\rtf1 First known text}";
+        let second = b"{\\rtf1 Other known text}";
+        fat12::tests::entry(
+            &mut bytes,
+            19 * 512,
+            b"FIRST   RTF",
+            2,
+            first.len() as u32,
+            false,
+        );
+        fat12::tests::entry(
+            &mut bytes,
+            19 * 512 + 32,
+            b"SECOND  RTF",
+            3,
+            second.len() as u32,
+            false,
+        );
+        for copy in 0..2 {
+            fat12::tests::set_fat(&mut bytes, copy, 2, 0xfff);
+            fat12::tests::set_fat(&mut bytes, copy, 3, 0xfff);
+        }
+        bytes[27 * 512..27 * 512 + first.len()].copy_from_slice(first);
+        bytes[28 * 512..28 * 512 + second.len()].copy_from_slice(second);
+        bytes[..512].fill(0);
+        let attempt = rebind_fixture(&project, &attempt, &bytes);
+        let result = recover(&project, &attempt).unwrap();
+        assert_eq!(result.files, 2);
+        assert_eq!(result.layout_method, "inferred_content_supported_layout");
+        assert!(result.layout_warning.is_some());
+        let report: RecoveryReport =
+            serde_json::from_slice(&fs::read(&result.report_path).unwrap()).unwrap();
+        let comparison = report
+            .analysis
+            .as_ref()
+            .unwrap()
+            .layout_evidence
+            .competition
+            .as_ref()
+            .unwrap();
+        assert_eq!(comparison.image_sha256, attempt.sha256);
+        assert_eq!(comparison.excluded_lbas, vec![0]);
+        assert_eq!(
+            fs::read(result.output_directory.join("FIRST.RTF")).unwrap(),
+            first
+        );
+        assert_eq!(
+            fs::read(result.output_directory.join("SECOND.RTF")).unwrap(),
+            second
+        );
+        assert!(recover(&project, &attempt).unwrap().reused);
+        assert_eq!(
+            fs::read(
+                recovery_plan::resolve_image_path(&project.images_dir(), &attempt.image_file)
+                    .unwrap()
+            )
+            .unwrap(),
+            bytes
+        );
+        fs::remove_dir_all(project.root()).unwrap();
+    }
+
+    #[test]
     fn version_two_generation_and_report_survive_layout_engine_upgrade() {
         let (project, attempt, _) = fixture(&[34]);
         let initial = recover(&project, &attempt).unwrap();
@@ -2008,7 +2077,7 @@ mod tests {
         fs::rename(&initial.report_path, &old_report).unwrap();
         fs::write(&old_report, &old_bytes).unwrap();
         let upgraded = recover(&project, &attempt).unwrap();
-        assert!(upgraded.output_directory.ends_with("attempt_001_native_v5"));
+        assert!(upgraded.output_directory.ends_with("attempt_001_native_v6"));
         assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
         assert_eq!(fs::read(old_report).unwrap(), old_bytes);
         assert!(old.join("GOOD.TXT").is_file());
@@ -2053,7 +2122,7 @@ mod tests {
         );
         let legacy_bytes = fs::read(&legacy_fragments.report_path).unwrap();
         let upgraded = recover(&project, &attempt).unwrap();
-        assert_eq!(upgraded.native_engine_version, 5);
+        assert_eq!(upgraded.native_engine_version, 6);
         assert_eq!(fs::read(&old_report).unwrap(), old_bytes);
         assert!(extraction::verify_managed_extraction(&old, &attempt.sha256).is_ok());
         assert_eq!(

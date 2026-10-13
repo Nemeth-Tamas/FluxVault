@@ -1,4 +1,8 @@
-# FluxVault progress — 2026-10-13, 463/479
+# FluxVault progress — 2026-10-13, 464/479
+
+Latest: **464/479 (96.9%), 15 open**, one existing missing-metadata/competing-layout box closed, unchanged denominator. Native generation 6 compares bounded mirrored-FAT/root/cluster hypotheses with disjoint structurally validated file contents, retains weaker alternatives and refuses ambiguous/bounded-out new promotions. Exact cross-pass boot/root donor reconstruction remains provenance-bound. Saved 017 now survives simulated boot loss with 15 identical intact files and 14 content witnesses; five saved HD/DD cases retain 49 payload hashes/names/extents, known damage and unchanged sources. **766 routine tests / 33 opt-ins**, locked check, strict lint and formatting pass. No unrestricted layout, original-boot or customer-file certificate is inferred. [Scope, bounds and receipts](../recovery/LAYOUT_COMPARISON.md).
+
+## Previous editable-text checkpoint
 
 Latest saved-only checkpoint: **463/479 (96.7%), 16 open**. One existing historical-aggregate reconciliation box closes with reproducible script/CSV precedence, retained log/hash disagreements and an explicitly unavailable original workbook. New editable Word/RTF text copies and eight-cutpoint GW publication replay strengthen existing recovery/resume functionality; they do not close the broader damaged-container or universal power-loss/hardware requirements. The 470 target is not reached by relabelling these narrower results. [Checkpoint and receipts](OFFLINE_CHECKPOINT_463.md).
 

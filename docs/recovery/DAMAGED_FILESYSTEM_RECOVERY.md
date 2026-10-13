@@ -1,6 +1,6 @@
 # Damaged-filesystem recovery
 
-Native recovery gets past some missing boot sectors and automatically salvages validated signature candidates from orphan chains and damaged-file regions. Generation 5 adds [evidenced lost directories, missing-link file-tail alternatives and forensic Word text](DEEP_RECOVERY.md). It runs on saved images, never the inserted floppy; this is not complete DMDE replacement.
+Native recovery gets past some missing boot sectors and automatically salvages validated signature candidates from orphan chains and damaged-file regions. Generation 6 adds [bounded competing layouts and content witnesses](LAYOUT_COMPARISON.md), retaining generation 5's [lost directories, file-tail alternatives and forensic Word text](DEEP_RECOVERY.md). It runs on saved images, never the inserted floppy; this is not complete DMDE replacement.
 
 ## Use it
 
@@ -14,7 +14,7 @@ fv recovery extract 9
 
 Use `fluxvault` instead of `fv` if you have not installed the short launcher. The command needs neither Greaseweazle nor 7-Zip/LibreOffice. It returns **3 (attention)** even when complete files are recovered. `--json` includes `layout_method`, `layout_warning`, the source hash and the report location. Human output keeps the warning visible on reuse as well.
 
-New results live in `Extracted/NNN/attempt_NNN_native_v5` (or `legacy_native_v5`) and `Recovery/NNN/attempt_NNN_fat12_v5.json`. Older generations/manual folders are preserved, not rewritten. A changed source, incomplete acquisition map or altered managed inventory still blocks recovery. If no layout can be established, the engine records `analysis: null`, the filesystem error, and its bounded readable-region carving results instead of inventing geometry.
+New results live in `Extracted/NNN/attempt_NNN_native_v6` (or `legacy_native_v6`) and `Recovery/NNN/attempt_NNN_fat12_v6.json`. Older generations/manual folders are preserved, not rewritten. A changed source, incomplete acquisition map or altered managed inventory still blocks recovery. If no layout can be established, the engine records `analysis: null`, the filesystem error, its bounded layout comparison where applicable, and readable-region carving results instead of inventing geometry.
 
 ## What missing-boot inference means
 

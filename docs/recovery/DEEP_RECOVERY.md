@@ -1,6 +1,6 @@
 # Deeper recovery: directories, file tails and Word/RTF text
 
-Native recovery generation **5** adds automatic saved-image recovery paths. Word-text engine **5** retains content-based compound Word detection; RTF-text engine **3** retains readable RTF1 detection and explicit unsupported-symbol gaps without guessing their meaning. Both now publish Hungarian/default or English forensic editions with unchanged text/mapping limits. Normal `fv scan` / `fv process` invokes these when native recovery is needed. No floppy, new policy, DMDE step or recovery decision is required.
+Native recovery generation **6** adds bounded competing-layout and surviving-content checks when boot metadata is unavailable, including supported custom roots and full roots with no end marker. Existing lost-directory/tail recovery is retained. Word-text engine **5** and RTF-text engine **3** still publish Hungarian/default or English forensic editions with unchanged text/mapping limits. Normal `fv scan` / `fv process` invokes these when native recovery is needed. No floppy, new policy, DMDE step or recovery decision is required. [Missing-boot evidence and limits](LAYOUT_COMPARISON.md).
 
 ## Beginner: use it
 
@@ -40,14 +40,14 @@ Saved-copy acceptance on 2026-10-13 produced six HU/EN editions from disks 022, 
 
 | Result | Forensic location | Delivery treatment |
 | --- | --- | --- |
-| Lost-parent directory tree | `Extracted/NNN/attempt_NNN_native_v5/DirectoryRecovery/cluster_CCCC/...` | Separately marked `Directory-Recovered`; root name/parent/ownership unknown |
+| Lost-parent directory tree | `Extracted/NNN/attempt_NNN_native_v6/DirectoryRecovery/cluster_CCCC/...` | Separately marked `Directory-Recovered`; root name/parent/ownership unknown |
 | Validated missing-link tail alternatives | Same generation, under `FragmentRecovery` | Separately marked `Fragment-Hypotheses`; historical association unproven |
 | Intact signature candidate | Same generation, under `SignatureRecovery` | Existing `Signature-Recovered` treatment |
 | Readable pieces of an incomplete file | `Recovery/NNN/attempt_NNN_fragments_v2` | Raw evidence only, not complete documents |
 | Word main-text segments, readable HTML and report | `Recovery/NNN/attempt_NNN_word_text_v5_hu` or `_en` | Forensic evidence/generated presentation only; no routine conversion or original replacement |
 | RTF readable-prefix text segments, HTML and stopping report | `Recovery/NNN/attempt_NNN_rtf_text_v3_hu` or `_en` | Forensic text only; unsupported glyphs are gaps, remaining text length unknown |
 
-Legacy images use `legacy_native_v5` rather than an attempt extraction name. The native report is `Recovery/NNN/attempt_NNN_fat12_v5.json`. Older native generations, fragment-v1 folders, Word-text-v1/v2/v3/v4 and RTF-v1/v2 folders, and forensic deleted-v1 results stay intact. Same-acquisition selection cannot replace an ordinary reachable file solely with reconstructed/hypothetical copies. The archival ZIP includes forensic recovery evidence and generated HTML with warnings; inclusion is not customer-delivery certification.
+Legacy images use `legacy_native_v6` rather than an attempt extraction name. The native report is `Recovery/NNN/attempt_NNN_fat12_v6.json`. Older native generations, fragment-v1 folders, Word-text-v1/v2/v3/v4 and RTF-v1/v2 folders, and forensic deleted-v1 results stay intact. Same-acquisition selection cannot replace an ordinary reachable file solely with reconstructed/hypothetical copies. The archival ZIP includes forensic recovery evidence and generated HTML with warnings; inclusion is not customer-delivery certification.
 
 ## Advanced: lost directories
 

@@ -56,6 +56,7 @@ The saved-batch review records results; pilot/runbook documents also retain earl
 ## Development and historical handoffs
 
 - [Current progress and coverage measures](development/PROGRESS.md)
+- [Latest missing-boot/competing-layout checkpoint](recovery/LAYOUT_COMPARISON.md)
 - [Latest saved-only checkpoint: editable text, GW publication and historical counts](development/OFFLINE_CHECKPOINT_463.md)
 - [Latest four bounded checklist closures](development/CHECKLIST_462.md)
 - [Previous eight closures](development/CHECKLIST_458.md)

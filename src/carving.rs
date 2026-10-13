@@ -274,6 +274,22 @@ fn signature(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Reuse the bounded structural validators for a directory-size-clipped
+/// payload. This is evidence for layout comparison, never original semantics.
+pub(crate) fn validate_layout_anchor(
+    bytes: &[u8],
+    work: &mut u64,
+) -> Result<Option<String>, String> {
+    let Some(format) = signature(bytes) else {
+        return Ok(None);
+    };
+    let (length, _, proof) = validate(bytes, format, work)?;
+    if length != bytes.len() {
+        return Err("Recognized layout anchor does not cover the declared file extent".into());
+    }
+    Ok(Some(proof))
+}
+
 fn extents(lbas: &[u64], start: usize, length: usize) -> Vec<Extent> {
     let mut extents: Vec<Extent> = vec![];
     let mut offset = start;

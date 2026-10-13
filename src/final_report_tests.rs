@@ -512,6 +512,7 @@ fn bound_native_description_exposes_deleted_markers_and_unknown_layout_without_c
     image[9728] = 0xe5;
     image[9729..9739].copy_from_slice(b"EST    TXT");
     let mut proof = crate::fat12_recovery::RecoveryReport {
+        layout_competition: None,
         schema_version: 1,
         native_engine_version: 5,
         method: "native_fat12_and_validated_carving".into(),

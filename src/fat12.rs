@@ -6,8 +6,18 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[path = "fat12_layout_candidates.rs"]
+mod layout_candidates;
 #[path = "fat12_layout.rs"]
 mod layout_recovery;
+pub use layout_candidates::{LayoutCandidate, LayoutCompetition};
+pub fn competing_layouts(image: &[u8], bad_lbas: &[u64]) -> Result<LayoutCompetition, String> {
+    let bad: BTreeSet<_> = bad_lbas.iter().copied().collect();
+    if bad.len() != bad_lbas.len() || bad.iter().any(|b| *b >= (image.len() / SECTOR) as u64) {
+        return Err("Invalid layout-comparison sector map".into());
+    }
+    layout_candidates::inspect(image, &bad)
+}
 #[path = "fat12_orphans.rs"]
 mod orphan_recovery;
 pub(crate) use orphan_recovery::{orphan_regions, partial_file_regions, partial_file_safe};
@@ -24,7 +34,7 @@ pub(crate) use fragmented_recovery::hypotheses as fragmented_hypotheses;
 const SECTOR: usize = 512;
 const MAX_ENTRIES: usize = 16_384;
 pub const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
-pub const RECOVERY_ENGINE_VERSION: u32 = 5;
+pub const RECOVERY_ENGINE_VERSION: u32 = 6;
 
 /// An inferred standard layout is a bounded hypothesis, not recovered boot bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +45,8 @@ pub struct LayoutEvidence {
     pub source_lbas: Vec<u64>,
     pub anchor_directory_offsets: Vec<usize>,
     pub warning: Option<String>,
+    #[serde(default)]
+    pub competition: Option<LayoutCompetition>,
 }
 
 impl Default for LayoutEvidence {
@@ -46,6 +58,7 @@ impl Default for LayoutEvidence {
             source_lbas: vec![0],
             anchor_directory_offsets: Vec::new(),
             warning: None,
+            competition: None,
         }
     }
 }

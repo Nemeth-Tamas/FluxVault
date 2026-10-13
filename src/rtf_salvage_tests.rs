@@ -666,6 +666,7 @@ fn prefix_mapping_clips_eof_rejects_bad_ranges_and_never_bridges_holes() {
     let mut oversized = analysis.clone();
     oversized.unrecovered_files[0].record = parent.clone();
     let native = RecoveryReport {
+        layout_competition: None,
         schema_version: 1,
         native_engine_version: 5,
         method: "test".into(),

@@ -10,6 +10,75 @@ pub(super) fn resolve(
     image: &[u8],
     bad: &BTreeSet<u64>,
 ) -> Result<(Layout, LayoutEvidence), String> {
+    let standard = standard(image, bad);
+    if standard
+        .as_ref()
+        .is_ok_and(|(_, evidence)| evidence.warning.is_none())
+    {
+        return standard;
+    }
+    // Readable contradictory/partitioned BPBs are never overridden. Broader
+    // inference is admitted only for an acquisition-excluded boot sector.
+    if standard.is_err() && !bad.contains(&0) {
+        return standard;
+    }
+    let competition = super::layout_candidates::inspect(image, bad)?;
+    match standard {
+        Ok((layout, mut evidence)) => {
+            if let Some(index) = competition.selected_candidate {
+                let other = &competition.candidates[index];
+                if other.layout.data_start != layout.data_start
+                    || other.layout.sectors_per_cluster != layout.sectors_per_cluster
+                    || other.layout.root_start != layout.root_start
+                {
+                    return content_supported(competition, evidence.boot_error.unwrap_or_default());
+                }
+            } else if competition.candidates.iter().any(|c| {
+                c.content_anchors.len() >= 2
+                    && (c.layout.data_start != layout.data_start
+                        || c.layout.sectors_per_cluster != layout.sectors_per_cluster
+                        || c.layout.root_start != layout.root_start)
+            }) {
+                return Err("Competing content-supported layout mappings or a bounded-out search; no automatic winner".into());
+            }
+            evidence.competition = Some(competition);
+            Ok((layout, evidence))
+        }
+        Err(error) => {
+            if competition.selected_candidate.is_none() {
+                return Err(format!(
+                    "{error}; bounded competing-layout comparison found {} plausible candidates, no unique two-content-anchor candidate (search complete: {})",
+                    competition.candidates.len(),
+                    competition.search_complete_within_bounds
+                ));
+            }
+            content_supported(competition, error)
+        }
+    }
+}
+
+fn content_supported(
+    competition: super::LayoutCompetition,
+    error: String,
+) -> Result<(Layout, LayoutEvidence), String> {
+    let index = competition
+        .selected_candidate
+        .ok_or("No selected content-supported layout")?;
+    let candidate = &competition.candidates[index];
+    let layout = candidate.layout.clone();
+    let evidence = LayoutEvidence {
+                method: "inferred_content_supported_layout".into(),
+                standard_profile: None,
+                boot_error: Some(error),
+                source_lbas: (layout.reserved_sectors..layout.data_start).map(|n|n as u64).collect(),
+                anchor_directory_offsets: candidate.content_anchors.iter().map(|a|a.directory_offset).collect(),
+                warning: Some("Bounded missing-boot hypothesis supported by mirrored FAT/root chains and at least two structurally validated, disjoint file contents. Lower-evidence alternatives remain recorded. No boot bytes reconstructed, unrestricted layout uniqueness or original semantics certified.".into()),
+                competition: Some(competition),
+    };
+    Ok((layout, evidence))
+}
+
+fn standard(image: &[u8], bad: &BTreeSet<u64>) -> Result<(Layout, LayoutEvidence), String> {
     let error = match Layout::parse(image, bad) {
         Ok(layout) => return Ok((layout, LayoutEvidence::default())),
         Err(error) => error,
@@ -129,6 +198,7 @@ pub(super) fn resolve(
         source_lbas,
         anchor_directory_offsets: anchors,
         warning: Some("Standard-layout hypothesis corroborated by matching readable FATs and root file sizes/chains. Nonstandard layouts of the same image length are not exhaustively excluded. Boot bytes are NOT reconstructed; inferred-layout files require recovery review, not certified delivery.".into()),
+        competition: None,
     }))
 }
 
@@ -277,19 +347,6 @@ mod tests {
             let mut damaged = original.clone();
             damaged[..SECTOR].fill(0);
             let bad = [vec![0], bad].concat();
-            if disk == 17 {
-                assert!(
-                    analyze(&damaged, &bad)
-                        .unwrap_err()
-                        .contains("no intact root end marker and size-consistent live file chain")
-                );
-                assert_eq!(std::fs::read(&source).unwrap(), original);
-                eprintln!(
-                    "Saved 017: missing-boot fallback correctly refused absent root end marker; original BPB still recovers {} files",
-                    baseline.recovered_files.len()
-                );
-                continue;
-            }
             let recovered = analyze(&damaged, &bad).unwrap();
             let payloads = |analysis: &crate::fat12::Analysis| {
                 analysis
@@ -306,7 +363,24 @@ mod tests {
                     .collect::<Vec<_>>()
             };
             assert_eq!(payloads(&recovered), payloads(&baseline), "disk {disk:03}");
-            assert_eq!(recovered.layout_evidence.method, "inferred_standard_layout");
+            assert_eq!(
+                recovered.layout_evidence.method,
+                if disk == 17 {
+                    "inferred_content_supported_layout"
+                } else {
+                    "inferred_standard_layout"
+                }
+            );
+            if disk == 17 {
+                let c = recovered.layout_evidence.competition.as_ref().unwrap();
+                assert!(c.search_complete_within_bounds);
+                assert_eq!(
+                    c.candidates[c.selected_candidate.unwrap()]
+                        .content_anchors
+                        .len(),
+                    14
+                );
+            }
             assert_eq!(recovered.skipped.len(), baseline.skipped.len());
             assert_eq!(std::fs::read(&source).unwrap(), original);
             eprintln!(
@@ -317,7 +391,7 @@ mod tests {
                     .layout_evidence
                     .standard_profile
                     .as_deref()
-                    .unwrap()
+                    .unwrap_or("content-supported bounded layout")
             );
         }
     }
