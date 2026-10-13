@@ -252,6 +252,12 @@ fn native_pipeline_cli_reuse_tamper_and_archival_evidence_keep_zero_whole_files(
     };
     let result = run().unwrap();
     assert_eq!(result.files, 0);
+    assert_eq!(result.editable_editions.len(), 1);
+    assert_eq!(result.editable_editions[0].paths.len(), 1);
+    let editable = result.editable_editions[0].paths[0].clone();
+    let editable_before = fs::read(&editable).unwrap();
+    assert!(run().unwrap().editable_editions[0].reused);
+    assert_eq!(fs::read(&editable).unwrap(), editable_before);
     let text = result.rtf_salvage.unwrap();
     assert_eq!(text.documents_with_text, 1);
     let report: Report = serde_json::from_slice(&fs::read(&text.report_path).unwrap()).unwrap();
@@ -306,6 +312,7 @@ fn native_pipeline_cli_reuse_tamper_and_archival_evidence_keep_zero_whole_files(
             .contains(&format!("RTF prefix text engine v{ENGINE_VERSION}"))
     );
     assert!(human.output.contains("Open readable edition:"));
+    assert!(human.output.contains("Open editable recovery edition:"));
     let manifest = crate::manifest::build_manifest(
         &crate::manifest::ManifestRequest {
             extracted_root: p.extracted_dir(),
@@ -371,6 +378,27 @@ fn native_pipeline_cli_reuse_tamper_and_archival_evidence_keep_zero_whole_files(
     fs::write(html_path, b"operator changed edition").unwrap();
     assert!(run().unwrap_err().contains("preserved"));
     assert_eq!(fs::read(html_path).unwrap(), b"operator changed edition");
+    assert_eq!(fs::read(p.images_dir().join("001.img")).unwrap(), image);
+}
+
+#[test]
+fn changed_editable_docx_is_preserved_and_refuses_reuse() {
+    let (p, attempt, image) = fixture();
+    let run = || {
+        crate::fat12_recovery::recover_attempt(
+            &p.images_dir(),
+            &p.extracted_dir(),
+            &p.recovery_dir(),
+            1,
+            &attempt,
+            &|_| {},
+        )
+    };
+    let result = run().unwrap();
+    let path = &result.editable_editions[0].paths[0];
+    fs::write(path, b"operator edited the DOCX").unwrap();
+    assert!(run().unwrap_err().contains("preserved"));
+    assert_eq!(fs::read(path).unwrap(), b"operator edited the DOCX");
     assert_eq!(fs::read(p.images_dir().join("001.img")).unwrap(), image);
 }
 

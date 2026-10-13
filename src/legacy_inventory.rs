@@ -186,6 +186,13 @@ pub fn inspect(path: &Path) -> Result<Value, String> {
             }
         }
     }
+    let historical = crate::legacy_reconciliation::reconcile(
+        &mut zip,
+        &inventory,
+        &index,
+        &extraction,
+        &conversion,
+    )?;
     let (after_bytes, after_sha) = hash_reader(
         File::open(path).map_err(|e| e.to_string())?,
         4 * 1024 * 1024 * 1024,
@@ -203,7 +210,8 @@ pub fn inspect(path: &Path) -> Result<Value, String> {
         "source_record_count_matches_members":master.len()==extracted,"extraction_rows":extraction.len(),"extraction_statuses":counts(&extraction,"Status"),
         "conversion_rows":conversion.len(),"conversion_statuses":counts(&conversion,"Status"),"conversion_outputs":output_checks,
         "archive_index_rows":index.len(),"archive_index_statuses":counts(&index,"Status"),"discrepancies":discrepancies,
-        "note":"Reproduces the exact archived script/DMDE inventory and original aggregate classifications. All archived bytes are streamed/CRC/SHA checked, not extracted or rewritten. Source records include tool/metadata/deleted/carved scope as originally inventoried; these totals are not fresh automated recovery yield, customer certification or reconciliation of unavailable earlier workbook claims."}),
+        "historical_reconciliation":historical,
+        "note":"Reproduces the exact archived script/DMDE inventory and original aggregate classifications, with per-label script/CSV status precedence and parsed log differences. All archived bytes are streamed/CRC/SHA checked, not extracted or rewritten. Source records include tool/metadata/deleted/carved scope as originally inventoried; these totals are not fresh automated recovery yield or customer certification. An absent original workbook is explicitly unavailable."}),
     )
 }
 #[cfg(test)]

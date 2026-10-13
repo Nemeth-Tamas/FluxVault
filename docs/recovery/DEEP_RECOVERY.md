@@ -28,6 +28,14 @@ If text survives, the command prints **Open readable edition: ...html**. Open th
 
 Do not initialize/reset the old project, edit its internal reports, or copy recovery payloads over originals. Source images/maps/hashes must match; changed managed output is preserved and refused rather than overwritten.
 
+### Editable recovered text
+
+The same command now also prints **Open editable recovery edition: ...docx** when the validated Word/RTF decoder has text. Open that copy in Word or LibreOffice to edit the surviving text without assembling segment files yourself. Hungarian/default or `--language en` changes the explanatory notices, never the source text. Gaps and unsupported symbols are visible editorial notices, not guessed words. Adjacent Word segments are joined only when their recorded character positions are contiguous.
+
+These are **new editable text containers**, not repaired DOC/RTF originals. Formatting, pictures, embedded objects, unavailable text and semantic completeness remain unknown. They stay in separate `Recovery/NNN/attempt_NNN_word_editable_v1_*` or `rtf_editable_v1_*` folders with `editable-documents.json`, source/report hashes, exact encoded-source relations and output hashes. They add no intact-file or ordinary conversion jobs, and attention exit 3 remains expected. Reuse checks every recorded byte and refuses modified editions rather than replacing your edits. Committed copies are archival evidence; private staging is excluded.
+
+Saved-copy acceptance on 2026-10-13 produced six HU/EN editions from disks 022, 024 and 052; all 114 selected image/log/raw/decode/proof artifacts stayed unchanged. The audited application conversion service independently opened those six OOXML payloads and produced verified modern/PDF outputs using isolated fixture-only legacy filename aliases. This is file interoperability, not a visual-layout or original-document-repair certificate. The bundled document renderer is unavailable, so visual acceptance remains open.
+
 ## What is saved
 
 | Result | Forensic location | Delivery treatment |

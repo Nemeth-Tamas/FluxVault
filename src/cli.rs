@@ -176,7 +176,7 @@ Usage:
   fluxvault recovery extract N [--include-deleted] [--project PATH]
                                     Recover intact/signature files offline; deleted opt-in stays forensic-only
   fluxvault recovery documents N [--project PATH] [--language hu|en]
-                                    Native recovery plus forensic Word/RTF prefix text
+                                    Native recovery plus forensic Word/RTF text, HTML and editable copies
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
   fluxvault conversion plan [--project PATH]
@@ -752,13 +752,18 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 result.to_string()
             } else {
                 format!(
-                    "Historical archive inventory / saved ZIP only\n{} source records / {} extracted members\n{} conversion jobs: {}\n{} indexed disks: {}\nDiscrepancies: {}\n{}",
+                    "Historical archive inventory / saved ZIP only\n{} source records / {} extracted members\n{} conversion jobs: {}\n{} indexed disks: {}\nReplayed script classification: {} imaging OK / {} not OK; {} final OK / {} attention.\nParsed logs (different scope): {}\nDiscrepancies: {}\n{}",
                     result["source_records"],
                     result["extracted_members"],
                     result["conversion_rows"],
                     result["conversion_statuses"],
                     result["archive_index_rows"],
                     result["archive_index_statuses"],
+                    result["historical_reconciliation"]["historical_imaging_ok"],
+                    result["historical_reconciliation"]["historical_imaging_not_ok"],
+                    result["historical_reconciliation"]["historical_fully_ok"],
+                    result["historical_reconciliation"]["historical_attention"],
+                    result["historical_reconciliation"]["independently_parsed_primary_log_statuses"],
                     result["discrepancies"],
                     result["note"].as_str().unwrap_or("")
                 )

@@ -6,7 +6,6 @@ use crate::{
         CaptureSettings, GreaseweazleBackend, GreaseweazleCommand, GreaseweazleDeviceStatus,
         GreaseweazleProfile, classify_info_output,
     },
-    imaging,
     project::ProjectState,
 };
 use serde::{Deserialize, Serialize};
@@ -19,6 +18,8 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+#[path = "gw_publication.rs"]
+mod publication;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryPass {
@@ -736,6 +737,28 @@ fn recover_impl(
         }
         result.resumed = true;
         result.physical_reads_this_run = 0;
+        return Ok(result);
+    }
+    if let Some(reason) = publication::pending_reason(&dir, &j)? {
+        // A crash after accepting saved evidence cannot authorize more capture
+        // work, reset budgets or mint another image attempt. Replay/hash-bind
+        // the frozen publication before completing the recovery journal.
+        let evidence = aggregate(project, disk, profile, &j.stages)?;
+        let bad: Vec<_> = evidence
+            .missing
+            .iter()
+            .chain(&evidence.conflicts)
+            .copied()
+            .collect();
+        accept(&evidence.bytes, &bad)?;
+        if let Some(approval) = &j.read_conflicts {
+            crate::read_conflicts::verify(project, approval, &evidence.bytes, &bad)?;
+        }
+        let mut result = publish(project, &dir, &j, &evidence, &reason)?;
+        result.resumed = true;
+        result.physical_reads_this_run = 0;
+        j.result = Some(result.clone());
+        save_journal(&state, &j)?;
         return Ok(result);
     }
     if let Some(approval) = &j.read_conflicts {
@@ -1862,14 +1885,6 @@ fn publish(
     if images.parent() != Some(root.as_path()) || logs.parent() != Some(root.as_path()) {
         return Err("Image/log directory escapes project".to_owned());
     }
-    let attempt = imaging::next_attempt_number(&images, j.disk)?;
-    let stem = format!("{:03}_attempt_{attempt:03}", j.disk);
-    let image = images.join(format!("{stem}.img"));
-    let metadata = images.join(format!("{stem}.json"));
-    let partial_metadata = images.join(format!("{stem}.partial.json"));
-    let partial = images.join(format!("{stem}.partial.img"));
-    let log = logs.join(format!("{stem}.log"));
-    let provenance = dir.join(format!("{stem}_provenance.json"));
     let sha256 = format!("{:x}", Sha256::digest(&e.bytes));
     let unresolved = e
         .missing
@@ -1896,8 +1911,15 @@ fn publish(
         "read_conflicts": j.read_conflicts,
         "note": "Single-capture sectors have lower confidence. Within-GW unreadable/conflicting sectors are zero-filled. Optional read_conflicts records separately preserved USB/GW disagreements; the observed GW edition is retained, not guessed or certified. No customer-delivery certification."
     })).map_err(|e| e.to_string())?;
-    write_new(&provenance, &prov)?;
-    write_new(&partial, &e.bytes)?;
+    let prov_hash = format!("{:x}", Sha256::digest(&prov));
+    let reservation = publication::reserve(project, dir, j, &sha256, &prov_hash, reason)?;
+    let attempt = reservation.attempt;
+    let stem = format!("{:03}_attempt_{attempt:03}", j.disk);
+    let (image, partial) = publication::paths(&images, j.disk, attempt);
+    let metadata = images.join(format!("{stem}.json"));
+    let partial_metadata = images.join(format!("{stem}.partial.json"));
+    let log = logs.join(format!("{stem}.log"));
+    let provenance = dir.join(format!("{stem}_provenance.json"));
     let mut text = format!(
         "BEGIN | disk={} | attempt={attempt} | source=greaseweazle-derived\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track={spt} | bytes_per_sector=512 | total_sectors={} | total_bytes={}\n",
         j.disk,
@@ -1912,8 +1934,6 @@ fn publish(
         unresolved.len(),
         e.bytes.len()
     ));
-    write_new(&log, text.as_bytes())?;
-    let prov_hash = format!("{:x}", Sha256::digest(&prov));
     let bad_sectors = unresolved
         .iter()
         .map(|lba| {
@@ -1934,7 +1954,7 @@ fn publish(
         "source_device": format!("Greaseweazle drive {}", j.drive),
         "image_file": image,
         "log_file": log,
-        "timestamp_unix_ms": external_tools::current_unix_ms(),
+        "timestamp_unix_ms": reservation.created_unix_ms,
         "geometry": {
             "cylinders": 80, "heads": 2, "sectors_per_track": spt,
             "bytes_per_sector": 512, "total_bytes": e.bytes.len(), "format_guess": j.profile
@@ -1951,11 +1971,29 @@ fn publish(
         "read_conflicts": j.read_conflicts
     }))
     .map_err(|e| e.to_string())?;
-    publish_image_no_replace(&partial, &image)?;
+    if !metadata.try_exists().map_err(|e| e.to_string())? {
+        publication::write_or_verify(&partial_metadata, &meta)?;
+    }
+    publication::checkpoint("partial_metadata")?;
+    publication::write_or_verify(&provenance, &prov)?;
+    publication::checkpoint("provenance")?;
+    if !image.try_exists().map_err(|e| e.to_string())? {
+        publication::write_or_verify(&partial, &e.bytes)?;
+    }
+    publication::checkpoint("partial_image")?;
+    publication::write_or_verify(&log, text.as_bytes())?;
+    publication::checkpoint("log")?;
+    publication::promote(&partial, &image, &e.bytes)?;
+    publication::checkpoint("image")?;
     // Metadata is the completed-image commit record. Readers never see a partly
     // written JSON document; interruption leaves only an ignored partial record.
-    write_new(&partial_metadata, &meta)?;
-    publish_image_no_replace(&partial_metadata, &metadata)?;
+    publication::promote(&partial_metadata, &metadata, &meta)?;
+    publication::checkpoint("metadata")?;
+    // Also seal already-completed files on replay after metadata committed but
+    // the caller's recovery journal did not. Do not mint another image attempt.
+    publication::write_or_verify(&image, &e.bytes)?;
+    publication::write_or_verify(&log, text.as_bytes())?;
+    publication::write_or_verify(&provenance, &prov)?;
     Ok(RecoveryResult {
         disk: j.disk,
         selected_profile: Some(j.profile.clone()),
@@ -2003,6 +2041,123 @@ fn publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gw_publication_every_durable_cut_resumes_one_slot_and_refuses_changed_outputs() {
+        struct NoHardware;
+        impl GreaseweazleBackend for NoHardware {
+            fn mode(&self) -> crate::greaseweazle::BackendMode {
+                crate::greaseweazle::BackendMode::MockNoHardware
+            }
+            fn execute(
+                &mut self,
+                _: &crate::greaseweazle::GreaseweazleCommand,
+            ) -> Result<crate::greaseweazle::GreaseweazleExecution, String> {
+                panic!("Publication resume must never invoke capture, decode or device commands")
+            }
+        }
+        for phase in [
+            "reservation_partial",
+            "reservation",
+            "partial_metadata",
+            "provenance",
+            "partial_image",
+            "log",
+            "image",
+            "metadata",
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "fv-gw-cut-{}-{}-{}",
+                std::process::id(),
+                external_tools::current_unix_ms(),
+                phase
+            ));
+            fs::create_dir(&root).unwrap();
+            let p = ProjectState::create_without_session(root).unwrap();
+            let dir = p.root().join("Flux/Recovery");
+            fs::create_dir_all(&dir).unwrap();
+            let dir = dir.canonicalize().unwrap();
+            let mut job = clock_job();
+            job.stages[0].decode_attempt = Some(1);
+            job.stages[0].capture_started_unix_ms = None;
+            let evidence = Evidence {
+                bytes: vec![0x5a; 2880 * 512],
+                missing: vec![],
+                conflicts: vec![],
+                controls: vec![],
+                sectors: (0..2880)
+                    .map(|lba| SectorProvenance {
+                        lba,
+                        capture_attempts: vec![1],
+                        decode_attempts: vec![1],
+                        confidence: "single_capture_gw_reported_good".into(),
+                    })
+                    .collect(),
+            };
+            // Saved mock-capture lineage is sufficient for this catalog replay;
+            // it is not an SCP/CRC or physical-drive qualification fixture.
+            let raw = b"synthetic saved capture for publication replay";
+            let raw_hash = format!("{:x}", Sha256::digest(raw));
+            fs::write(p.root().join("Flux/023_attempt_001.scp"), raw).unwrap();
+            fs::write(p.root().join("Flux/023_attempt_001.json"), serde_json::to_vec(&json!({
+                "schema_version":1,"disk_number":23,"attempt_number":1,"profile":"ibm.1440","drive":"B","revolutions":2,
+                "status":"complete","flux_file":"023_attempt_001.scp","bytes":raw.len(),"sha256":raw_hash,"command":[],"detail":null,
+                "capture_settings":job.stages[0].settings
+            })).unwrap()).unwrap();
+            fs::create_dir(p.root().join("Flux/Derived")).unwrap();
+            let decode = "023_flux_001_ibm_1440_decode_001";
+            fs::write(
+                p.root().join(format!("Flux/Derived/{decode}.img")),
+                &evidence.bytes,
+            )
+            .unwrap();
+            fs::write(p.root().join(format!("Flux/Derived/{decode}.json")), serde_json::to_vec(&json!({
+                "schema_version":1,"disk_number":23,"capture_attempt":1,"decode_attempt":1,"profile":"ibm.1440",
+                "source_flux_file":"023_attempt_001.scp","source_sha256":raw_hash,"output_file":format!("{decode}.img"),
+                "output_sha256":format!("{:x}", Sha256::digest(&evidence.bytes)),"bytes":evidence.bytes.len(),"status":"unverified_sector_quality",
+                "command":[],"reported_found_sectors":2880,"reported_total_sectors":2880,"gw_bad_lbas":[],"capture_settings":job.stages[0].settings
+            })).unwrap()).unwrap();
+            save_journal(&dir.join("023_job.json"), &job).unwrap();
+            publication::fail_at(Some(phase));
+            let first = publish(&p, &dir, &job, &evidence, "complete_sector_map");
+            publication::fail_at(None);
+            assert!(first.unwrap_err().contains("cutpoint"), "{phase}");
+            // Reopen project identity, as a separate invocation would. No
+            // backend/device exists here; only verified saved publication bytes.
+            let reopened = ProjectState::open_without_session(p.root().to_owned()).unwrap();
+            let resumed = recover(
+                &reopened,
+                23,
+                GreaseweazleProfile::Ibm1440,
+                'B',
+                job.policy.clone(),
+                &mut NoHardware,
+                &|_| {},
+            )
+            .unwrap();
+            assert!(resumed.resumed);
+            assert_eq!(resumed.physical_reads_this_run, 0);
+            assert!(resumed.image.ends_with("023_attempt_001.img"), "{phase}");
+            let before = fs::read(p.images_dir().join("023_attempt_001.json")).unwrap();
+            let repeated =
+                publish(&reopened, &dir, &job, &evidence, "complete_sector_map").unwrap();
+            assert_eq!(repeated.image, resumed.image);
+            assert_eq!(
+                fs::read(p.images_dir().join("023_attempt_001.json")).unwrap(),
+                before
+            );
+            assert_eq!(
+                crate::imaging::load_attempts_for_disk(&p.images_dir(), 23)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(!p.images_dir().join("023_attempt_002.img").exists());
+            fs::write(&resumed.image, b"operator replacement").unwrap();
+            assert!(publish(&reopened, &dir, &job, &evidence, "complete_sector_map").is_err());
+            assert_eq!(fs::read(&resumed.image).unwrap(), b"operator replacement");
+            fs::remove_dir_all(p.root()).unwrap();
+        }
+    }
 
     #[test]
     #[ignore = "requires FV_READ_CONFLICT_SOURCE; read-only saved 133 replay, never hardware"]

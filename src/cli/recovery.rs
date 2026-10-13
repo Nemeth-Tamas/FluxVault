@@ -147,7 +147,15 @@ pub(super) fn run_advanced(
                             |s| format!("Disk {disk_number:03}: {} documents with readable text; {} UTF-8 segments / {} character positions; {} missing positions; {} refused documents.\nWord text engine v{}: {} selectively mapped containers; {} readable HTML editions.\n{}Folder: {}\nReport: {}\nFORENSIC TEXT ONLY: HTML editions show explicit gaps, not repaired DOCs, original replacements, formatting or whole-file completeness.",s.documents_with_text,s.text_segments,s.recovered_character_positions,s.missing_character_positions,s.refused_documents,s.engine_version,s.selectively_mapped_documents,s.readable_editions,s.readable_edition_paths.iter().map(|p| format!("Open readable edition: {}\n",readable_path(p))).collect::<String>(),readable_path(&s.output_directory),readable_path(&s.report_path))
                         );
                         let rtf = result.rtf_salvage.as_ref().map_or(String::new(),|s|format!("\nDisk {disk_number:03}: RTF prefix text engine v{}: {} documents with text / {} readable UTF-16 positions / {} separate text segments / {} uninterpreted symbol glyphs. Remaining text length UNKNOWN; no state joined across holes.\n{}Folder: {}\nReport: {}\nFORENSIC PREFIX ONLY: generated text/HTML, not repaired RTFs or whole files.",s.engine_version,s.documents_with_text,s.readable_utf16_positions,s.text_segments,s.unsupported_font_glyphs,s.readable_edition_paths.iter().map(|p|format!("Open readable edition: {}\n",readable_path(p))).collect::<String>(),readable_path(&s.output_directory),readable_path(&s.report_path)));
-                        format!("{word}{rtf}").trim().to_string()
+                        let editable = result
+                            .editable_editions
+                            .iter()
+                            .flat_map(|e| e.paths.iter())
+                            .map(|p| {
+                                format!("\nOpen editable recovery edition: {}", readable_path(p))
+                            })
+                            .collect::<String>();
+                        format!("{word}{rtf}{editable}\nEditable editions contain only verified recovered text and explicit gaps; no original container or formatting repaired.").trim().to_string()
                     },
                     exit_code: 3,
                 });

@@ -102,6 +102,7 @@ pub struct RecoveryResult {
     pub fragments: Option<crate::fragments::FragmentResult>,
     pub document_salvage: Option<crate::document_salvage::SalvageResult>,
     pub rtf_salvage: Option<crate::rtf_salvage::SalvageResult>,
+    pub editable_editions: Vec<crate::editable_recovery::Editions>,
 }
 
 pub fn recover_attempt(
@@ -296,6 +297,7 @@ fn recover_with_mode(
                 crate::document_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
             result.rtf_salvage =
                 crate::rtf_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
+            editable_editions(&mut result, &image, &recovery_disk, &report)?;
         }
         return Ok(result);
     }
@@ -443,6 +445,7 @@ fn recover_with_mode(
             crate::document_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
         result.rtf_salvage =
             crate::rtf_salvage::preserve(&snapshot, &image, &recovery_disk, &report)?;
+        editable_editions(&mut result, &image, &recovery_disk, &report)?;
         if let Some(text) = &result.rtf_salvage {
             progress(&format!(
                 "RTF prefix salvage: {} documents / {} readable UTF16 positions / {} HTML editions; remainder unknown, not repaired originals.",
@@ -552,7 +555,33 @@ fn result(
         fragments: None,
         document_salvage: None,
         rtf_salvage: None,
+        editable_editions: vec![],
     }
+}
+
+fn editable_editions(
+    result: &mut RecoveryResult,
+    source: &Path,
+    recovery_disk: &Path,
+    report: &RecoveryReport,
+) -> Result<(), String> {
+    for text in result
+        .document_salvage
+        .as_ref()
+        .map(|s| &s.report_path)
+        .into_iter()
+        .chain(result.rtf_salvage.as_ref().map(|s| &s.report_path))
+    {
+        result
+            .editable_editions
+            .push(crate::editable_recovery::preserve(
+                text,
+                source,
+                recovery_disk,
+                report,
+            )?);
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_sector_evidence(

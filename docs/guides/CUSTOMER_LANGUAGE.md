@@ -53,6 +53,7 @@ Clearing restores Hungarian for new work, not for an already-bound production/fi
 - Final-report display shortening notices and raw-evidence explanations: localized. The dedicated `Ügyféltájékoztató` / `Customer notices` worksheet explains each stable disk status and its limitations in the selected language. Native filesystem descriptions are localized for display. Raw technical issues retain their original evidence wording, paths/status codes and full JSON/CSV values.
 - Automatic final-report refreshes: use the saved project choice rather than silently reverting to Hungarian.
 - Word/RTF readable recovery HTML: Hungarian/default or explicit English labels, scope warnings, missing-text panels and parser-stop explanations. The recovered source text is never translated. Word engine 5 and RTF engine 3 publish separate `_hu` / `_en` folders and hash-verify reuse; earlier generations remain untouched. Raw text/JSON provenance keeps its original technical content.
+- Editable recovered-text DOCX copies use the same language boundary. Separate hash-bound publication directories preserve both languages; source text is unchanged and gaps are labelled, not guessed. They are new forensic text containers, not repaired originals.
 - JSON/CSV keys, status identifiers, filenames, hashes, source document content and raw evidence/tool diagnostics: unchanged, not translated.
 - Prior report generations, packages and recovery editions: preserved byte-for-byte; a new export/archive is a separate snapshot.
 

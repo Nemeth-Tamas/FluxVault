@@ -54,6 +54,8 @@ fv benchmark legacy --baseline 'C:\Archives\Original-Archive.zip'
 fv benchmark legacy --baseline 'C:\Archives\Original-Archive.zip' --json
 ```
 
+The JSON now separates historical CSV classifications from independently parsed logs and replays the supplied final-audit script's generated-file integrity gate. For the original customer archive, these are 94/42 imaging and 83/53 final; the old 86/50 summary matches a counterfactual with that integrity gate omitted. The original final workbook is absent, so its exact generation history is not inferred. Per-label status sources, actual image hashes, disagreements and invalid generated members remain visible. This does not recertify old files or establish fresh DMDE yield parity. [Exact reconciliation](../testing/LEGACY_AGGREGATES.md).
+
 No project or extraction is required. The ZIP is streamed in place: every member's size, CRC and SHA-256 are checked, unsafe/duplicate members refuse, and a final archive hash detects changes. Original manifest rows are bound to archived source-member paths/sizes; successful conversion claims must have archived outputs. It reports source, extraction, conversion and index counts with discrepancies preserved.
 
 For the supplied archive this reproduces **1,667 source rows and 1,667 extracted members**, plus **972 conversion rows: 953 OK, 12 PARTIAL, seven FAILED**. These include the original tool/metadata/deleted/carved scope. They are not a claim that today's automatic recovery recreated all those files from different physical captures. The existing `benchmark compare` remains the byte/yield comparison command.

@@ -1,4 +1,8 @@
-# FluxVault progress — 2026-10-13, 462/479
+# FluxVault progress — 2026-10-13, 463/479
+
+Latest saved-only checkpoint: **463/479 (96.7%), 16 open**. One existing historical-aggregate reconciliation box closes with reproducible script/CSV precedence, retained log/hash disagreements and an explicitly unavailable original workbook. New editable Word/RTF text copies and eight-cutpoint GW publication replay strengthen existing recovery/resume functionality; they do not close the broader damaged-container or universal power-loss/hardware requirements. The 470 target is not reached by relabelling these narrower results. [Checkpoint and receipts](OFFLINE_CHECKPOINT_463.md).
+
+## Previous same-day scope adjustment
 
 Current scope: **462/479 (96.5%), 17 open**. The operator removed automatic swap detection from the requirements after the checkpoint below. Explicit insertion/removal/identity confirmations remain the intended workflow. This changes the denominator, not the number of implemented features; no code changed for this scope adjustment.
 

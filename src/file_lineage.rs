@@ -247,15 +247,20 @@ fn trace(project: &ProjectState, disk: u32, rel: &Path, depth: usize) -> Result<
         result["control_sha256"] = json!(seal);
     } else if parts[0] == "Recovery" && !native_recovery {
         let parent = path.parent().unwrap();
-        let controls = ["fragments.json", "word-text.json", "rtf-text.json"]
-            .into_iter()
-            .map(|name| parent.join(name))
-            .filter_map(|p| match p.try_exists() {
-                Ok(true) => Some(Ok(p)),
-                Ok(false) => None,
-                Err(e) => Some(Err(e.to_string())),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let controls = [
+            "fragments.json",
+            "word-text.json",
+            "rtf-text.json",
+            "editable-documents.json",
+        ]
+        .into_iter()
+        .map(|name| parent.join(name))
+        .filter_map(|p| match p.try_exists() {
+            Ok(true) => Some(Ok(p)),
+            Ok(false) => None,
+            Err(e) => Some(Err(e.to_string())),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
         if controls.len() > 1 {
             return Err("Ambiguous recovery lineage controls".into());
         }
@@ -307,6 +312,9 @@ fn trace(project: &ProjectState, disk: u32, rel: &Path, depth: usize) -> Result<
                     }
                     if doc["readable_edition"]["path"] == name.as_ref() {
                         matches.push((json!({"sha256":doc["readable_edition"]["sha256"],"parent":doc["parent"],"segments":doc["segments"]}),"readable_edition",false));
+                    }
+                    if doc["editable_edition"]["path"] == name.as_ref() {
+                        matches.push((json!({"sha256":doc["editable_edition"]["sha256"],"parent":doc["parent"],"source_extents":doc["source_extents"],"segments":doc["segments"]}),"editable_text_edition",false));
                     }
                 }
             }

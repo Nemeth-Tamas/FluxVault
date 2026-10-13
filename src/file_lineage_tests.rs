@@ -296,8 +296,8 @@ fn converted_file_is_hash_bound_to_import_not_invented_sector_or_semantic_mappin
 }
 
 #[test]
-fn text_and_html_trace_declared_encoded_sources_without_claiming_character_equivalence() {
-    for name in ["word-text.json", "rtf-text.json"] {
+fn text_html_and_editable_trace_declared_sources_without_claiming_character_equivalence() {
+    for name in ["word-text.json", "rtf-text.json", "editable-documents.json"] {
         let f = Fixture::new();
         let mut image = crate::fat12::tests::image();
         image[33 * 512..33 * 512 + 4].copy_from_slice(b"text");
@@ -306,12 +306,14 @@ fn text_and_html_trace_declared_encoded_sources_without_claiming_character_equiv
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("text.txt"), b"text").unwrap();
         fs::write(dir.join("edition.html"), b"<p>text</p>").unwrap();
+        fs::write(dir.join("edition.docx"), b"hash-bound presentation fixture").unwrap();
         let mut report = json!({"schema_version":1,"disk":1,"attempt":1,"source_sha256":sha(&image),"documents":[{
             "text_path":"text.txt","text_sha256":sha(b"text"),"edition_path":"edition.html","edition_sha256":sha(b"<p>text</p>"),
+            "editable_edition":{"path":"edition.docx","sha256":sha(b"hash-bound presentation fixture")},
             "source_extents":[{"file_offset":0,"source_byte_offset":33*512,"bytes":4}]
         }]});
         fs::write(dir.join(name), serde_json::to_vec(&report).unwrap()).unwrap();
-        for file in ["text.txt", "edition.html"] {
+        for file in ["text.txt", "edition.html", "edition.docx"] {
             let traced =
                 inspect(&f.0, 1, &format!("Recovery/001/forensic_fixture/{file}")).unwrap();
             assert_eq!(
@@ -325,6 +327,9 @@ fn text_and_html_trace_declared_encoded_sources_without_claiming_character_equiv
                     .unwrap()
                     .contains("not_independently_redecoded")
             );
+            if file == "edition.docx" {
+                assert_eq!(traced["file"]["kind"], "editable_text_edition");
+            }
         }
         report["documents"][0]["source_extents"][0]["source_byte_offset"] = json!(image.len());
         fs::write(dir.join(name), serde_json::to_vec(&report).unwrap()).unwrap();
