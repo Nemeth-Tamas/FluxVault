@@ -37,10 +37,18 @@ pub(crate) fn warning_summary(language: Language, raw: &str) -> String {
     }
 }
 pub(crate) fn cell(language: Language, column: &str, raw: &str) -> String {
-    if language == Language::English {
+    if language == Language::English || raw.is_empty() {
         return raw.into();
     }
     match column {
+        "NativeFilesystemStatus" => match raw {
+            "NO REACHABLE LIVE FAT FILES; DELETED ENTRIES PRESENT" => "Nincs elérhető élő FAT-fájl; törölt bejegyzések jelen vannak, visszanyerhetőségük nem igazolt",
+            "NO REACHABLE LIVE FAT FILES; CONTENT COMPLETENESS UNPROVEN" => "Nincs elérhető élő FAT-fájl; a tartalom teljessége nem igazolt",
+            "FAT FILE/DIRECTORY GAPS OR AMBIGUITY" => "Hiányos vagy többértelmű FAT-fájl- vagy könyvtárleképezés",
+            "SUPPORTED FAT ANALYSIS; HISTORICAL COMPLETENESS UNPROVEN" => "Támogatott FAT-vizsgálat; a történeti teljesség nem igazolt",
+            "UNSUPPORTED/UNKNOWN FILESYSTEM; CARVING DOES NOT ESTABLISH LIVE OWNERSHIP" => "Nem támogatott vagy ismeretlen fájlrendszer; a szignatúrás kimentés nem igazolja az eredeti élő fájltulajdont",
+            _ => "A fájlrendszer állapota nem igazolt; pontos műszaki leírás a JSON/CSV-mellékletben",
+        }.into(),
         "Issues"|"Detail"|"Details"=>warning_summary(language,raw),
         "RecoveryMethod"=>match raw {
             "Filesystem recovery"=>"Fájlrendszer alapján visszanyert",
@@ -53,6 +61,47 @@ pub(crate) fn cell(language: Language, column: &str, raw: &str) -> String {
         }.into(),
         _=>raw.into(),
     }
+}
+
+/// Descriptions supplement, never replace stable technical status identifiers.
+pub(crate) fn status_description(language: Language, code: &str) -> &'static str {
+    let (hu, en) = if code == "OK" {
+        (
+            "A rögzített eredmények integritásellenőrzése sikeres; az eredeti tartalom teljessége nem igazolt",
+            "Recorded results passed integrity checks; original completeness is not certified",
+        )
+    } else if code.contains("CONVERSION") {
+        (
+            "A konverzió figyelmet igényel; nem igazolt teljes dokumentumhelyreállítás",
+            "Conversion needs attention; complete document recovery is not established",
+        )
+    } else if code.contains("NO REACHABLE") || code.contains("NO RECOVERED") {
+        (
+            "Nincs igazoltan elérhető teljes forrásfájl; ez nem bizonyít üres lemezt",
+            "No verified reachable whole source files; this does not establish an empty disk",
+        )
+    } else if code.contains("UNSUPPORTED") {
+        (
+            "Nem támogatott vagy ismeretlen fájlrendszer; a megőrzött bizonyíték külön vizsgálható",
+            "Unsupported or unknown filesystem; preserved evidence remains available for investigation",
+        )
+    } else if code.contains("IMAGE READ") {
+        (
+            "A lemezkép olvasási hiányokat tartalmaz; a függetlenül ép fájlok ettől még visszanyerhetők",
+            "The image has read gaps; independently intact files may still be recovered",
+        )
+    } else if code.contains("DERIVED") {
+        (
+            "Származtatott helyreállítási eredmény; nem változatlan eredeti és nem teljességi tanúsítvány",
+            "Derived recovery evidence; not an unchanged original or a completeness certificate",
+        )
+    } else {
+        (
+            "Az ellenőrzés figyelmet igényel; az eredeti műszaki bizonyíték a JSON/CSV-mellékletben található",
+            "Checks need attention; original technical evidence is in the JSON/CSV annex",
+        )
+    };
+    language.text(hu, en)
 }
 #[cfg(test)]
 mod tests {
@@ -84,5 +133,47 @@ mod tests {
             );
         }
         assert_eq!(cell(Language::Hungarian, "Issues", "[]"), "[]");
+    }
+
+    #[test]
+    fn native_descriptions_are_localized_but_codes_and_unknown_source_names_stay_literal() {
+        for raw in [
+            "NO REACHABLE LIVE FAT FILES; DELETED ENTRIES PRESENT",
+            "NO REACHABLE LIVE FAT FILES; CONTENT COMPLETENESS UNPROVEN",
+            "FAT FILE/DIRECTORY GAPS OR AMBIGUITY",
+            "SUPPORTED FAT ANALYSIS; HISTORICAL COMPLETENESS UNPROVEN",
+            "UNSUPPORTED/UNKNOWN FILESYSTEM; CARVING DOES NOT ESTABLISH LIVE OWNERSHIP",
+            "future unsupported description",
+        ] {
+            assert_ne!(
+                cell(Language::Hungarian, "NativeFilesystemStatus", raw),
+                raw
+            );
+            assert_eq!(cell(Language::English, "NativeFilesystemStatus", raw), raw);
+        }
+        for code in [
+            "OK",
+            "PARTIAL: IMAGE READ",
+            "CHECK: CONVERSION FAILED",
+            "CHECK: NO REACHABLE LIVE FILES",
+            "CHECK: DERIVED RECOVERY",
+            "unknown",
+        ] {
+            assert!(!status_description(Language::Hungarian, code).is_empty());
+            assert_ne!(
+                status_description(Language::Hungarian, code),
+                status_description(Language::English, code)
+            );
+            assert_eq!(cell(Language::Hungarian, "AuditStatus", code), code);
+        }
+        assert_eq!(cell(Language::Hungarian, "NativeFilesystemStatus", ""), "");
+        assert_eq!(
+            cell(
+                Language::Hungarian,
+                "OriginalForensicPath",
+                "NO REACHABLE LIVE FAT FILES; DELETED ENTRIES PRESENT"
+            ),
+            "NO REACHABLE LIVE FAT FILES; DELETED ENTRIES PRESENT"
+        );
     }
 }

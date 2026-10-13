@@ -61,6 +61,7 @@ pub(crate) struct Snapshot {
     pub(crate) origins: Option<Vec<Value>>,
     pub(crate) flux: Option<Value>,
     pub(crate) map_known: bool,
+    pub(crate) usb_passes: Option<Vec<Value>>,
     image: PathBuf,
     log_path: Option<PathBuf>,
     log_snapshot: Option<Vec<u8>>,
@@ -437,6 +438,19 @@ pub(crate) fn load_snapshot(
     } else if selected.value.get("flux_provenance_sha256").is_some() {
         return Err("Flux provenance binding is incomplete".into());
     }
+    let usb_passes = if map_known && selected.value["source_backend"] == "windows-raw-sector" {
+        crate::usb_passes::index(
+            std::str::from_utf8(log_snapshot.as_deref().ok_or("Missing bound USB log")?)
+                .map_err(|e| e.to_string())?,
+            m.total_sectors,
+            &m.bad_sectors.iter().map(|b| b.lba).collect(),
+            selected.value["retry_recovered_sectors"]
+                .as_u64()
+                .unwrap_or(0) as usize,
+        )?
+    } else {
+        None
+    };
     let result = Snapshot {
         selected: Candidate {
             path: selected.path.clone(),
@@ -448,6 +462,7 @@ pub(crate) fn load_snapshot(
         origins,
         flux,
         map_known,
+        usb_passes,
         image,
         log_path,
         log_snapshot,

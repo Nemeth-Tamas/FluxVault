@@ -58,7 +58,7 @@ fn role(layout: Option<&fat12::Layout>, lba: u64) -> Value {
     }
 }
 
-fn origin(snapshot: &sector_inspection::Snapshot, lba: u64) -> Value {
+pub(crate) fn origin(snapshot: &sector_inspection::Snapshot, lba: u64) -> Value {
     // An offline source reference describes an upstream sector, not necessarily
     // a physical read; retain the transformations and do not invent a pass.
     json!({"saved_attempt":snapshot.metadata()["attempt_number"],
@@ -66,7 +66,8 @@ fn origin(snapshot: &sector_inspection::Snapshot, lba: u64) -> Value {
         "source_device":snapshot.metadata()["source_device"],
         "offline_source":snapshot.origins.as_ref().map(|a| &a[lba as usize]),
         "flux_sector":snapshot.flux.as_ref().map(|a| &a["sectors"][lba as usize]),
-        "physical_pass_detail":if snapshot.flux.is_some() {"recorded_flux_sector_and_stage_settings"} else if snapshot.origins.is_some() {"follow_offline_source_attempt_and_lba"} else {"not_resolved_per_sector_by_this_report"}})
+        "usb_pass":snapshot.usb_passes.as_ref().map(|a|&a[lba as usize]),
+        "physical_pass_detail":if snapshot.flux.is_some() {"recorded_flux_sector_and_stage_settings"} else if snapshot.origins.is_some() {"follow_offline_source_attempt_and_lba"} else if snapshot.usb_passes.is_some() {"recorded_usb_retry_or_explicit_initial_success_inference"} else {"not_resolved_per_sector_by_this_report"}})
 }
 
 fn records(

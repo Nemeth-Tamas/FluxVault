@@ -417,6 +417,19 @@ impl Queue {
                     .processing_elapsed_ms
                     .saturating_add(crate::benchmark::milliseconds(batch_started.elapsed()));
                 outcome.runs += 1;
+                if result.is_ok()
+                    && let Err(e) = crate::performance_history::record(
+                        &request.project,
+                        "processing",
+                        batch.len() as u64,
+                        crate::benchmark::milliseconds(batch_started.elapsed()),
+                        request.conversion_workers,
+                    )
+                {
+                    eprintln!(
+                        "[TIMING] Processing result retained; timing observation unavailable: {e}"
+                    );
+                }
                 let publication_errors = stage_errors.into_inner().unwrap();
                 let (state, detail) = if !publication_errors.is_empty() {
                     let detail = format!(

@@ -80,7 +80,7 @@ impl DiskGeometry {
             (40, 2, 8, 512) => "320 KB",
             (40, 1, 9, 512) => "180 KB",
             (40, 1, 8, 512) => "160 KB",
-            _ => "Ismeretlen / nem szabvanyos",
+            _ => "Unknown / nonstandard",
         }
     }
 }
@@ -242,12 +242,12 @@ fn query_geometry(file: &File) -> Result<DiskGeometry, String> {
             Some(&mut bytes_returned),
             None,
         )
-        .map_err(|error| format!("Lemezgeometria lekerdezesi hiba: {error}"))?;
+        .map_err(|error| format!("Disk geometry query failed: {error}"))?;
     }
 
     if bytes_returned < std::mem::size_of::<DISK_GEOMETRY>() as u32 {
         return Err(format!(
-            "A geometria lekerdezes csak {bytes_returned} bajtot adott vissza."
+            "Disk geometry query returned only {bytes_returned} bytes."
         ));
     }
 
@@ -262,7 +262,7 @@ fn query_geometry(file: &File) -> Result<DiskGeometry, String> {
 
 #[cfg(not(windows))]
 fn query_geometry(_file: &File) -> Result<DiskGeometry, String> {
-    Err("A lemezgeometria lekerdezese jelenleg csak Windowson tamogatott.".to_owned())
+    Err("Disk geometry queries currently require Windows.".to_owned())
 }
 
 pub fn probe_read_only(drive: &FloppyDrive) -> Result<ProbeResult, String> {

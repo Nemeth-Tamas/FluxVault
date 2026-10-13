@@ -342,6 +342,63 @@ pub(super) fn publish(
                 .map_err(|e| e.to_string())?;
         }
     }
+    // Human-facing summaries are separate from literal, original-language
+    // evidence. Status identifiers and source names remain opaque data.
+    let notices = workbook.add_worksheet();
+    notices
+        .set_name(language.text("Ügyféltájékoztató", "Customer notices"))
+        .map_err(|e| e.to_string())?;
+    for (col, title) in [
+        language.text("Lemez", "Disk"),
+        language.text("Műszaki állapotkód", "Technical status code"),
+        language.text("Jelentés és korlát", "Meaning and limit"),
+        language.text("Figyelmeztetés", "Warning"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        notices
+            .write_string_with_format(0, col as u16, title, &header)
+            .map_err(|e| e.to_string())?;
+    }
+    let wrapped = Format::new().set_text_wrap();
+    let mut row = 1;
+    for disk in &document.floppies {
+        let warnings = if disk.issues.is_empty() {
+            vec![String::new()]
+        } else {
+            disk.issues.clone()
+        };
+        for issue in warnings {
+            crate::cancellation::check()?;
+            for (col, value) in [
+                disk.floppy.clone(),
+                disk.audit_status.clone(),
+                crate::customer_language::status_description(language, &disk.audit_status)
+                    .to_owned(),
+                crate::customer_language::warning_summary(language, &issue),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                notices
+                    .write_string_with_format(
+                        row,
+                        col as u16,
+                        excel_text(&value, language),
+                        &wrapped,
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+            notices.set_row_height(row, 65).map_err(|e| e.to_string())?;
+            row += 1;
+        }
+    }
+    notices.set_column_width(0, 12).map_err(|e| e.to_string())?;
+    notices.set_column_width(1, 34).map_err(|e| e.to_string())?;
+    notices.set_column_width(2, 68).map_err(|e| e.to_string())?;
+    notices.set_column_width(3, 80).map_err(|e| e.to_string())?;
+    notices.set_freeze_panes(1, 0).map_err(|e| e.to_string())?;
     let limits = workbook.add_worksheet();
     limits
         .set_name(language.text("Hatókör", "Scope"))

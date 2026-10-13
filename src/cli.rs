@@ -80,6 +80,8 @@ Usage:
                                     Select the current/next disk number (no drive access)
   fluxvault drive list              List removable drives without reading media
   fluxvault drive probe --drive A:  Read-only 512-byte media and protection probe
+  fluxvault drive media --drive A:  Metadata-only presence observation; no disk data read
+  fluxvault drive watch --drive A: [--samples 20] [--interval-ms 1000] [--json]
   fluxvault acquire --drive A: --disk N [--retries N] --write-blocker-verified
                                     Read-only image; requires independently verified hardware
   fluxvault scan [--last-disk N] [--no-verify] [--conversion-workers N]
@@ -100,7 +102,7 @@ Usage:
   fluxvault production resume       Resume saved production settings/finishing
   fluxvault production queue        Rank saved USB partials for GW; no physical read
   fluxvault production benchmark    Inspect durable dual-session timings offline
-  fluxvault production estimate     Rough saved-evidence phase estimates; no media access
+  fluxvault production estimate     Observed completion scenario; unknown until history exists
   fluxvault scan --drive A: [--count N] [--retries N] --write-blocker-verified
                                     Guided read-only USB loop; confirm each numbered label
   fluxvault tools check [--project PATH]
@@ -313,6 +315,7 @@ pub(crate) fn run(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     run_inner(args, cwd)
 }
 
+mod drive_watch;
 mod mutation_audit;
 pub(crate) use mutation_audit::clear_after_audit;
 fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
@@ -328,6 +331,13 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     if args.first().is_some_and(|arg| arg == "completions") {
         return completion::run(args);
+    }
+    if args.first().is_some_and(|a| a == "drive")
+        && args
+            .get(1)
+            .is_some_and(|a| matches!(a.as_str(), "media" | "watch"))
+    {
+        return drive_watch::run(args);
     }
     if args.first().is_some_and(|s| s == "greaseweazle")
         && args.get(1).is_some_and(|s| s == "expert")
@@ -819,6 +829,17 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             crate::evidence_impact::inspect_all(&project, |done, total, disk| {
                 eprintln!("[IMPACT] {done}/{total}: disk {disk:03} / saved evidence only");
             })?
+        } else if positional[1] == "trace"
+            && positional[3]
+                .replace('\\', "/")
+                .split('/')
+                .next()
+                .is_some_and(|p| matches!(p, "Extracted" | "Converted" | "Recovery"))
+        {
+            if sector_attempt.is_some() {
+                return Err("A managed file trace binds its recorded attempt; --attempt is only for live FAT paths".into());
+            }
+            crate::file_lineage::inspect(&project, disk, &positional[3])?
         } else {
             crate::evidence_impact::inspect(
                 &project,
@@ -830,6 +851,8 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         return Ok(CliResponse {
             output: if json_output {
                 result.to_string()
+            } else if result["file"]["kind"].is_string() {
+                crate::file_lineage::render(&result)
             } else if positional[1] == "crc-check" {
                 crate::flux_crc::render(&result)
             } else if positional[1] == "ranges" {
@@ -1191,7 +1214,24 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
             let project = ProjectState::open_without_session(root)?;
             let report = crate::dual_benchmark::report(&project)?;
-            let estimate = crate::production_metrics::estimate(&project, &report)?;
+            let single = flux_scan::saved_status(&project)?;
+            let estimate =
+                if single["initialized"] == true && report["custody"]["initialized"] != true {
+                    crate::production_metrics::estimate_single(
+                        &project,
+                        &crate::benchmark::report(&project)?,
+                        &single,
+                    )?
+                } else {
+                    crate::production_metrics::estimate(&project, &report)?
+                };
+            let mut estimate = estimate;
+            if single["initialized"] == true && report["custody"]["initialized"] == true {
+                estimate["whole_batch_seconds"] = json!(null);
+                estimate["note"] = json!(
+                    "Both single-GW and dual scan histories exist. Displayed phase observations are dual-mode only; no whole-batch prediction can safely select the intended remaining workflow. Check production status and the current scan mode. No media is accessed."
+                );
+            }
             Ok(if json_output {
                 estimate.to_string()
             } else {
@@ -2913,6 +2953,17 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 report_language.unwrap_or(crate::project_settings::language(&project)?),
                 &|stage| eprintln!("{stage}"),
             )?;
+            if let Err(e) = crate::performance_history::record(
+                &project,
+                "packaging",
+                result.total_bytes,
+                result.elapsed_ms,
+                4,
+            ) {
+                eprintln!(
+                    "[TIMING] Verified archive retained; timing observation unavailable: {e}"
+                );
+            }
             if json_output {
                 Ok(json!({"zip": result.zip_path, "sha256_file": result.sha256_path,
                     "sha256": result.sha256, "files": result.file_count, "bytes": result.total_bytes,

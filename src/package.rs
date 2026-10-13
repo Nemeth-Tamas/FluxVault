@@ -40,6 +40,7 @@ pub enum PackageEvent {
 
 #[derive(Debug, Clone)]
 pub struct PackageResult {
+    pub elapsed_ms: u64,
     pub customer_language: String,
     pub zip_path: PathBuf,
     pub sha256_path: PathBuf,
@@ -105,6 +106,7 @@ fn build_package_language(
     explicit_language: Option<crate::final_report::Language>,
     stage: &impl Fn(&str),
 ) -> Result<PackageResult, String> {
+    let started = std::time::Instant::now();
     crate::cancellation::check()?;
     crate::safety::workstation_path(&request.project_root)?;
     crate::safety::workstation_path(&request.destination)?;
@@ -273,6 +275,7 @@ fn build_package_language(
             format!("ZIP is complete, but its SHA-256 sidecar could not be written: {error}")
         })?;
     Ok(PackageResult {
+        elapsed_ms: crate::benchmark::milliseconds(started.elapsed()),
         customer_language: language.code().to_owned(),
         zip_path,
         sha256_path,

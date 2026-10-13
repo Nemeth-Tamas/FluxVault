@@ -551,6 +551,15 @@ USB ACQUISITION: OPTIONAL ADVANCED PATH
     This guarded path is optional and distinct from the default fv scan
     workflow.
 
+    drive media --drive A: [--json] observes driver presence metadata without
+    reading disk data. drive watch --drive A: --samples 20 --interval-ms 1000
+    repeats that check (1..120 samples, 100..5000 ms interval). Three consistent
+    known replies debounce events; unknown/NOT_READY is not removal proof.
+    Stop the watcher before scanning the same USB reader. This adapter has
+    been observed to retain stale PRESENT after removal: neither this command
+    nor a change counter authorizes a read, identifies a label or confirms OUT.
+    Physical confirmations remain the fallback. No data writes are requested.
+
     fluxvault drive list enumerates removable drives without reading inserted
     media. fluxvault drive probe --drive A: opens only an enumerated drive
     read-only, reads at most the first 512 bytes, and reports geometry and the
@@ -920,6 +929,28 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     explain changes and are included in customer archives; quarantine/private
     ownership state is excluded. See recovery selection and delivery
     maintenance (docs/recovery/RECOVERY_SELECTION.md).
+
+    recovery trace N PATH --json also accepts exact project-relative paths
+    beginning Extracted/, Recovery/ or Converted/. Native intact/deleted chains
+    and carved/fragments replay recorded extents to saved image/read origins.
+    Conversions bind their successful output hash to recorded input lineage.
+    Word/RTF text and HTML expose report-declared encoded-source relations,
+    not an independent character-level re-decoding certificate. Manual imports
+    bind inventory hashes but external physical passes remain unknown; legacy
+    untracked files remain unbound. Use actual filenames, no wildcards or
+    --attempt (the recorded source attempt is authoritative). No writes/tools
+    or media access; exit 3 means provenance is not customer certification.
+    Examples and limits: docs/recovery/EVIDENCE_IMPACT.md.
+
+    production estimate reads saved timing history. New background work records
+    extraction/recovery/conversion/audit durations grouped by worker count;
+    successful packages record verified bytes and elapsed time. With at least
+    three comparable observations per required phase it can show a conditional
+    reader/processing-overlap plus packaging-tail scenario. Missing history,
+    paused work or ambiguous single/dual histories keep the whole estimate
+    unknown. Historical bytes per label need not predict future damage/yield.
+    Empirical ranges are not bounds or a deadline; swaps, contention and storage
+    can invalidate them. Details: docs/guides/SAVED_BATCH_TOOLS.md.
 
     Generation 5 additionally reconstructs bounded evidenced lost-parent
     directories (DirectoryRecovery / delivery Directory-Recovered) and

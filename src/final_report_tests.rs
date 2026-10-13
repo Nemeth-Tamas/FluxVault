@@ -5,6 +5,43 @@ use serde_json::Value;
 use std::io::Write;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+#[test]
+fn both_customer_notice_languages_keep_raw_evidence_and_prior_generation_unchanged() {
+    let f = Fixture::files(false);
+    fs::write(f.0.converted_dir().join("UNTRACKED.doc"), b"not certified").unwrap();
+    let audit = audit::run_audit(&f.0, &|_| {}).unwrap();
+    let hu = export(&f.0, &audit, Language::Hungarian).unwrap();
+    let old = fs::read(&hu.workbook).unwrap();
+    let en = export(&f.0, &audit, Language::English).unwrap();
+    for (report, name, phrase) in [
+        (&hu, "Ügyféltájékoztató", "Az ellenőrzés figyelmet igényel"),
+        (&en, "Customer notices", "Checks need attention"),
+    ] {
+        let mut zip = ZipArchive::new(fs::File::open(&report.workbook).unwrap()).unwrap();
+        let mut book = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("xl/workbook.xml").unwrap(), &mut book)
+            .unwrap();
+        assert!(book.contains(name));
+        let mut strings = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("xl/sharedStrings.xml").unwrap(),
+            &mut strings,
+        )
+        .unwrap();
+        assert!(strings.contains(phrase), "{strings}");
+        assert!(strings.contains("UNTRACKED.doc"));
+        let json: Value = serde_json::from_slice(&fs::read(&report.json).unwrap()).unwrap();
+        assert!(
+            json["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str().unwrap_or("").contains("UNTRACKED.doc"))
+        );
+    }
+    assert_eq!(fs::read(&hu.workbook).unwrap(), old);
+}
+
 struct Fixture(ProjectState);
 impl Fixture {
     fn empty() -> Self {

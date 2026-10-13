@@ -15,7 +15,7 @@ Both inspect saved evidence only, invoke no hardware/host tool, and change no pr
 
 Direct material expert commands now refresh audit/workbook automatically after changes, even partial failures. Read-only/help/plan/no-op commands do not. If interrupted, `status` / `processing status` exposes `audit_refresh_pending`; run `fv process` to reconcile saved state before relying on current reports. Existing finished archives/root handoffs remain their original historical generation; report refresh does not silently rebuild delivery.
 
-Phase estimates now separate fresh, USB-to-GW recovery and retry observations and known conversion/retry jobs. Legacy events lacking identity remain unknown rather than mixed into fresh timing. This is still not a whole-batch ETA.
+Estimates separate fresh, USB-to-GW recovery and retry observations and known conversion/retry jobs. Legacy events lacking identity remain unknown rather than mixed into fresh timing. A conditional whole-batch scenario is available only after comparable processing and packaging history exists.
 
 From your acquisition project's folder:
 
@@ -28,7 +28,11 @@ fv recovery ranges 133 --attempt 1 --json
 
 `production benchmark` adds per-label operator-action accounting to its immutable saved timing report. Read/retry/removal confirmations and identity exceptions remain separate. Every recorded project label gets a row, even when older observations are unavailable. The physical insert/remove target is two actions for ordinary fresh media, four with a USB-to-GW transfer. Command counts are not measured hand movements; implicit swaps and unlogged actions remain unknown. Neither timings nor reports authorize moving a disk still marked READING.
 
-`production estimate` is read-only. It reports separate observed read/decode ranges for outstanding fresh and queued GW work, with pending saved-file disks and fresh conversion observations. It needs at least three useful timing samples; reused conversions cannot supply fresh-job samples. These are rough phase ranges, not a promised deadline: readers/workers overlap, exceptional recovery varies, future file counts and packing/audit/package time remain unknown. Do not add the phase ranges together. A paused job does not predict when you will resume. Current saved dual timing logs supply the reader observations; single-station timing forecast expansion is not implied.
+`production estimate` is read-only. Single-GW and dual saved histories supply observed read/recovery timing; single-GW samples are whole per-label recovery durations, not separately measured internal retries. At least three comparable observations are required per outstanding phase. Reused conversions do not supply fresh-job samples.
+
+New background processing records complete per-batch extraction/recovery/conversion/audit durations in `Logs/PerformanceHistory.jsonl`, grouped by conversion worker count. Successful package creation records verified input bytes and elapsed time. Packaging volume is projected from the last observed bytes per saved label. These local timings contain no document content and are not integrity certificates.
+
+Where all required history exists, the whole-batch scenario accounts for reader/processing overlap and a packaging tail. Its empirical quartiles are **not hard bounds or a deadline**. Different damage, file yield, hardware contention, swaps, capture packing, handoff copying and storage speed can invalidate it. Sparse history, unknown range endpoints, changed worker counts, paused jobs or ambiguous single/dual histories keep the whole estimate unknown. Existing projects need new completed work to warm up missing timing history. Do not add the displayed phase ranges together.
 
 `recovery ranges` hash-checks a selected image and its map/lineage, then prints exact contiguous LBA and image-byte ranges for missing versus disputed observations. Its JSON also includes known file dependencies, incomplete chains, holes, unmapped tails and unknown ownership. Missing placeholder bytes are not recovered zeros. Disputed bytes are not silently given a winner. Unknown maps/layouts remain unknown; unavailable in this selected image does not mean globally unrecoverable from all evidence.
 

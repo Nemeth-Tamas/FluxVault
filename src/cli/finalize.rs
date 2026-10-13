@@ -92,9 +92,18 @@ fn archive(project: &ProjectState, destination: PathBuf) -> Result<Value, String
         },
         &|message| eprintln!("{message}"),
     )?;
+    if let Err(e) = crate::performance_history::record(
+        project,
+        "packaging",
+        result.total_bytes,
+        result.elapsed_ms,
+        4,
+    ) {
+        eprintln!("[TIMING] Verified archive retained; timing observation unavailable: {e}");
+    }
     Ok(
         json!({"zip":result.zip_path,"sha256_file":result.sha256_path,"sha256":result.sha256,
-        "files":result.file_count,"bytes":result.total_bytes,"customer_language":result.customer_language,"customer_delivery_certified":false}),
+        "files":result.file_count,"bytes":result.total_bytes,"elapsed_ms":result.elapsed_ms,"customer_language":result.customer_language,"customer_delivery_certified":false}),
     )
 }
 

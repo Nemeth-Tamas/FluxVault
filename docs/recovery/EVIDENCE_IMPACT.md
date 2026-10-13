@@ -53,10 +53,32 @@ Use `--json` for full inventories, gaps, skipped entries, hashes, confidence and
 
 This maps **live FAT12 chains** in completed native images with 512-byte sectors, at most 4 MiB and a complete matching acquisition log/map. It can inspect warned standard-layout hypotheses already supported by native recovery, without certifying inferred geometry. A refused/unknown filesystem still yields an impact report with unknown regions, not invented file attribution; a file trace refuses without a usable map/layout.
 
-Deleted entries, signature/fragment candidates, manually imported files, converted documents and legacy bare images are outside this live-chain diagnostic. Their existing recovery/conversion reports remain the relevant evidence. A complete mapped file can still have disputed metadata or payload bytes; document semantics, independent flux CRC and customer completeness are not certified.
+Deleted entries, signature/fragment candidates, manually imported files and converted documents use the managed-file trace below instead of the live-chain diagnostic. Legacy bare images without matching evidence remain unknown. A complete mapped file can still have disputed metadata or payload bytes; document semantics, independent flux CRC and customer completeness are not certified.
 
 Changed source bytes, contradictory metadata/logs, malformed maps, missing referenced evidence, unsafe/device paths and redirected files refuse. Existing immutable offline/GW publication proofs are replayed; selected image/metadata/log/proof snapshots are checked again before returning. One report permits at most 65,536 sector-to-file dependency rows; reaching that ceiling is explicitly flagged as a non-exhaustive listing. Other bounds match the [sector inspector](SECTOR_INSPECTION.md).
 
 Exit codes: **0** means no attention in the inspected command scope; **3** means missing/disputed/unknown/inferred/derived or incomplete evidence; **2** means invalid input or inconsistent/unavailable evidence. None is a whole-disk or customer certificate. Retry inspection later if saved evidence changes while processing publishes it.
 
 For `all`, a per-disk refusal produces **exit 2 with the useful batch report still printed**; attention without refusals is 3. Invalid command/input or an exceeded batch bound produces the usual error instead. Empty projects refuse rather than returning an empty success.
+
+## Trace an actual saved or converted file
+
+Use the exact project-relative path printed by recovery or listed in the project:
+
+```powershell
+fv recovery trace 59 'Extracted/059/attempt_002_fat12/LETTER.DOC' --json
+fv recovery trace 59 'Recovery/059/attempt_002_fragments_v2/fragment.bin' --json
+fv recovery trace 59 'Converted/059/LETTER [from DOC].docx' --json
+```
+
+The folder and filename above are examples, not paths assumed to exist. Managed paths are case-sensitive identifiers at the dispatch boundary (`Extracted`, `Recovery`, `Converted`). No wildcards, disk devices, parent traversal or alternate streams are accepted. Do not add `--attempt`: a saved file binds its recorded source attempt, which may not be today's preferred image.
+
+Native live/deleted-chain and signature/orphan/embedded/hypothesis payloads are replayed from their recorded byte extents. Each relation supplies image SHA-256/attempt and available sector origins, including verified original donors and GW capture/decode IDs. Deleted-native generations under `Recovery` retain their separate candidate status. Raw fragments remain incomplete fragments, not whole files.
+
+Conversions join an exact successful output hash to its recorded input hash and recurse into that input's trace. This binds a transformation, **not** document semantics, valid formatting or character-to-sector equivalence. For Word/RTF UTF-8 and HTML editions, the report and output hashes bind the declared encoded-source extents; this inspection does not independently re-decode every character. Both limits are explicit in JSON.
+
+Manual-import inventory hashes can bind the imported payload, but external DMDE allocation/read-pass details remain unknown. Old untracked files are returned as `unbound_saved_file`, never assigned an invented source. Raw external paths are reported, not opened.
+
+For newer completed USB logs, initial success is an explicit **inference from complete coverage and absence of a sector failure**, not a sensor or CRC observation. Retry recovery is attributed to its logged numbered backward/forward pass. Failed placeholders have no successful pass; old logs lacking that detail stay unknown. Track-read versus per-sector fallback remains unknown.
+
+The command writes nothing and starts no tools or media reads. It reserves the project inspection owner and a bounded saved-image resource slot. Payload, control and source bindings are rechecked before returning; modified/contradictory evidence refuses. Limits: 16 MiB payload, 8 MiB control, four conversion hops, eight original donor images, 65,536 extent rows and bounded native images. Managed-file trace always exits **3** because provenance is not customer certification; invalid/inconsistent evidence exits **2**.

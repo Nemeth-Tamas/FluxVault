@@ -242,34 +242,34 @@ fn run_imaging(
     let bytes_per_sector = geometry.bytes_per_sector as usize;
     let sectors_per_track = geometry.sectors_per_track as usize;
     let total_sectors = usize::try_from(geometry.total_sectors())
-        .map_err(|_| "Tul nagy szektorszam.".to_owned())?;
+        .map_err(|_| "Sector count exceeds supported size.".to_owned())?;
 
     let expected_bytes = geometry.total_bytes();
 
     let track_size = sectors_per_track
         .checked_mul(bytes_per_sector)
-        .ok_or_else(|| "Savmeret tulcsordulas.".to_owned())?;
+        .ok_or_else(|| "Track size overflow.".to_owned())?;
 
     let total_tracks = usize::try_from(geometry.cylinders.saturating_mul(geometry.heads as u64))
-        .map_err(|_| "Tul nagy savszam.".to_owned())?;
+        .map_err(|_| "Track count exceeds supported size.".to_owned())?;
 
     fs::create_dir_all(&output_directory).map_err(|error| {
         format!(
-            "Nem sikerult letrehozni a kimeneti mappat {}: {error}",
+            "Cannot create output directory {}: {error}",
             output_directory.display()
         )
     })?;
 
     fs::create_dir_all(&log_directory).map_err(|error| {
         format!(
-            "Nem sikerult letrehozni a naplo mappat {}: {error}",
+            "Cannot create log directory {}: {error}",
             log_directory.display()
         )
     })?;
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|error| format!("Rendszerido hiba: {error}"))?
+        .map_err(|error| format!("System clock error: {error}"))?
         .as_millis();
 
     let attempt_number = next_attempt_number(&output_directory, disk_number)?;
@@ -297,7 +297,7 @@ fn run_imaging(
     ])?;
     let mut source = File::open(&drive.device_path).map_err(|error| {
         format!(
-            "Nem sikerult CSAK OLVASHATO modban megnyitni a(z) {} eszkozt: {error}",
+            "Cannot open device {} in READ ONLY mode: {error}",
             drive.device_path
         )
     })?;
@@ -305,7 +305,7 @@ fn run_imaging(
     let write_protection = floppy::query_write_protection(&source);
     if write_protection != floppy::WriteProtectionStatus::Protected {
         return Err(format!(
-            "A(z) {} forraslemez irasvedelme nincs igazolva ({write_protection:?}). A lemezkep keszitese megtagadva. Ellenorizze a floppy irasvedo fulet (nyitott lyuk); ha mar vedett, tesztelje az USB meghajtot kulon, eldobhato lemezzel.",
+            "Source disk {} write protection is not verified ({write_protection:?}); imaging refused. Check the physical write-protect tab (open hole). If already protected, validate the USB adapter separately with a disposable disk.",
             drive.root,
         ));
     }
@@ -316,7 +316,7 @@ fn run_imaging(
         .open(&partial_path)
         .map_err(|error| {
             format!(
-                "Nem sikerult letrehozni a reszleges lemezkepet {}: {error}",
+                "Cannot create partial disk image {}: {error}",
                 partial_path.display()
             )
         })?;
@@ -381,11 +381,11 @@ fn run_imaging(
         crate::cancellation::check()?;
         let track_lba = track_index
             .checked_mul(sectors_per_track)
-            .ok_or_else(|| "LBA tulcsordulas.".to_owned())?;
+            .ok_or_else(|| "LBA overflow.".to_owned())?;
 
         let track_offset = (track_lba as u64)
             .checked_mul(geometry.bytes_per_sector as u64)
-            .ok_or_else(|| "Sav offset tulcsordulas.".to_owned())?;
+            .ok_or_else(|| "Track offset overflow.".to_owned())?;
 
         let cylinder = track_index / geometry.heads as usize;
         let head = track_index % geometry.heads as usize;
@@ -400,7 +400,7 @@ fn run_imaging(
             Ok(()) => {
                 output
                     .write_all(&track_buffer)
-                    .map_err(|error| format!("Lemezkep irasi hiba: {error}"))?;
+                    .map_err(|error| format!("Disk image write failed: {error}"))?;
 
                 for sector_index in 0..sectors_per_track {
                     crate::cancellation::check()?;
@@ -439,7 +439,7 @@ fn run_imaging(
 
                     let sector_offset = (lba as u64)
                         .checked_mul(geometry.bytes_per_sector as u64)
-                        .ok_or_else(|| "Szektor offset tulcsordulas.".to_owned())?;
+                        .ok_or_else(|| "Sector offset overflow.".to_owned())?;
 
                     let mut sector_buffer = vec![0u8; bytes_per_sector];
 
@@ -471,7 +471,7 @@ fn run_imaging(
 
                     output
                         .write_all(&sector_buffer)
-                        .map_err(|error| format!("Lemezkep irasi hiba: {error}"))?;
+                        .map_err(|error| format!("Disk image write failed: {error}"))?;
 
                     sender.send(ImagingEvent::Sector { lba, state }).ok();
 
@@ -510,7 +510,7 @@ fn run_imaging(
             crate::cancellation::check()?;
             let sector_offset = (lba as u64)
                 .checked_mul(geometry.bytes_per_sector as u64)
-                .ok_or_else(|| "Retry szektor offset tulcsordulas.".to_owned())?;
+                .ok_or_else(|| "Retry sector offset overflow.".to_owned())?;
             let mut sector_buffer = vec![0u8; bytes_per_sector];
             let read_result = source
                 .seek(SeekFrom::Start(sector_offset))
@@ -528,7 +528,7 @@ fn run_imaging(
                         .seek(SeekFrom::Start(sector_offset))
                         .and_then(|_| output.write_all(&sector_buffer))
                         .map_err(|error| {
-                            format!("Retry utan visszanyert szektor irasi hiba: {error}")
+                            format!("Writing retry-recovered sector to image failed: {error}")
                         })?;
 
                     pending_bad_sectors.remove(&lba);
@@ -597,7 +597,7 @@ fn run_imaging(
         let last_error = errors
             .last()
             .map(String::as_str)
-            .unwrap_or("Ismeretlen olvasasi hiba.");
+            .unwrap_or("Unknown read error.");
 
         record_attempt_log(
             sender,
@@ -614,22 +614,22 @@ fn run_imaging(
 
     output
         .flush()
-        .map_err(|error| format!("Lemezkep flush hiba: {error}"))?;
+        .map_err(|error| format!("Disk image flush failed: {error}"))?;
 
     output
         .sync_all()
-        .map_err(|error| format!("Lemezkep sync hiba: {error}"))?;
+        .map_err(|error| format!("Disk image sync failed: {error}"))?;
 
     drop(output);
 
     let actual_bytes = fs::metadata(&partial_path)
-        .map_err(|error| format!("Nem sikerult ellenorizni a lemezkep meretet: {error}"))?
+        .map_err(|error| format!("Cannot verify disk image size: {error}"))?
         .len();
 
     if actual_bytes != expected_bytes {
         return Err(format!(
-            "HIBAS LEMEZKEPMERET: vart {expected_bytes} bajt, kapott {actual_bytes} bajt. \
-             A .partial.img fajl megmarad: {}",
+            "INCORRECT IMAGE SIZE: expected {expected_bytes} bytes, found {actual_bytes} bytes. \
+             Partial image retained: {}",
             partial_path.display()
         ));
     }
@@ -704,11 +704,11 @@ fn run_imaging(
     };
 
     let metadata_json = serde_json::to_string_pretty(&metadata)
-        .map_err(|error| format!("Metadata JSON generalasi hiba: {error}"))?;
+        .map_err(|error| format!("Metadata JSON generation failed: {error}"))?;
 
     fs::write(&metadata_partial_path, metadata_json).map_err(|error| {
         format!(
-            "Nem sikerult kiirni a metadata fajlt {}: {error}",
+            "Cannot write metadata file {}: {error}",
             metadata_partial_path.display()
         )
     })?;
@@ -721,7 +721,7 @@ fn run_imaging(
         .open(&log_partial_path)
         .map_err(|error| {
             format!(
-                "Nem sikerult letrehozni a human-readable naplot {}: {error}",
+                "Cannot create human-readable log {}: {error}",
                 log_partial_path.display()
             )
         })?;
@@ -745,14 +745,14 @@ fn run_imaging(
         .transpose()?;
     fs::rename(&partial_path, &final_path).map_err(|error| {
         format!(
-            "A kesz lemezkep atnevezese sikertelen. A partial fajl megmarad: {}: {error}",
+            "Completed image rename failed; partial file retained: {}: {error}",
             partial_path.display()
         )
     })?;
 
     fs::rename(&log_partial_path, &log_final_path).map_err(|error| {
         format!(
-            "A naplofajl atnevezese sikertelen. A partial naplo megmarad: {}: {error}",
+            "Log rename failed; partial log retained: {}: {error}",
             log_partial_path.display()
         )
     })?;
@@ -762,7 +762,7 @@ fn run_imaging(
 
     sender
         .send(ImagingEvent::Log(format!(
-            "Kepkeszites befejezve: {}",
+            "Imaging finished: {}",
             final_path.display()
         )))
         .ok();
@@ -831,19 +831,15 @@ fn retry_lba_order(mut lbas: Vec<usize>, retry_pass: usize) -> Vec<usize> {
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|error| {
-        format!(
-            "Nem sikerult megnyitni a lemezkepet hash-eleshez {}: {error}",
-            path.display()
-        )
-    })?;
+    let mut file = File::open(path)
+        .map_err(|error| format!("Cannot open image for hashing {}: {error}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1024 * 1024];
 
     loop {
-        let bytes_read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("Lemezkep hash olvasasi hiba {}: {error}", path.display()))?;
+        let bytes_read = file.read(&mut buffer).map_err(|error| {
+            format!("Disk image hashing read failed {}: {error}", path.display())
+        })?;
 
         if bytes_read == 0 {
             break;
@@ -860,10 +856,10 @@ pub(crate) fn next_attempt_number(directory: &Path, disk_number: u32) -> Result<
     let mut highest_attempt = 0u32;
 
     let entries = fs::read_dir(directory)
-        .map_err(|error| format!("Nem sikerult megvizsgalni a captures mappat: {error}"))?;
+        .map_err(|error| format!("Cannot inspect captures directory: {error}"))?;
 
     for entry in entries {
-        let entry = entry.map_err(|error| format!("Hibas captures mappa bejegyzes: {error}"))?;
+        let entry = entry.map_err(|error| format!("Invalid captures directory entry: {error}"))?;
 
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();

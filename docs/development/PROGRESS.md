@@ -1,4 +1,10 @@
-# FluxVault progress — 2026-10-12 independent CRC / audit / case review, 458/480
+# FluxVault progress — 2026-10-13, 462/480
+
+Current: **462/480 (96.3%), 18 open**, four existing boxes closed with no added boxes. Uniform managed-file provenance, conditional measured completion estimates, English-operator/Hungarian-default customer presentation and supported clean/damaged/DD/program-media live smoke are documented in [CHECKLIST_462](CHECKLIST_462.md). **750 routine tests / 32 opt-ins**, strict format/check/lint gates and actual PowerShell completion acceptance pass. Fresh captured-image hashes and prior final/customer-script archives remain unchanged.
+
+The USB metadata watcher found stale presence after removal; reliable automatic media-change acceptance stays open. This checkpoint is implementation/test coverage, not full damaged-file repair, historical DMDE yield parity or all-hardware/power-loss certification. [Live results](../testing/HARDWARE_20261013.md).
+
+## Previous checkpoint — 2026-10-12, 458/480
 
 Latest: **458/480 (95.4%), 22 open**, eight additional existing boxes, unchanged denominator. [Exact closure contracts](CHECKLIST_458.md). Independent bounded IBM-MFM observations now support saved-only `recovery crc-check N|all`, diagnostic CRC CSVs and an opt-in immutable `crc-composite` gate. Standard-format ambiguity records observed nonstandard sector IDs/sizes without inventing an image. Direct material expert commands automatically reconcile integrity reports, with durable pending refresh after interruption. [Legacy case review](../testing/LEGACY_CASE_REVIEW.md) separates candidate byte spans, incomplete live chains and CFB stream differences from actual recovered-file yield. **733 routine tests / 32 opt-in cases**, strict lint/check/format/release pass. Language polish and evidence-grouped phase estimates improve without closing their broader remaining requirements.
 

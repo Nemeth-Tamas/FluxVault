@@ -51,11 +51,13 @@ The saved-batch review records results; pilot/runbook documents also retain earl
 - [20-disk pilot](testing/PILOT_20.md)
 - [053–075 batch recipe](testing/NEXT_SCAN.md)
 - [Hardware-test launcher and result collection](testing/TOMORROW_TEST.md)
+- [2026-10-13 clean/DD/damaged/program and USB metadata checks](testing/HARDWARE_20261013.md)
 
 ## Development and historical handoffs
 
 - [Current progress and coverage measures](development/PROGRESS.md)
-- [Latest eight bounded checklist closures](development/CHECKLIST_458.md)
+- [Latest four bounded checklist closures](development/CHECKLIST_462.md)
+- [Previous eight closures](development/CHECKLIST_458.md)
 - [Windows host-process supervision](development/PROCESS_SUPERVISION.md)
 - Historical checkpoints: [85%](development/CHECKLIST_85.md), [90%](development/CHECKLIST_90.md)
 - Historical handoffs: [Gemini](handoffs/GEMINI_HANDOFF.md), [Greaseweazle chat-to-chat](handoffs/CHAT_TO_CHAT_GREASEWEAZLE.md)
