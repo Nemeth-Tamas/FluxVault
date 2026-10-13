@@ -199,6 +199,10 @@ unsafe impl Send for WinHandle {}
 pub(crate) fn spawn(command: &mut Command) -> std::io::Result<ManagedChild> {
     crate::cancellation::check().map_err(std::io::Error::other)?;
     ensure().map_err(std::io::Error::other)?;
+    // All managed hosts are argv-driven, never interactive. Only the controller
+    // owns disk labels / STOP / swap confirmations. Inherited stdin lets a host
+    // steal those commands or wait indefinitely for an open console pipe.
+    command.stdin(Stdio::null());
     #[cfg(windows)]
     {
         spawn_windows(command).map_err(std::io::Error::other)

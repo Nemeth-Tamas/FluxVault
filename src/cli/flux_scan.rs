@@ -911,6 +911,11 @@ where
                             "Evidence retained. No automatic next-disk read; inspect the error before retrying."
                         },
                     )?;
+                    // Queue drop/drain can take time. Show the actual failure
+                    // before unwinding, not only after background hosts finish.
+                    writeln!(output, "Acquisition error: {error}\nSaved-file cleanup may still be finishing; no new read starts.")
+                        .map_err(|e| e.to_string())?;
+                    output.flush().map_err(|e| e.to_string())?;
                     if !crate::cancellation::requested() {
                         sounds.notify(SoundStation::Greaseweazle, SoundOutcome::Failed);
                     }
@@ -940,6 +945,9 @@ where
                 &format!("VERIFICATION FAILED {disk:03} / NUMBER NOT ADVANCED"),
                 "Saved evidence did not pass integrity checks. No next-disk read started.",
             )?;
+            writeln!(output, "Verification error: {error}\nSaved-file cleanup may still be finishing; no new read starts.")
+                .map_err(|e| e.to_string())?;
+            output.flush().map_err(|e| e.to_string())?;
             sounds.notify(SoundStation::Greaseweazle, SoundOutcome::Failed);
             return Err(error);
         }
@@ -1297,17 +1305,23 @@ mod tests {
         let mut project = fixture.project();
         let mut opts = options();
         opts.no_verify = true;
+        let mut output = Vec::new();
         let error = run_with_io(
             &mut project,
             &opts,
             Cursor::new(b"\n\n"),
-            &mut Vec::new(),
+            &mut output,
             |p, disk| Ok(result(p, disk, false)),
             |_, _| Err("Changed image hash".to_owned()),
             skipped,
         )
         .unwrap_err();
         assert!(error.contains("Changed image hash"));
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("Verification error: Changed image hash")
+        );
         assert_eq!(project.current_disk_number(), 1);
         assert!(
             load(&fixture.0.join(JOURNAL), &opts)
@@ -1591,17 +1605,23 @@ mod tests {
         let fixture = Fixture::new();
         let mut project = fixture.project();
         let opts = options();
+        let mut output = Vec::new();
         let error = run_with_io(
             &mut project,
             &opts,
             Cursor::new(b"READ 1\n"),
-            &mut Vec::new(),
+            &mut output,
             |_, _| Err("host stopped".to_owned()),
             |_, _| Ok(()),
             skipped,
         )
         .unwrap_err();
         assert!(error.contains("host stopped"));
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("Acquisition error: host stopped")
+        );
         assert_eq!(project.current_disk_number(), 1);
         let journal = load(&fixture.0.join(JOURNAL), &opts).unwrap();
         assert_eq!(journal.pending.unwrap().disk, 1);

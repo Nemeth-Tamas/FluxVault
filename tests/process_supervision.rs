@@ -76,6 +76,39 @@ struct Fixture {
     project: ProjectState,
     appdata: PathBuf,
 }
+
+#[test]
+fn hosts_get_eof_without_waiting_for_the_operator_console_to_close() {
+    let fixture = Fixture::new();
+    let out = fixture.root.join("stdin-isolation.stdout");
+    let err = fixture.root.join("stdin-isolation.stderr");
+    let mut cmd = fixture.command();
+    cmd.args(["greaseweazle", "info"])
+        .env("MOCK_GW_REQUIRE_STDIN_EOF", "1")
+        .stdin(Stdio::piped())
+        .stdout(fs::File::create(&out).unwrap())
+        .stderr(fs::File::create(&err).unwrap());
+    let mut running = Running(cmd.spawn().unwrap());
+    // Leave the controller's input pipe OPEN. Its hosts must see immediate EOF,
+    // not wait for an operator Enter/QUIT or consume an identity confirmation.
+    let start = Instant::now();
+    let code = loop {
+        if let Some(status) = running.0.try_wait().unwrap() {
+            break status.code();
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "host inherited the open operator input pipe"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(code, Some(0), "{}", fs::read_to_string(&err).unwrap());
+    assert!(
+        fs::read_to_string(&err)
+            .unwrap()
+            .contains("MOCK HOST STDIN EOF")
+    );
+}
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(

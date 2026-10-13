@@ -7,6 +7,13 @@ macro_rules! println {
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    if env::var_os("MOCK_GW_REQUIRE_STDIN_EOF").is_some() {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::io::stdin().read_to_end(&mut bytes).unwrap();
+        assert!(bytes.is_empty(), "host consumed operator input");
+        println!("MOCK HOST STDIN EOF / no operator input inherited");
+    }
     if args.first().is_some_and(|arg| arg == "mock-worker") {
         let root = PathBuf::from(env::var_os("MOCK_GW_TREE_ROOT").unwrap());
         fs::write(root.join("worker.pid"), std::process::id().to_string()).unwrap();

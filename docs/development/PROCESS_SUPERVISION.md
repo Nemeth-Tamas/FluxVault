@@ -19,6 +19,8 @@ Before CLI work or any library-managed host launch, the controller joins an unna
 
 Each operation also owns a nested kill-on-close job. A host starts **suspended and hidden**, joins this job, and only then resumes. Stable Rust does not expose the initial thread handle; Toolhelp enumeration must identify exactly one thread of the suspended child, with the expected suspend count. Missing/ambiguous enumeration or assignment/resume failure kills the suspended host instead of running unmanaged code.
 
+Managed hosts also receive **closed standard input**. GW, 7-Zip and Office commands are argument-driven; they must never inherit the operator's open input pipe, consume a disk label/STOP command, or wait for that console to close. This applies to health probes as well as long operations. Only FluxVault reads operator input. No interactive external-tool mode is supported through this runner.
+
 Normal host exit, timeout, wait failure or guard drop terminates remaining operation descendants. Before accepting a completed operation, Windows job accounting must confirm zero active processes within five seconds. Reader pipes are joined after operation cleanup, so a lingering child cannot retain stdout/stderr indefinitely after its leader exits. Operations have separate jobs: terminating one timed-out host does not terminate another operation or the controller. Existing command/recovery deadlines are unchanged; supervision itself is not a new bounded extraction deadline. Cooperative cancellation polls these supervised hosts and preserves resumable work; a blocked USB driver read still needs to return.
 
 Coverage: GW execution and version/health probes, audited extraction/7-Zip commands and isolated-profile LibreOffice conversions. It covers FluxVault-created hosts, not independently launched user applications. Existing read-only allowlists/device assertions are unchanged; no breakaway flags, resource/priority limits or administrator requirements are introduced. The controller-wide kill-on-exit implementation is Windows-specific; other platforms retain their existing runners without claiming this guarantee.
@@ -33,6 +35,7 @@ New `Logs/external-tools.jsonl` records identify `controller_supervision: "windo
 - Forced decode termination: partial image remains unchanged; restart reuses the complete SCP, with exactly one audited raw-read command across both invocations.
 - Leader exits with a descendant holding output pipes: the CLI completes promptly and records supervision.
 - Bounded operation timeout: entire child tree stops while the controller remains usable.
+- Input ownership: a real mock CLI host requiring EOF completes while the controller's input pipe remains open. This regression fails before stdin isolation and passes after it; ordinary typed STOP/resume tests still pass.
 
 Unit tests cover concurrent initialization, missing-host refusal, failed resume of a suspended host, and old audit compatibility. The environment-dependent CLI fixture additionally runs numbered mock scanning with real 7-Zip/Office, checks extracted originals and DOCX/PDF, finalizes a CRC/hash-verified archive, and verifies that invalid-filesystem attention blocks finalization. Physical drive idle, every publication cutpoint, power loss and full production throughput remain distinct acceptance work.
 
