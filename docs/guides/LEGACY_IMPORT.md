@@ -8,7 +8,7 @@ Use the current FluxVault executable or refresh your installed `fv` after buildi
 
 ```powershell
 $archive = 'C:\Users\User\Desktop\randomprojectsillneverfinish\FluxVault\TextilMuzeum_Floppy_Archive_20260920_115210.zip'
-$restored = 'C:\Users\User\Desktop\FluxVault-Test\Script-Archive-Imported'
+$restored = 'C:\Users\User\Desktop\FluxVault-Script-Archive-Imported'
 
 # Optional preview: checks structure/index, creates nothing.
 fv project import --source $archive --destination $restored --plan
@@ -48,7 +48,30 @@ Existing saved-image inspection/recovery commands remain available. Import itsel
 
 ## Advanced: guards and interruptions
 
-`--json` returns the command result on stdout; progress stays on stderr. Only `--source`, `--destination`, `--plan` and `--json` apply to this command. Duplicate options, physical flags and `--project` are refused. Destination must be absent, outside existing FluxVault projects and on workstation storage, not a floppy/device path. It must have an existing regular parent.
+### Compare recovery using the same original images
+
+Ordinary import preserves old recovered folders. **Do not use those preserved files as evidence that FluxVault recovered them.** For a fresh automated extraction replay, use a different, absent folder outside existing projects:
+
+```powershell
+$replay = 'C:\Users\User\Desktop\FluxVault-Same-Evidence'
+fv project import --source $archive --destination $replay --images-only --plan
+fv project import --source $archive --destination $replay --images-only
+Set-Location $replay
+fv extract all
+fv benchmark compare --baseline $archive
+```
+
+`--images-only` copies only `Images/` and `Logs/`. It excludes old recovered files, Office conversions, recovery folders and report payloads. Optional archive-index rows remain **historical metadata inside the new import JSON**, not copied reports or new recovery claims. No old extraction markers are created. Import still returns legacy-attention exit 3; later extraction/comparison can also return 3 for attention or missing matches.
+
+The import JSON identifies scope, selected/skipped file counts, selected bytes, per-input hashes and excluded member metadata. In this mode, `selected_member_payloads_verified=true` means the copied inputs passed CRC/hash checks; `member_payloads_verified=false` explicitly does **not** certify skipped reference payloads. A preview verifies neither. Full import keeps its existing all-member verification contract.
+
+An images-only `benchmark compare` independently reads the selected inputs from the reference ZIP and compares them with both the receipt and current project files before/after comparison. Editing an input **and** rebinding its receipt hash does not bypass the ZIP comparison. Different source archives, changed/missing inputs, escaped paths, duplicate or incomplete inventories refuse a new result. `replay_input_binding` proves archived image/log bytes, not that every output was automatic, every sector was physically readable, or every document is complete. Managed extraction inventories provide their separate output bindings.
+
+This recipe runs extraction/native fallbacks and byte comparison without Office conversions. It is an **extraction replay**, not a complete production or customer-delivery test; it does not run the pipeline's earlier composite/mirrored-image handoff. [Measured 136-image replay and current gaps](../testing/SAME_EVIDENCE_REPLAY.md).
+
+Legacy image identities now use the measured saved snapshot hash. A disagreeing log hash remains a separate historical claim, with attention retained. Such a sector map cannot authorize compositing, FAT repair or native source-sector recovery; no log or image is silently changed to reconcile it.
+
+`--json` returns the command result on stdout; progress stays on stderr. Only `--source`, `--destination`, `--plan`, `--images-only` and `--json` apply to this command. Duplicate options, physical flags and `--project` are refused. Destination must be absent, outside existing FluxVault projects and on workstation storage, not a floppy/device path. It must have an existing regular parent. `FluxVault-Test` can itself be an existing project: in that case use a fresh sibling/workspace folder, not a nested import.
 
 Preview checks archive names, declared sizes and the optional CSV index; **it does not validate every member's payload or CRC**. Applying performs those checks while copying. Unsafe Windows paths, traversal, alternate streams, reserved device names, symlinks, case/prefix collisions, native control/managed marker files and reserved import reports are refused. Bounds: 100,000 entries, 4 GiB source/expanded total, 64 MiB per member, 8 MiB per legacy log, 4 MiB per complete floppy image and 1–4,096 complete image labels. Legacy DMDE map parsing has independent bounded expansion/stop checks.
 

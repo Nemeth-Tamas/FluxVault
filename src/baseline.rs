@@ -45,6 +45,8 @@ pub struct DiskComparison {
     pub disk: u32,
     pub reference_image_sha256: Option<String>,
     pub current_image_sha256: Option<String>,
+    pub legacy_log_sha256: Option<String>,
+    pub legacy_log_hash_matches_snapshot: Option<bool>,
     pub same_image_bytes: Option<bool>,
     pub extraction_binding_verified: bool,
     pub reference_payloads: usize,
@@ -62,6 +64,7 @@ pub struct Comparison {
     pub include_deleted: bool,
     pub reference_archive: PathBuf,
     pub reference_archive_sha256: String,
+    pub replay_input_binding: Option<crate::legacy_import::ReplayVerification>,
     pub selected_disks: Vec<u32>,
     pub unscanned_reference_disks: Vec<u32>,
     pub reference_payloads: usize,
@@ -423,8 +426,11 @@ fn compare(
     workstation(&baseline)?;
     progress("Hashing the reference archive; no files will be unpacked...");
     let (_, archive_hash) = hash_file(&baseline, 4 * 1024 * 1024 * 1024)?;
+    let replay_input_binding =
+        crate::legacy_import::verify_replay_inputs(project, &baseline, &archive_hash)?;
     let mut selected = BTreeSet::new();
     let mut images = BTreeMap::new();
+    let mut legacy_claims = BTreeMap::new();
     let mut current = BTreeMap::new();
     let mut bound = BTreeMap::new();
     let mut warnings = vec!["Content matches are within each numbered disk, with one-to-one multiplicity. Changed source-image bytes prevent a same-evidence yield claim. Renamed identical content does not validate original names. Empty/temporary files and tool/OS reports are separate from payload totals; matching source payloads is not document-render or customer-delivery certification.".into()];
@@ -447,6 +453,18 @@ fn compare(
             return Err("Current comparison image changed from acquisition binding".into());
         }
         images.insert(disk.disk_number, hash.clone());
+        if attempt.legacy_image
+            && let Some(claim) = attempt
+                .parsed_log
+                .as_ref()
+                .and_then(|log| log.sha256.as_ref())
+        {
+            let agrees = claim.eq_ignore_ascii_case(&hash);
+            legacy_claims.insert(disk.disk_number, (claim.clone(), agrees));
+            if !agrees {
+                warnings.push(format!("Disk {:03}: historical acquisition-log hash disagrees with the measured snapshot; byte comparison is possible, but sector/read completeness is not certified.", disk.disk_number));
+            }
+        }
         let presence = extraction::inspect_extraction_presence(
             &project.extracted_dir(),
             disk.disk_number,
@@ -643,6 +661,11 @@ fn compare(
             .push(payload(&relative, bytes, hash, origin)?);
     }
     drop(archive);
+    if crate::legacy_import::verify_replay_inputs(project, &baseline, &archive_hash)?
+        != replay_input_binding
+    {
+        return Err("Replay import binding changed during comparison; report refused".into());
+    }
     if hash_file(&baseline, 4 * 1024 * 1024 * 1024)?.1 != archive_hash {
         return Err("Reference archive changed during comparison; report refused".into());
     }
@@ -672,6 +695,7 @@ fn compare(
         include_deleted,
         reference_archive: baseline,
         reference_archive_sha256: archive_hash,
+        replay_input_binding,
         selected_disks: selected.iter().copied().collect(),
         unscanned_reference_disks: all_disks.difference(&selected).copied().collect(),
         reference_payloads: 0,
@@ -693,10 +717,13 @@ fn compare(
             (a.category != "payload", &a.path).cmp(&(b.category != "payload", &b.path))
         });
         let files = matches(old, current.remove(&disk).unwrap_or_default());
+        let legacy_claim = legacy_claims.remove(&disk);
         let mut record = DiskComparison {
             disk,
             reference_image_sha256: reference_images.remove(&disk),
             current_image_sha256: images.remove(&disk),
+            legacy_log_sha256: legacy_claim.as_ref().map(|(sha, _)| sha.clone()),
+            legacy_log_hash_matches_snapshot: legacy_claim.map(|(_, agrees)| agrees),
             same_image_bytes: None,
             extraction_binding_verified: bound.remove(&disk).unwrap_or(false),
             reference_payloads: 0,

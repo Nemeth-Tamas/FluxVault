@@ -148,6 +148,77 @@ fn offline_cli_plan_import_status_and_repeat_are_guarded() {
 }
 
 #[test]
+fn images_only_cli_cannot_seed_reference_payloads_and_flag_is_strictly_scoped() {
+    let f = Fixture::new();
+    let archive = f.archive();
+    let before = sha(&archive);
+    let args = [
+        "project",
+        "import",
+        "--source",
+        "legacy.zip",
+        "--destination",
+        "Restored",
+        "--images-only",
+        "--json",
+    ];
+    let plan_args = args.into_iter().chain(["--plan"]).collect::<Vec<_>>();
+    let plan = value(&f.invoke(&plan_args), 0);
+    assert_eq!(plan["files"], 1);
+    assert_eq!(plan["excluded_files"], 2);
+    assert!(!f.target().exists());
+    let applied = value(&f.invoke(&args), 3);
+    assert_eq!(applied["reference_payloads_imported"], false);
+    assert_eq!(applied["member_payloads_verified"], false);
+    assert_eq!(applied["selected_member_payloads_verified"], true);
+    assert!(f.target().join("Images/001.bin").is_file());
+    assert_eq!(
+        fs::read_dir(f.target().join("Extracted")).unwrap().count(),
+        0
+    );
+    assert_eq!(
+        fs::read_dir(f.target().join("Converted")).unwrap().count(),
+        0
+    );
+    let compared = f.invoke(&[
+        "benchmark",
+        "compare",
+        "--project",
+        f.target().to_str().unwrap(),
+        "--baseline",
+        archive.to_str().unwrap(),
+        "--json",
+    ]);
+    let comparison = value(&compared, 3);
+    assert_eq!(
+        comparison["comparison"]["replay_input_binding"]["verified_input_files"],
+        1
+    );
+    assert_eq!(comparison["comparison"]["missing_payloads"], 1);
+    assert_eq!(comparison["comparison"]["matched_payloads"], 0); // Reference wasn't silently imported.
+    fs::write(f.target().join("Images/001.bin"), b"changed image").unwrap();
+    let refused = f.invoke(&[
+        "benchmark",
+        "compare",
+        "--project",
+        f.target().to_str().unwrap(),
+        "--baseline",
+        archive.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(refused.status.code(), Some(2));
+    for invalid in [
+        vec!["status", "--images-only"],
+        vec!["init", "Another", "--images-only"],
+        args.into_iter().chain(["--images-only"]).collect(),
+    ] {
+        assert_eq!(f.invoke(&invalid).status.code(), Some(2));
+    }
+    assert!(!f.0.join("Another").exists());
+    assert_eq!(sha(&archive), before);
+}
+
+#[test]
 fn acquisition_flags_duplicate_options_and_missing_arguments_are_rejected() {
     let f = Fixture::new();
     let archive = f.archive();

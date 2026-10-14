@@ -213,6 +213,9 @@ pub(super) fn run_advanced(
         }
         "composite" | "crc-composite" => {
             let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk_number)?;
+            for attempt in &attempts {
+                attempt.require_legacy_sector_binding()?;
+            }
             if attempts.len() < 2 {
                 return Err("Composite requires at least two saved attempts".to_owned());
             }
@@ -384,6 +387,7 @@ pub(super) fn run_advanced(
             let attempt = attempts
                 .last()
                 .ok_or_else(|| format!("No saved disk {disk_number:03} in this project"))?;
+            attempt.require_legacy_sector_binding()?;
             if attempt.bad_sectors.is_empty() {
                 return Err("Mirrored FAT reconstruction requires bad sectors".to_owned());
             }

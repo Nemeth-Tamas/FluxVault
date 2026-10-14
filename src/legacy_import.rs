@@ -18,6 +18,9 @@ const MAX_ENTRIES: usize = 100_000;
 const REPORT: &str = "Reports/LegacyImport.json";
 const INVENTORY: &str = "Reports/LegacyImportFiles.csv";
 const SUMMARY: &str = "Reports/LegacyImport.txt";
+#[path = "legacy_replay.rs"]
+mod replay;
+pub(crate) use replay::{ReplayVerification, verify_replay_inputs};
 
 #[derive(Clone, Debug, Serialize)]
 struct Member {
@@ -41,6 +44,10 @@ struct Prepared {
     images: BTreeMap<u32, String>,
     index_rows: Vec<BTreeMap<String, String>>,
     bytes: u64,
+    images_only: bool,
+    archive_files: usize,
+    archive_bytes: u64,
+    excluded_members: Vec<Member>,
 }
 
 fn regular(path: &Path, directory: bool) -> Result<(), String> {
@@ -366,17 +373,46 @@ fn prepare(cwd: &Path, source: &Path, target: &Path) -> Result<Prepared, String>
         source,
         destination,
         archive_sha256,
+        archive_files: members.iter().filter(|m| !m.directory).count(),
+        archive_bytes: bytes,
         members,
         images,
         index_rows,
         bytes,
+        images_only: false,
+        excluded_members: Vec::new(),
     })
+}
+
+/// Preserve acquisition inputs, never seed recovered payloads into a replay.
+/// The full archive still passes metadata/path/size checks before filtering.
+fn acquisition_only(mut p: Prepared) -> Prepared {
+    p.images_only = true;
+    let (selected, excluded): (Vec<_>, Vec<_>) = p.members.into_iter().partition(|m| {
+        m.path == "Images"
+            || m.path.starts_with("Images/")
+            || m.path == "Logs"
+            || m.path.starts_with("Logs/")
+    });
+    p.members = selected;
+    p.excluded_members = excluded;
+    p.bytes = p
+        .members
+        .iter()
+        .filter(|m| !m.directory)
+        .map(|m| m.bytes)
+        .sum();
+    p
 }
 
 fn planned(p: &Prepared) -> Value {
     json!({"schema":1,"source_archive":p.source,"source_sha256":p.archive_sha256,
     "destination":p.destination,"files":p.members.iter().filter(|m|!m.directory).count(),"source_bytes":p.bytes,
     "disk_labels":p.images.keys().collect::<Vec<_>>(),"images":p.images.len(),"archive_index_rows":p.index_rows.len(),
+    "import_scope":if p.images_only {"images_and_logs_only"}else{"full_archive"},
+    "archive_files":p.archive_files,"archive_declared_bytes":p.archive_bytes,
+    "excluded_files":p.excluded_members.iter().filter(|m|!m.directory).count(),
+    "reference_payloads_imported":false,
     "next_disk":p.images.last_key_value().map(|(n,_)|n+1),"physical_media_access":false,
     "customer_delivery_certified":false,"legacy_files_are_not_managed_recovery":true})
 }
@@ -388,12 +424,39 @@ pub(crate) fn run(
     plan: bool,
     progress: &impl Fn(&str),
 ) -> Result<Value, String> {
+    run_scoped(cwd, source, target, plan, false, progress)
+}
+
+pub(crate) fn run_images_only(
+    cwd: &Path,
+    source: &Path,
+    target: &Path,
+    plan: bool,
+    progress: &impl Fn(&str),
+) -> Result<Value, String> {
+    run_scoped(cwd, source, target, plan, true, progress)
+}
+
+fn run_scoped(
+    cwd: &Path,
+    source: &Path,
+    target: &Path,
+    plan: bool,
+    images_only: bool,
+    progress: &impl Fn(&str),
+) -> Result<Value, String> {
     progress("IMPORT / inspecting a saved script ZIP; no drives or external tools are used");
-    let p = prepare(cwd, source, target)?;
+    let prepared = prepare(cwd, source, target)?;
+    let p = if images_only {
+        acquisition_only(prepared)
+    } else {
+        prepared
+    };
     if plan {
         let mut value = planned(&p);
         value["plan_only"] = json!(true);
         value["member_payloads_verified"] = json!(false);
+        value["selected_member_payloads_verified"] = json!(false);
         return Ok(value);
     }
     crate::cancellation::check()?;
@@ -600,7 +663,15 @@ fn copy(
     )?;
     let mut result = planned(p);
     result["plan_only"] = json!(false);
-    result["member_payloads_verified"] = json!(true);
+    // Skipped reference payloads have not been decompressed/CRC-checked. Do not
+    // accidentally certify them with the full-import field's old meaning.
+    result["member_payloads_verified"] = json!(!p.images_only);
+    result["selected_member_payloads_verified"] = json!(true);
+    result["reference_payloads_imported"] = json!(files.iter().any(|f| {
+        ["Extracted/", "Converted/", "Recovery/"]
+            .iter()
+            .any(|prefix| f.path.starts_with(prefix))
+    }));
     result["legacy_status_counts"] = json!(disks.iter().fold(
         BTreeMap::<String, usize>::new(),
         |mut a, d| {
@@ -633,6 +704,9 @@ fn copy(
         p.bytes,
         result["next_disk"]
     );
+    if p.images_only {
+        summary.push_str("\r\nIMAGES-ONLY REPLAY: only Images/ and Logs/ payloads copied. Extracted/, Converted/, Recovery/ and all old report payloads excluded; no old recovered files seed the new result. Archive-index claims are retained as historical JSON metadata, not copied files or new quality certificates. Member verification covers selected payloads only.\r\n");
+    }
     for disk in &disks {
         summary.push_str(&format!(
             "{:03} | {} | {} | {} | {} | {} | {}\r\n",
@@ -654,6 +728,7 @@ fn copy(
     let mut report = result.clone();
     report["disks"] = json!(disks);
     report["files"] = json!(files);
+    report["excluded_members"] = json!(p.excluded_members);
     report["archive_index_rows_without_images"] = json!(index_only);
     let bytes = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
     if bytes.len() > 64 * 1024 * 1024 {

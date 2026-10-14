@@ -1,4 +1,8 @@
-# FluxVault progress — 2026-10-13, 464/479
+# FluxVault progress — 2026-10-14, 464/479
+
+Latest: **464/479 (96.9%), 15 open**, no scope/denominator changes. New opt-in `project import --images-only` enables an uncontaminated extraction replay: no old recovered files copied, independently ZIP-reverified image/log inputs before/after comparison. Measured 136 identical source images: **882/1,159 exact in-scope reference payload matches**, zero same-path changed payloads, 277 unmatched candidates and 37 current-only. This extraction-only historical-input result is not normal modern-capture recovery percentage or full production parity. Fixed legacy snapshot/hash-claim confusion; 020/047/112 retain attention and cannot donate their contradictory sector maps. **776 routine tests / 33 opt-ins**, full gate and strict lint pass. [Scope, receipts and next investigations](../testing/SAME_EVIDENCE_REPLAY.md).
+
+## Previous hardware/background checkpoint
 
 Latest: **464/479 (96.9%), 15 open**, unchanged checklist scope. Supervised hosts now receive closed stdin instead of inheriting operator confirmations; an executable regression fails before the fix and passes after it. Acquisition/verification failures show their actual reason before background cleanup. Protected physical WinWord/007-HD/009-DD reads overlapped saved-file work and drained lossless packing: two damaged sectors stay attention, both clean images exactly match their archived acquisitions. Recorded controller/child RAM, overlap and command/capture times strengthen representative acceptance, not full 136-disk acceptance. **767 routine tests / 33 opt-ins**, complete quality gate and release build pass. [Measured cases and limits](../testing/HARDWARE_OVERLAP_20261013.md).
 

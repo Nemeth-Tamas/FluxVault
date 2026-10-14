@@ -85,6 +85,341 @@ fn plan_never_creates_destination_or_staging() {
 }
 
 #[test]
+fn images_only_isolates_inputs_records_exclusions_and_preserves_index_claims_as_metadata() {
+    let f = Fixture::new();
+    let image = vec![9u8; 1024];
+    let source = f.zip(&[
+        ("Images/007.bin", &image),
+        ("Logs/007.log", b"old acquisition log"),
+        ("Extracted/007/reference.doc", b"never seed a recovery"),
+        ("Converted/007/reference.pdf", b"not a new conversion"),
+        ("Recovery/007/manual.doc", b"not a new native recovery"),
+        (
+            "Reports/ArchiveIndex.csv",
+            b"FloppyNumber,Status\r\n007,OK\r\n",
+        ),
+        ("README.txt", b"historical description"),
+    ]);
+    let before = hash_file(&source, MAX_ARCHIVE).unwrap();
+    let plan = run_images_only(&f.0, &source, &f.target(), true, &|_| {}).unwrap();
+    assert_eq!(plan["files"], 2);
+    assert_eq!(plan["excluded_files"], 5);
+    assert_eq!(plan["archive_files"], 7);
+    assert_eq!(plan["reference_payloads_imported"], false);
+    assert!(!f.target().exists());
+    assert_eq!(fs::read_dir(&f.0).unwrap().count(), 1);
+    let applied = run_images_only(&f.0, &source, &f.target(), false, &|_| {}).unwrap();
+    assert_eq!(applied["import_scope"], "images_and_logs_only");
+    assert_eq!(applied["selected_member_payloads_verified"], true);
+    assert_eq!(applied["member_payloads_verified"], false);
+    assert_eq!(applied["reference_payloads_imported"], false);
+    assert_eq!(fs::read(f.target().join("Images/007.bin")).unwrap(), image);
+    assert_eq!(
+        fs::read(f.target().join("Logs/007.log")).unwrap(),
+        b"old acquisition log"
+    );
+    for top in ["Extracted", "Converted", "Recovery"] {
+        assert_eq!(fs::read_dir(f.target().join(top)).unwrap().count(), 0);
+    }
+    assert!(!f.target().join("Reports/ArchiveIndex.csv").exists());
+    assert!(!f.target().join("README.txt").exists());
+    let report: Value =
+        serde_json::from_slice(&fs::read(f.target().join(REPORT)).unwrap()).unwrap();
+    assert_eq!(report["files"].as_array().unwrap().len(), 2);
+    assert_eq!(report["excluded_members"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        report["disks"][0]["archive_index_claims"][0]["row"]["Status"],
+        "OK"
+    );
+    assert_eq!(report["disks"][0]["legacy_extracted_files"], 0);
+    assert_eq!(report["disks"][0]["legacy_recovery_files"], 0);
+    assert!(run_images_only(&f.0, &source, &f.target(), false, &|_| {}).is_err());
+    assert_eq!(hash_file(&source, MAX_ARCHIVE).unwrap(), before);
+}
+
+#[test]
+fn images_only_still_refuses_unsafe_or_colliding_excluded_paths() {
+    for path in [
+        "Extracted/../escape.doc",
+        "Recovery/007/NUL.doc",
+        "Reports/LegacyImport.json",
+    ] {
+        let f = Fixture::new();
+        let source = f.zip(&[("Images/001.bin", b"image"), (path, b"not copied")]);
+        assert!(run_images_only(&f.0, &source, &f.target(), false, &|_| {}).is_err());
+        assert!(!f.target().exists());
+        assert_eq!(fs::read_dir(&f.0).unwrap().count(), 1);
+    }
+    let f = Fixture::new();
+    let source = f.zip(&[
+        ("Images/001.bin", b"image"),
+        ("Extracted/001/a", b"one"),
+        ("Extracted/001/A", b"two"),
+    ]);
+    assert!(run_images_only(&f.0, &source, &f.target(), false, &|_| {}).is_err());
+}
+
+#[test]
+fn skipped_payload_crc_is_not_certified_and_selected_corruption_refuses_publication() {
+    for corrupt_selected in [false, true] {
+        let f = Fixture::new();
+        let source = f.zip(&[
+            ("Images/001.bin", b"unique image bytes"),
+            ("Extracted/001/a.doc", b"unique reference bytes"),
+        ]);
+        let needle: &[u8] = if corrupt_selected {
+            b"unique image bytes"
+        } else {
+            b"unique reference bytes"
+        };
+        let mut bytes = fs::read(&source).unwrap();
+        let offset = bytes
+            .windows(needle.len())
+            .position(|v| v == needle)
+            .unwrap();
+        bytes[offset] ^= 1; // Stored member has invalid CRC but unchanged metadata.
+        fs::write(&source, bytes).unwrap();
+        let before = hash_file(&source, MAX_ARCHIVE).unwrap();
+        let applied = run_images_only(&f.0, &source, &f.target(), false, &|_| {});
+        if corrupt_selected {
+            assert!(applied.is_err());
+            assert!(!f.target().exists());
+        } else {
+            let value = applied.unwrap();
+            assert_eq!(value["member_payloads_verified"], false);
+            assert_eq!(value["selected_member_payloads_verified"], true);
+            assert!(!f.target().join("Extracted/001/a.doc").exists());
+        }
+        assert_eq!(hash_file(&source, MAX_ARCHIVE).unwrap(), before);
+    }
+}
+
+#[test]
+fn images_only_cancel_or_source_change_keeps_staging_without_publishing() {
+    for cancel in [false, true] {
+        let f = Fixture::new();
+        let source = f.zip(&[
+            ("Images/001.bin", b"image"),
+            ("Extracted/001/a.doc", b"reference"),
+        ]);
+        let token = crate::cancellation::Token::default();
+        let _scope = crate::cancellation::enter(token.clone());
+        let error = run_images_only(&f.0, &source, &f.target(), false, &|message| {
+            if cancel && message.starts_with("IMPORT / staging:") {
+                token.request();
+            } else if !cancel && message.starts_with("IMPORT / final source-") {
+                OpenOptions::new()
+                    .append(true)
+                    .open(&source)
+                    .unwrap()
+                    .write_all(b"changed")
+                    .unwrap();
+            }
+        })
+        .unwrap_err();
+        assert!(!f.target().exists());
+        if cancel {
+            assert!(crate::cancellation::stopped(&error));
+        } else {
+            assert!(error.contains("Source ZIP changed"));
+        }
+        assert!(fs::read_dir(&f.0).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(".fluxvault-import-")
+                && e.path().is_dir()
+        }));
+    }
+}
+
+#[test]
+fn legacy_snapshot_identity_and_log_claim_remain_separate_across_recovery_and_audit() {
+    let f = Fixture::new();
+    let image = vec![0x42; 1024];
+    let actual = format!("{:x}", Sha256::digest(&image));
+    let claimed = "a".repeat(64);
+    let log = format!(
+        "BEGIN floppy=007\nGEOMETRY cylinders=1 heads=1 sectors_per_track=2 bytes_per_sector=512 total_sectors=2 total_bytes=1024\nSHA256 {claimed}\nEND status=OK bad_sectors=0 recovered_after_retry=0 track_fallbacks=0 duration_seconds=1.0\n"
+    );
+    let source = f.zip(&[("Images/007.bin", &image), ("Logs/007.log", log.as_bytes())]);
+    run_images_only(&f.0, &source, &f.target(), false, &|_| {}).unwrap();
+    let project = ProjectState::open_without_session(f.target()).unwrap();
+    let attempt = crate::imaging::load_attempts_for_disk(&project.images_dir(), 7)
+        .unwrap()
+        .remove(0);
+    assert_eq!(attempt.sha256, actual);
+    assert_eq!(attempt.status, "OK"); // Historical label, not current certification.
+    assert!(attempt.attention_required);
+    assert!(attempt.require_legacy_sector_binding().is_err());
+    let plan = crate::recovery_plan::plan_project(&project.images_dir()).unwrap();
+    assert!(plan[0].reason.contains("readable-sector map is untrusted"));
+    assert_eq!(
+        plan[0].action,
+        crate::recovery_plan::RecoveryAction::CheckEvidence
+    );
+    for command in ["fat", "composite"] {
+        let refusal = crate::cli::run(
+            &["recovery".into(), command.into(), "7".into()],
+            project.root(),
+        )
+        .unwrap_err();
+        assert!(
+            refusal.contains("readable-sector map is untrusted"),
+            "{refusal}"
+        );
+    }
+    assert_eq!(
+        attempt.parsed_log.as_ref().unwrap().sha256.as_deref(),
+        Some(claimed.as_str())
+    );
+    let directory = project.extracted_dir().join("007/legacy");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("payload.txt"),
+        b"snapshot-bound derived output",
+    )
+    .unwrap();
+    // A previously generated ordinary extraction binds the actual file, not
+    // the contradictory historical claim. Selection must not reject its hash.
+    let payload = fs::read(directory.join("payload.txt")).unwrap();
+    let inventory = json!({"schema_version":1,"source_image":"007.bin","source_sha256":actual,
+        "files":[{"relative_path":"payload.txt","bytes":payload.len(),"modified_unix_ms":null,"attributes":"","sha256":format!("{:x}",Sha256::digest(&payload))}]});
+    let marker = json!({"schema_version":1,"source_image":"007.bin","source_sha256":actual,
+        "extracted_unix_ms":0,"file_count":1,"total_bytes":payload.len(),"native_recovery_report_sha256":null});
+    fs::write(
+        directory.join(".fluxvault-inventory.json"),
+        inventory.to_string(),
+    )
+    .unwrap();
+    fs::write(
+        directory.join(".fluxvault-extraction.json"),
+        marker.to_string(),
+    )
+    .unwrap();
+    assert!(matches!(
+        crate::extraction::inspect_extraction_presence(&project.extracted_dir(), 7, 0).unwrap(),
+        crate::extraction::ExtractionPresence::Automatic { .. }
+    ));
+    let native = crate::fat12_recovery::recover_attempt(
+        &project.images_dir(),
+        &project.extracted_dir(),
+        &project.recovery_dir(),
+        7,
+        &attempt,
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(
+        native.contains("does not establish complete sector evidence"),
+        "{native}"
+    );
+    let audit = crate::audit::run_audit(&project, &|_| {}).unwrap();
+    let report: Value = serde_json::from_slice(&fs::read(audit.json_path).unwrap()).unwrap();
+    assert_eq!(report["disks"][0]["image_sha256"], actual);
+    assert!(
+        report["disks"][0]["issue"]
+            .as_str()
+            .unwrap()
+            .contains("Legacy acquisition-log SHA-256 claim disagrees")
+    );
+    assert_ne!(
+        report["disks"][0]["evidence_status"],
+        "IMAGE_FILES_CONVERSIONS_VERIFIED"
+    );
+    assert_eq!(
+        fs::read_to_string(project.logs_dir().join("007.log")).unwrap(),
+        log
+    );
+    assert_eq!(
+        fs::read(project.images_dir().join("007.bin")).unwrap(),
+        image
+    );
+}
+
+#[test]
+fn replay_verification_checks_zip_bytes_even_if_an_input_receipt_is_rebound() {
+    let f = Fixture::new();
+    let source = f.zip(&[
+        ("Images/001.bin", b"original image"),
+        ("Logs/001.log", b"original log"),
+        ("Extracted/001/reference.doc", b"reference only"),
+    ]);
+    let source_hash = hash_file(&source, MAX_ARCHIVE).unwrap().1;
+    run_images_only(&f.0, &source, &f.target(), false, &|_| {}).unwrap();
+    let project = ProjectState::open_without_session(f.target()).unwrap();
+    let proof = verify_replay_inputs(&project, &source, &source_hash)
+        .unwrap()
+        .unwrap();
+    assert_eq!(proof.verified_input_files, 2);
+    assert_eq!(proof.verified_input_bytes, 26);
+    let receipt = project.root().join(REPORT);
+    let original_report = fs::read(&receipt).unwrap();
+    fs::write(project.images_dir().join("001.bin"), b"modified image").unwrap();
+    assert!(
+        verify_replay_inputs(&project, &source, &source_hash)
+            .unwrap_err()
+            .contains("changed from archived bytes")
+    );
+    let mut rebound: Value = serde_json::from_slice(&original_report).unwrap();
+    rebound["files"][0]["sha256"] = json!(format!("{:x}", Sha256::digest(b"modified image")));
+    fs::write(&receipt, rebound.to_string()).unwrap();
+    assert!(
+        verify_replay_inputs(&project, &source, &source_hash)
+            .unwrap_err()
+            .contains("changed from archived bytes")
+    );
+    fs::write(project.images_dir().join("001.bin"), b"original image").unwrap();
+    fs::write(&receipt, &original_report).unwrap();
+    assert_eq!(
+        verify_replay_inputs(&project, &source, &source_hash).unwrap(),
+        Some(proof)
+    );
+    fs::write(project.logs_dir().join("001.log"), b"modified log").unwrap();
+    assert!(verify_replay_inputs(&project, &source, &source_hash).is_err());
+}
+
+#[test]
+fn replay_verification_refuses_forged_scope_paths_and_incomplete_source_inventories() {
+    let f = Fixture::new();
+    let source = f.zip(&[("Images/001.bin", b"image"), ("Logs/001.log", b"log")]);
+    let source_hash = hash_file(&source, MAX_ARCHIVE).unwrap().1;
+    run_images_only(&f.0, &source, &f.target(), false, &|_| {}).unwrap();
+    let project = ProjectState::open_without_session(f.target()).unwrap();
+    let receipt = project.root().join(REPORT);
+    let original: Value = serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+    for failure in 0..7 {
+        let mut changed = original.clone();
+        match failure {
+            0 => changed["files"][0]["path"] = json!("Images/../escape"),
+            1 => changed["files"][0]["path"] = json!("Extracted/001/reference.doc"),
+            2 => {
+                changed["files"].as_array_mut().unwrap().pop();
+            }
+            3 => {
+                let duplicate = changed["files"][0].clone();
+                changed["files"].as_array_mut().unwrap().push(duplicate);
+            }
+            4 => changed["reference_payloads_imported"] = json!(true),
+            5 => changed["source_sha256"] = json!("a".repeat(64)),
+            6 => changed["import_scope"] = json!("unknown_mode"),
+            _ => unreachable!(),
+        }
+        fs::write(&receipt, changed.to_string()).unwrap();
+        assert!(
+            verify_replay_inputs(&project, &source, &source_hash).is_err(),
+            "accepted invalid replay {failure}"
+        );
+    }
+    fs::write(&receipt, original.to_string()).unwrap();
+    assert!(verify_replay_inputs(&project, &source, &"b".repeat(64)).is_err());
+    assert!(
+        verify_replay_inputs(&project, &source, &source_hash)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn copies_all_legacy_bytes_and_records_claims_without_certifying() {
     let f = Fixture::new();
     let image = vec![7u8; 1024];

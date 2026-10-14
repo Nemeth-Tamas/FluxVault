@@ -63,8 +63,9 @@ Usage:
   fluxvault storage resume          Finish durable scan packing tasks without hardware
   fluxvault project show [--project PATH]
                                     Show saved project metadata
-  fluxvault project import --source ZIP --destination NEW_FOLDER [--plan]
+  fluxvault project import --source ZIP --destination NEW_FOLDER [--plan] [--images-only]
                                     Preserve a script archive in a fresh project; no re-imaging
+                                    --images-only copies Images/Logs only for an uncontaminated recovery replay
   fluxvault disk list [--project PATH]
   fluxvault disk show N [--details] [--project PATH]
                                     Inspect attempts, notes and saved recovery/processing lifecycle
@@ -354,6 +355,7 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut last_disk: Option<u32> = None;
     let mut write_blocker_verified = false;
     let mut import_source: Option<PathBuf> = None;
+    let mut images_only = false;
     let mut import_log: Option<PathBuf> = None;
     let mut baseline_zip: Option<PathBuf> = None;
     let mut include_deleted = false;
@@ -388,6 +390,7 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--json" => json_output = true,
+            "--images-only" => images_only = true,
             "--lba" => {
                 index += 1;
                 sector_lba = Some(
@@ -630,6 +633,9 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if positional == ["production", "start"] || positional == ["production", "resume"] {
         return production_flow::run(args, cwd);
     }
+    if images_only && positional != ["project", "import"] {
+        return Err("--images-only is only valid with project import".into());
+    }
     if positional == ["project", "import"] {
         let mut i = 0;
         let mut seen = std::collections::BTreeSet::new();
@@ -639,12 +645,17 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             }
             match args[i].as_str() {
                 "--source"|"--destination" => {i+=1;},
-                "--plan"|"--json"|"project"|"import" => {},
-                _ => return Err("project import accepts only --source ZIP, --destination NEW_FOLDER, --plan and --json".into()),
+                "--plan"|"--images-only"|"--json"|"project"|"import" => {},
+                _ => return Err("project import accepts only --source ZIP, --destination NEW_FOLDER, --plan, --images-only and --json".into()),
             }
             i += 1;
         }
-        let value = crate::legacy_import::run(
+        let import = if images_only {
+            crate::legacy_import::run_images_only
+        } else {
+            crate::legacy_import::run
+        };
+        let value = import(
             cwd,
             import_source
                 .as_deref()
@@ -653,7 +664,7 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 .as_deref()
                 .ok_or("project import requires --destination NEW_FOLDER")?,
             dual_plan,
-            &|m| eprintln!("{m}"),
+            &|m: &str| eprintln!("{m}"),
         )?;
         return Ok(CliResponse {
             exit_code: if dual_plan { 0 } else { 3 },
@@ -661,11 +672,16 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 value.to_string()
             } else {
                 format!(
-                    "IMPORT {} / {} images / {} files / {} bytes\nProject: {}\nLegacy files/logs remain historical, not newly certified recovery.{}",
+                    "IMPORT {} / {} / {} images / {} files / {} bytes\nProject: {}\nLegacy files/logs remain historical, not newly certified recovery.{}",
                     if dual_plan {
                         "PLAN (no writes)"
                     } else {
                         "PUBLISHED WITH LEGACY ATTENTION"
+                    },
+                    if images_only {
+                        "IMAGES/LOGS ONLY; reference files excluded"
+                    } else {
+                        "FULL ARCHIVE"
                     },
                     value["images"],
                     value["files"],

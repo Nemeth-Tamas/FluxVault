@@ -109,6 +109,21 @@ pub struct AttemptSummary {
     pub bad_sectors: Vec<u64>,
 }
 
+impl AttemptSummary {
+    pub(crate) fn require_legacy_sector_binding(&self) -> Result<(), String> {
+        if self.legacy_image
+            && self
+                .parsed_log
+                .as_ref()
+                .and_then(|log| log.sha256.as_ref())
+                .is_some_and(|claimed| !claimed.eq_ignore_ascii_case(&self.sha256))
+        {
+            return Err("Legacy acquisition-log SHA-256 disagrees with the saved image; its readable-sector map is untrusted".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AttemptComparison {
     pub older_attempt: u32,
@@ -1064,10 +1079,14 @@ fn load_legacy_attempt(
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    let image_sha256 = parsed_log
+    // A historical log is a claim, not the identity of the file now present.
+    // Keep that claim in parsed_log, bind consumers to the measured snapshot,
+    // and never call contradictory legacy evidence a clean acquisition.
+    let image_sha256 = sha256_file(&image_path)?;
+    let claimed_hash_disagrees = parsed_log
         .as_ref()
-        .and_then(|log| log.sha256.clone())
-        .unwrap_or(sha256_file(&image_path)?);
+        .and_then(|log| log.sha256.as_ref())
+        .is_some_and(|claimed| !claimed.eq_ignore_ascii_case(&image_sha256));
     let sector_size = parsed_log
         .as_ref()
         .and_then(|log| log.geometry.bytes_per_sector)
@@ -1106,7 +1125,8 @@ fn load_legacy_attempt(
                 .map(|log| log.status.label().to_owned())
         })
         .unwrap_or_else(|| "MISSING LOG".to_owned());
-    let attention_required = !status.eq_ignore_ascii_case("OK") || !bad_sectors.is_empty();
+    let attention_required =
+        claimed_hash_disagrees || !status.eq_ignore_ascii_case("OK") || !bad_sectors.is_empty();
     let image_file = image_path
         .file_name()
         .and_then(|name| name.to_str())

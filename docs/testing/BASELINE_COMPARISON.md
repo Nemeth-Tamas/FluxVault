@@ -10,6 +10,8 @@ The command writes uniquely named `Reports/BaselineComparison-*.json` and `.csv`
 
 ## What is compared?
 
+For a fresh historical-image replay, import with `project import --images-only` into an absent project, then run extraction and comparison. This excludes old DMDE outputs instead of seeding the answer. Images-only comparisons revalidate original image/log bytes directly against the reference ZIP; changed inputs or even rebound receipts refuse. JSON records `replay_input_binding` and separate legacy-log hash disagreements. Ordinary projects/older full imports remain compatible and do not acquire that proof retroactively. [Measured same-evidence run and limits](SAME_EVIDENCE_REPLAY.md).
+
 - Only acquired disk numbers in this project. Unscanned reference disks are listed separately, never counted as missing.
 - Original recovered files under reference `Extracted/NNN`, not duplicate Office derivatives under `Converted`.
 - SHA-256 and size, with one-to-one matching within each disk. First match normalized paths and bytes; then renamed identical bytes; finally identify same-path changed bytes. One current file cannot satisfy multiple reference copies.

@@ -187,6 +187,7 @@ fn run_pipeline_mode(
                 .filter(|attempt| {
                     attempt.total_sectors == best.total_sectors
                         && attempt.status != "DERIVED"
+                        && attempt.require_legacy_sector_binding().is_ok()
                         && (attempt.parsed_log.is_some() || attempt.parsed_dmde_log.is_some())
                 })
                 .map(|attempt| CompositeSource {
@@ -357,6 +358,7 @@ fn run_pipeline_mode(
             .iter()
             .find(|attempt| attempt.attempt_number == plan.best_attempt)
             .ok_or_else(|| format!("Disk {:03} selected attempt disappeared", plan.disk_number))?;
+        attempt.require_legacy_sector_binding()?;
         stage(&format!(
             "1/5: Disk {:03}: deriving mirrored FAT evidence from saved image...",
             plan.disk_number

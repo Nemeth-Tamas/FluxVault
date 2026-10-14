@@ -44,6 +44,7 @@ The saved-batch review records results; pilot/runbook documents also retain earl
 - [All 17 damaged/ambiguous file records](testing/DAMAGED_BATCH_CASES.md)
 - [Disk 133's exact USB/GW disagreement scope](testing/DISK_133_REVIEW.md)
 - [Comparison with the original script/DMDE archive](testing/BASELINE_COMPARISON.md)
+- [Fresh same-evidence 136-image extraction replay](testing/SAME_EVIDENCE_REPLAY.md)
 - [009/017/020/058 historical candidate and stream review](testing/LEGACY_CASE_REVIEW.md)
 - [Single-GW readiness gates](testing/SINGLE_GW_READINESS.md)
 - [Greaseweazle setup and recorded hardware validation](testing/GREASEWEAZLE_PREFLIGHT.md)

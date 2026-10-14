@@ -140,10 +140,16 @@ READING THIS FILE ON WINDOWS
 REFERENCE
 
 LEGACY SCRIPT ARCHIVE IMPORT
-    fv project import --source ZIP --destination NEW_FOLDER [--plan] [--json]
+    fv project import --source ZIP --destination NEW_FOLDER [--plan] [--images-only] [--json]
 
     Optional migration: original images/logs/recovered folders/conversions and
     reports copied into a fresh project without rescanning or invoking tools.
+      --images-only copies Images/Logs only: old recovered/converted/report
+      payloads are excluded. Use this for a fresh extraction replay, not to score
+      preserved DMDE output as new recovery. Optional index claims stay historical
+      metadata in the import JSON. CRC/hash verification covers selected inputs;
+      skipped reference payloads are not certified. benchmark compare rechecks
+      these inputs against ZIP bytes, even if a receipt hash was edited.
     Parent must exist; destination must not. Do not init it first or nest it in
     an existing project. Preview creates nothing, not full payload verification.
     Apply verifies ZIP CRCs, synced member copies and source/copied SHA-256

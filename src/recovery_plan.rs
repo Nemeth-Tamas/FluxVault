@@ -118,6 +118,10 @@ fn plan_disk(
             );
             return Ok(plan);
         }
+        if let Err(error) = attempt.require_legacy_sector_binding() {
+            plan.reason = format!("Attempt #{:03}: {error}", attempt.attempt_number);
+            return Ok(plan);
+        }
         if images.insert(attempt.attempt_number, bytes).is_some() {
             plan.reason = format!("Duplicate attempt number #{:03}", attempt.attempt_number);
             return Ok(plan);

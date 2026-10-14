@@ -150,6 +150,20 @@ pub(crate) fn run_audit(
         }
         record.image_sha256 = actual_image_hash.clone();
         record.image_hash_verified = !attempt.sha256.is_empty();
+        if attempt.legacy_image
+            && let Some(claimed) = attempt
+                .parsed_log
+                .as_ref()
+                .and_then(|log| log.sha256.as_ref())
+            && !claimed.eq_ignore_ascii_case(&actual_image_hash)
+        {
+            append_issue(
+                &mut record.issue,
+                &format!(
+                    "Legacy acquisition-log SHA-256 claim disagrees with saved image: claimed {claimed}, measured {actual_image_hash}. Snapshot identity is verified; historical sector/read completeness is not certified."
+                ),
+            );
+        }
         let presence = extraction::inspect_extraction_presence(
             &project.extracted_dir(),
             summary.disk_number,

@@ -122,7 +122,7 @@ pub(crate) fn select_managed(
             if let Some(binding) = &binding {
                 let selected_image =
                     crate::recovery_plan::resolve_image_path(&images, &binding.image_file)?;
-                if marker.source_sha256 != binding.sha256
+                if !marker.source_sha256.eq_ignore_ascii_case(&binding.sha256)
                     || image.canonicalize().map_err(|e| e.to_string())?
                         != selected_image.canonicalize().map_err(|e| e.to_string())?
                 {
@@ -482,6 +482,40 @@ mod tests {
                 .unwrap_err()
                 .contains("source image changed")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uppercase_catalogue_hash_binds_the_same_bytes_but_not_changed_source() {
+        let root = fixture();
+        fs::write(root.join("Images/001.img"), [0x42; 512]).unwrap();
+        fs::write(root.join("project.json"), b"{}").unwrap(); // Selection checks catalogue presence only.
+        let actual = sha256_file(&root.join("Images/001.img")).unwrap();
+        let metadata = serde_json::json!({
+            "fluxvault_version":"test","status":"OK","disk_number":1,"attempt_number":1,
+            "source_backend":"synthetic-test","source_device":"none","image_file":"001.img","log_file":"",
+            "timestamp_unix_ms":1,"geometry":{"cylinders":1,"heads":1,"sectors_per_track":1,"bytes_per_sector":512,"total_bytes":512,"format_guess":"test"},
+            "sector_retries":0,"total_sectors":1,"bytes_written":512,"retry_recovered_sectors":0,"bad_sector_count":0,"bad_sectors":[],"sha256":actual.to_ascii_uppercase()
+        });
+        fs::write(
+            root.join("Images/001_attempt_001.json"),
+            metadata.to_string(),
+        )
+        .unwrap();
+        let output = generation(
+            &root,
+            "attempt_001",
+            &[("source.txt", b"verified payload fixture")],
+        );
+        assert_eq!(
+            select_managed(&root.join("Extracted/001"), Some(1))
+                .unwrap()
+                .unwrap()
+                .directory,
+            output
+        );
+        fs::write(root.join("Images/001.img"), [0x43; 512]).unwrap();
+        assert!(select_managed(&root.join("Extracted/001"), Some(1)).is_err());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

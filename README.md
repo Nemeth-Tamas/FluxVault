@@ -12,6 +12,8 @@ Developing FluxVault? `pwsh -NoProfile -File .\scripts\check.ps1` is the fail-fa
 
 Latest hardware checks cover protected clean HD, automatic DD and damaged reads with background processing/lossless packing. Helper tools cannot consume operator input; read failures display their reason before cleanup finishes. [Measured cases](docs/testing/HARDWARE_OVERLAP_20261013.md).
 
+For a fresh recovery comparison with an old script archive, `fv project import --source ZIP --destination NEW_FOLDER --images-only` copies only images/logs, not old recovered files. Legacy hash disagreements stay explicit; comparison rechecks inputs against ZIP bytes. [Same-evidence replay](docs/testing/SAME_EVIDENCE_REPLAY.md).
+
 Current checklist: **464/479 TODOs (96.9%), 15 open**. [Latest missing-boot/layout checkpoint](docs/recovery/LAYOUT_COMPARISON.md), [current progress](docs/development/PROGRESS.md) and [the measured 136-disk review](docs/testing/BATCH_136_REVIEW.md) separate engineering completion, historical file differences and remaining recovery work. [Saved-batch tools](docs/guides/SAVED_BATCH_TOOLS.md) include completion scenarios, independent saved-flux CRC checks, legacy aggregate/candidate/stream comparisons, operator-action accounting and expert GW settings. Managed-file traces cover recovered files, conversions and forensic editable editions. The normal production command is unchanged. Checklist coverage is not a customer-file recovery rate; earlier checkpoints remain historical.
 
 ## Start here
