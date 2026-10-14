@@ -26,6 +26,7 @@ Command examples use the repository or an acquisition project as their working d
 ## Recovery and evidence
 
 - [Damaged filesystems](recovery/DAMAGED_FILESYSTEM_RECOVERY.md)
+- [Snapshot byte candidates when acquisition maps are unavailable](recovery/SNAPSHOT_CANDIDATES.md)
 - [Carving and embedded-file salvage](recovery/CARVING_RECOVERY.md)
 - [Deleted candidates and readable fragments](recovery/DELETED_AND_FRAGMENT_RECOVERY.md)
 - [Deeper directory, fragmented-file and Word/RTF text recovery](recovery/DEEP_RECOVERY.md)

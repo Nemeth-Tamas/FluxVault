@@ -56,6 +56,7 @@ pub(super) fn applies(args: &[String]) -> bool {
                     | "extract"
                     | "documents"
                     | "backup"
+                    | "snapshot"
             ))
         || (a == "storage" && matches!(b, "pack" | "prune"))
         || (a == "greaseweazle"

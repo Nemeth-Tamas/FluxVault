@@ -75,8 +75,21 @@ pub struct Comparison {
     pub excluded_reference_files: BTreeMap<String, usize>,
     pub warnings: Vec<String>,
     pub disks: Vec<DiskComparison>,
+    pub snapshot_candidates: Vec<SnapshotComparison>,
     pub physical_media_access: bool,
     pub customer_delivery_certified: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SnapshotComparison {
+    pub disk: u32,
+    pub source_sha256: String,
+    pub candidate_payloads: usize,
+    pub additional_exact_reference_matches: usize,
+    pub current_only_candidates: usize,
+    pub physical_readability: &'static str,
+    pub normal_payload_totals_changed: bool,
+    pub files: Vec<FileComparison>,
 }
 
 fn workstation(path: &Path) -> Result<(), String> {
@@ -431,6 +444,8 @@ fn compare(
     let mut selected = BTreeSet::new();
     let mut images = BTreeMap::new();
     let mut legacy_claims = BTreeMap::new();
+    let mut snapshot_candidates = BTreeMap::new();
+    let mut snapshot_proofs = BTreeMap::new();
     let mut current = BTreeMap::new();
     let mut bound = BTreeMap::new();
     let mut warnings = vec!["Content matches are within each numbered disk, with one-to-one multiplicity. Changed source-image bytes prevent a same-evidence yield claim. Renamed identical content does not validate original names. Empty/temporary files and tool/OS reports are separate from payload totals; matching source payloads is not document-render or customer-delivery certification.".into()];
@@ -453,6 +468,33 @@ fn compare(
             return Err("Current comparison image changed from acquisition binding".into());
         }
         images.insert(disk.disk_number, hash.clone());
+        if let Some((report, directory)) = crate::snapshot_recovery::verified_existing(
+            &project.images_dir(),
+            &project.recovery_dir(),
+            disk.disk_number,
+            attempt,
+        )? {
+            let candidates = report
+                .files
+                .iter()
+                .filter(|f| {
+                    category(
+                        f.observed_name.as_deref().unwrap_or(&f.path),
+                        f.bytes as u64,
+                    ) == "payload"
+                })
+                .map(|f| {
+                    payload(
+                        &f.path,
+                        f.bytes as u64,
+                        f.sha256.clone(),
+                        "unverified_snapshot_candidate",
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            snapshot_candidates.insert(disk.disk_number, candidates);
+            snapshot_proofs.insert(disk.disk_number, (attempt.clone(), report, directory));
+        }
         if attempt.legacy_image
             && let Some(claim) = attempt
                 .parsed_log
@@ -661,6 +703,17 @@ fn compare(
             .push(payload(&relative, bytes, hash, origin)?);
     }
     drop(archive);
+    for (disk, (attempt, report, directory)) in &snapshot_proofs {
+        let current = crate::snapshot_recovery::verified_existing(
+            &project.images_dir(),
+            &project.recovery_dir(),
+            *disk,
+            attempt,
+        )?;
+        if current.as_ref() != Some(&(report.clone(), directory.clone())) {
+            return Err("Snapshot candidates changed during comparison; report refused".into());
+        }
+    }
     if crate::legacy_import::verify_replay_inputs(project, &baseline, &archive_hash)?
         != replay_input_binding
     {
@@ -706,6 +759,7 @@ fn compare(
         excluded_reference_files: excluded,
         warnings: vec![],
         disks: vec![],
+        snapshot_candidates: vec![],
         physical_media_access: false,
         customer_delivery_certified: false,
     };
@@ -717,6 +771,43 @@ fn compare(
             (a.category != "payload", &a.path).cmp(&(b.category != "payload", &b.path))
         });
         let files = matches(old, current.remove(&disk).unwrap_or_default());
+        if let Some(candidates) = snapshot_candidates.remove(&disk) {
+            let candidate_count = candidates.len();
+            let unfulfilled = files
+                .iter()
+                .filter(|f| f.current.is_none())
+                .filter_map(|f| f.reference.as_ref())
+                .filter(|r| r.category == "payload")
+                .cloned()
+                .collect();
+            let comparisons = matches(unfulfilled, candidates);
+            let matched = comparisons
+                .iter()
+                .filter(|f| {
+                    f.reference
+                        .as_ref()
+                        .zip(f.current.as_ref())
+                        .is_some_and(|(r, c)| r.sha256 == c.sha256 && r.bytes == c.bytes)
+                })
+                .count();
+            let extra = comparisons
+                .iter()
+                .filter(|f| f.reference.is_none() && f.current.is_some())
+                .count();
+            let proof = snapshot_proofs
+                .get(&disk)
+                .ok_or("Snapshot proof disappeared")?;
+            result.snapshot_candidates.push(SnapshotComparison {
+                disk,
+                source_sha256: proof.1.source_sha256.clone(),
+                candidate_payloads: candidate_count,
+                additional_exact_reference_matches: matched,
+                current_only_candidates: extra,
+                physical_readability: "unknown",
+                normal_payload_totals_changed: false,
+                files: comparisons,
+            });
+        }
         let legacy_claim = legacy_claims.remove(&disk);
         let mut record = DiskComparison {
             disk,

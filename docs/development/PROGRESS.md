@@ -1,5 +1,9 @@
 # FluxVault progress — 2026-10-14, 464/479
 
+Latest recovery-yield slice: automatic saved-only snapshot candidates cover legacy inputs with missing/contradictory sector evidence, with immutable reports, independent source/extent replay, unknown physical readability, exact file trace and separate benchmark accounting. Actual same-input cohort: **112 additional exact historical matches**, including all **96 on 066/074**. Ordinary 882/1,159 matches stay unchanged; 994/1,159 have matching bytes when separately labelled candidates are included (85.8%, not verified whole-file recovery or full production parity). **796 routine tests / 33 opt-ins**, full gate, release build and saved release preview/trace pass. Checklist remains **464/479**; the Windows historical crash stays open despite fixture hardening and successful reruns. [Contracts, measured cases and limits](../recovery/SNAPSHOT_CANDIDATES.md).
+
+## Previous restart-safety checkpoint
+
 Latest restart-safety slice: prepared raw capture/decode publication now resumes offline in the same slot, even after physical stage-budget expiry. Atomic synced receipt updates and non-replacing publication preserve existing evidence; six new routine tests exercise completed/unsealed cuts, changed sources/settings, conflicts and no-probe/no-read recovery. USB/flux planning/comparison also refuse contradictory legacy sector maps. **782 routine tests / 33 opt-ins**, full gate and release build pass. Checklist remains **464/479**; universal crash/power-loss and every-boundary acceptance stay open. [Contracts and regression evidence](../testing/CAPTURE_PUBLICATION_RESTART.md).
 
 ## Same-evidence replay checkpoint

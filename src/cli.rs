@@ -177,6 +177,8 @@ Usage:
   fluxvault recovery extract N [--include-deleted] [--project PATH]
                                     Recover intact/signature files offline; deleted opt-in stays forensic-only
   fluxvault recovery documents N [--project PATH] [--language hu|en]
+  fluxvault recovery snapshot N [--project PATH] [--plan] [--json]
+                                    Separate unverified byte candidates; no acquisition map invented
                                     Native recovery plus forensic Word/RTF text, HTML and editable copies
   fluxvault recovery import N --source DIR --dmde-log FILE
                                     Import external DMDE recovery without overwriting it
@@ -209,7 +211,7 @@ Usage:
 Options:
   --usb                             scan: durable USB feeding + background files, default Windows A:
   --double                         scan: opt-in simultaneous USB/GW pilot; exact labels
-  --plan                           scan --double / project import: offline preview, no writes
+  --plan                           scan --double / project import / recovery snapshot: offline preview, no writes
   --json                            Output machine-readable JSON
   --project PATH                    Use a specific project instead of searching upward
   --destination PATH                Output folder outside the project
@@ -950,13 +952,15 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     if positional.first().is_some_and(|s| s == "start") {
         positional[0] = "scan".into();
     }
-    if (usb_only || double || dual_plan) && positional != ["scan"] {
+    let snapshot_command =
+        positional.len() == 3 && positional[0] == "recovery" && positional[1] == "snapshot";
+    if (usb_only || double || (dual_plan && !snapshot_command)) && positional != ["scan"] {
         return Err("--usb, --double and --plan are only valid with plain scan".into());
     }
     if usb_only && double {
         return Err("Choose --usb or --double, not both".into());
     }
-    if dual_plan && !double {
+    if dual_plan && !double && !snapshot_command {
         return Err("--plan currently requires scan --double".into());
     }
     if double {
@@ -1222,7 +1226,9 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             && positional
                 .get(1)
                 .is_some_and(|s| matches!(s.as_str(), "next" | "select" | "prefer")));
-    let _workstation_owner = if workstation_write {
+    let _workstation_owner = if workstation_write
+        && !(dual_plan && positional.get(1).is_some_and(|s| s == "snapshot"))
+    {
         Some(crate::project_work::reserve(&resolve_project_root(
             cwd,
             project_override.as_deref(),
@@ -1507,13 +1513,18 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 Ok(json!({"comparison":result,"summary":summary,"files_csv":files_csv,"physical_media_access":false}).to_string())
             } else {
                 Ok(format!(
-                    "Baseline payload comparison: {} acquired disks; {} reference payloads.\nIdentical bytes: {}; changed: {}; missing: {}; current-only: {}.\nConfirmed deleted reference files: {}. Unknown/carved/ambiguous content remains in scope. This flag controls comparison, not recovery.\nUnscanned reference disks are excluded. Image differences, temporary/empty files and recovery-tool reports are recorded separately; this is not delivery certification.\nSummary: {}\nFile comparison: {}",
+                    "Baseline payload comparison: {} acquired disks; {} reference payloads.\nIdentical bytes: {}; changed: {}; missing: {}; current-only: {}.\nSeparate unverified snapshot candidates: {} additional exact reference matches; physical readability UNKNOWN, normal totals unchanged.\nConfirmed deleted reference files: {}. Unknown/carved/ambiguous content remains in scope. This flag controls comparison, not recovery.\nUnscanned reference disks are excluded. Image differences, temporary/empty files and recovery-tool reports are recorded separately; this is not delivery certification.\nSummary: {}\nFile comparison: {}",
                     result.selected_disks.len(),
                     result.reference_payloads,
                     result.matched_payloads,
                     result.changed_payloads,
                     result.missing_payloads,
                     result.current_only_payloads,
+                    result
+                        .snapshot_candidates
+                        .iter()
+                        .map(|c| c.additional_exact_reference_matches)
+                        .sum::<usize>(),
                     if result.include_deleted {
                         "included by explicit opt-in"
                     } else {
@@ -2497,6 +2508,70 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                     .collect::<Vec<_>>()
                     .join("\n"))
             }
+        }
+        Some("recovery") if positional.len() == 3 && positional[1] == "snapshot" => {
+            let mut i = 0;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--project" => {
+                        i += 1;
+                    }
+                    "--json" | "--plan" | "recovery" | "snapshot" => {}
+                    number if number == positional[2] => {}
+                    _ => {
+                        return Err(
+                            "recovery snapshot accepts only N, --project FOLDER, --plan and --json"
+                                .into(),
+                        );
+                    }
+                }
+                i += 1;
+            }
+            let disk = positional[2]
+                .parse::<u32>()
+                .ok()
+                .filter(|n| (1..=4096).contains(n))
+                .ok_or("Snapshot disk must be 1-4096")?;
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let project = ProjectState::open_without_session(root)?;
+            let statistics = imaging::load_project_statistics(&project.images_dir())?;
+            let selected = statistics
+                .disks
+                .iter()
+                .find(|d| d.disk_number == disk)
+                .ok_or("Snapshot disk has no saved image")?;
+            let attempts = imaging::load_attempts_for_disk(&project.images_dir(), disk)?;
+            let attempt = attempts
+                .iter()
+                .find(|a| a.attempt_number == selected.best_attempt_number)
+                .ok_or("Selected snapshot disappeared")?;
+            let result = crate::snapshot_recovery::recover(
+                &project.images_dir(),
+                &project.recovery_dir(),
+                disk,
+                attempt,
+                dual_plan,
+                &|s| eprintln!("{s}"),
+            )?;
+            return Ok(CliResponse {
+                exit_code: if dual_plan { 0 } else { 3 },
+                output: if json_output {
+                    serde_json::to_string(&result).map_err(|e| e.to_string())?
+                } else {
+                    format!(
+                        "SNAPSHOT {} / {disk:03} / {} byte candidates / physical readability UNKNOWN\nFolder: {}\nReport: {}\nOriginal images and ordinary extraction/conversion unchanged. {}",
+                        if dual_plan {
+                            "PLAN (no writes)"
+                        } else {
+                            "SAVED WITH ATTENTION"
+                        },
+                        result.report.files.len(),
+                        result.output_directory.display(),
+                        result.report_path.display(),
+                        result.report.warning
+                    )
+                },
+            });
         }
         Some("recovery")
             if destination.is_none()

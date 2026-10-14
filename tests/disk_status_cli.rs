@@ -13,16 +13,21 @@ use std::{
 };
 
 struct Fixture(ProjectState);
+static FIXTURE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "fv-disk-status-{}-{}",
+            "fv-disk-status-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            FIXTURE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
+        // Exclusive admission prevents two parallel fixtures from sharing an
+        // idempotently created project, even if clock timestamps coincide.
+        fs::create_dir(&root).unwrap();
         Self(ProjectState::create_without_session(root).unwrap())
     }
     fn image(&self) {
@@ -48,7 +53,15 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        fs::remove_dir_all(self.0.root()).unwrap();
+        if let Err(error) = fs::remove_dir_all(self.0.root()) {
+            if std::thread::panicking() {
+                eprintln!(
+                    "Disposable fixture cleanup failed while preserving the original panic: {error}"
+                );
+            } else {
+                panic!("Disposable fixture cleanup failed: {error}");
+            }
+        }
     }
 }
 

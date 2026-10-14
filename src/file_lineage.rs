@@ -172,6 +172,13 @@ fn trace(project: &ProjectState, disk: u32, rel: &Path, depth: usize) -> Result<
         .components()
         .map(|c| c.as_os_str().to_string_lossy().to_string())
         .collect::<Vec<_>>();
+    if parts.len() >= 6 && parts[0] == "Recovery" && parts[1] == "SnapshotCandidates" {
+        if parts[2] != format!("{disk:03}") {
+            return Err("Snapshot lineage path belongs to another disk".into());
+        }
+        confined(project, rel, false)?;
+        return crate::snapshot_recovery::trace_candidate(project, disk, rel);
+    }
     if parts.len() < 3
         || parts.len() > 64
         || !matches!(parts[0].as_str(), "Extracted" | "Converted" | "Recovery")

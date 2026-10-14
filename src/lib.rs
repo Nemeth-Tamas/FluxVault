@@ -74,4 +74,5 @@ mod saved_acceptance_tests;
 mod scp_diagnostics;
 pub mod sector_inspection;
 pub mod sector_recovery;
+pub mod snapshot_recovery;
 mod usb_passes;

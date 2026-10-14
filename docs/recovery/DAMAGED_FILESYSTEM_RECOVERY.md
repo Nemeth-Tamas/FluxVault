@@ -4,6 +4,8 @@ Native recovery gets past some missing boot sectors and automatically salvages v
 
 ## Use it
 
+Missing or contradictory **legacy acquisition metadata** now has a separate automatic [snapshot-candidate path](SNAPSHOT_CANDIDATES.md). It can recover observed file bytes without inventing physical readability, and never increases ordinary verified extraction/conversion totals. Keep this distinction from the acquisition-map-supported native recovery below.
+
 Normal `fv scan` / `fv process` already tries native recovery for partial acquisitions and failed/empty 7-Zip extraction. No new policy or routine operator step is needed.
 
 To explicitly reprocess a saved disk, including one with an older native extraction:

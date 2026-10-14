@@ -1,5 +1,7 @@
 # FluxVault
 
+Saved legacy images with missing/contradictory acquisition maps now yield separate, hash/extent-bound [snapshot candidates](docs/recovery/SNAPSHOT_CANDIDATES.md) automatically during extraction. They remain forensic attention, not ordinary verified files or automatic conversions.
+
 **Read floppies. Keep the evidence. Recover files. Prepare a checked customer archive.**
 
 FluxVault is a Windows-first command-line floppy archiving and recovery tool. The everyday workflow is small: insert a protected, numbered floppy, confirm it, wait for the swap banner, and repeat. Saved-file recovery, conversion, reports and lossless capture packing run automatically in new scans.

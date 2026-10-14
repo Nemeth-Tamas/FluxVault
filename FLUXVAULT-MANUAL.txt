@@ -1005,6 +1005,17 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     media or external tools are accessed. Commands, evidence and limitations
     (docs/recovery/DELETED_AND_FRAGMENT_RECOVERY.md).
 
+    recovery snapshot N [--plan] [--project PATH] [--json]
+    Preview or preserve byte candidates from a completed legacy saved image
+    whose acquisition map is absent or contradictory. --plan writes nothing;
+    saving returns attention exit 3. extract all invokes this fallback
+    automatically. Files/reports live under Recovery/SnapshotCandidates,
+    never replace originals, and do not enter ordinary extraction counts or
+    conversion. Physical readability remains UNKNOWN; no sector map is
+    invented. recovery trace N EXACT_PATH verifies candidate source extents.
+    benchmark compare reports their additional exact matches separately.
+    Read docs/recovery/SNAPSHOT_CANDIDATES.md before using candidate files.
+
     Saved-image validation on 2026-10-06 recovered 22 forensic files /
     1,208,710 bytes from WinWord 1, preserved the original image SHA-256, and
     retained partial audit status for unreadable LBA 24. Generation 2 validated

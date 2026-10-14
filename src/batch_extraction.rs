@@ -550,14 +550,36 @@ fn native_recovery(
     attempt: &AttemptSummary,
     stage: &impl Fn(&str),
 ) -> Result<fat12_recovery::RecoveryResult, String> {
-    fat12_recovery::recover_attempt(
+    let native = fat12_recovery::recover_attempt(
         &request.images_directory,
         &request.extracted_root,
         &request.recovery_root,
         disk,
         attempt,
         stage,
-    )
+    );
+    match native {
+        Err(error) if crate::snapshot_recovery::eligible(attempt) => {
+            match crate::snapshot_recovery::recover(
+                &request.images_directory,
+                &request.recovery_root,
+                disk,
+                attempt,
+                false,
+                stage,
+            ) {
+                Ok(snapshot) => Err(format!(
+                    "{error}; {} unverified snapshot byte candidates saved separately at {}; physical readability UNKNOWN, not managed extraction",
+                    snapshot.report.files.len(),
+                    snapshot.output_directory.display()
+                )),
+                Err(candidate_error) => Err(format!(
+                    "{error}; snapshot candidate investigation refused: {candidate_error}"
+                )),
+            }
+        }
+        result => result,
+    }
 }
 
 fn try_native_row(

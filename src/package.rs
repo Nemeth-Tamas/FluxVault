@@ -446,6 +446,7 @@ fn should_exclude(path: &Path) -> bool {
                 || name.starts_with(".tmp-word-text-")
                 || name.starts_with(".tmp-rtf-text-")
                 || name.starts_with(".tmp-native-")
+                || name.starts_with(".tmp-snapshot-")
         }
         _ => false,
     }) {
@@ -669,6 +670,20 @@ fn manifest_text(rows: &[ManifestRow]) -> String {
 }
 
 fn readme_in_language(
+    language: crate::final_report::Language,
+    project_name: &str,
+    file_count: usize,
+    total_bytes: u64,
+) -> String {
+    let mut text = readme_base_in_language(language, project_name, file_count, total_bytes);
+    text.push_str(match language {
+        crate::final_report::Language::Hungarian => "\r\nA Recovery/SnapshotCandidates mappa kizárólag korábban mentett lemezkép-bájtokból származó fájljelölteket tartalmazhat. A beolvasási szektortérkép hiányzik vagy ellentmondásos; a fizikai olvashatóság ISMERETLEN. Ezek nem igazolt teljes ügyfélfájlok, nem módosítják az eredeti lemezképet vagy a szokásos konverziót. A SnapshotCandidates.json rögzíti a forráslenyomatot, bájttartományokat és korlátokat. Használat előtt ellenőrizze a jelölteket.\r\n",
+        crate::final_report::Language::English => "\r\nRecovery/SnapshotCandidates may contain files derived only from observed saved-image bytes. The acquisition sector map is absent or contradictory; physical readability is UNKNOWN. These are not certified complete customer files, do not change original images and never enter ordinary conversion. SnapshotCandidates.json records source hashes, byte extents and limits. Review candidates before use.\r\n",
+    });
+    text
+}
+
+fn readme_base_in_language(
     language: crate::final_report::Language,
     project_name: &str,
     file_count: usize,
@@ -1152,5 +1167,26 @@ mod tests {
             "Recovery/001/attempt_001_fragments_v1/fragments.json"
         )));
         assert!(readme_text("test", 1, 1).contains("NOT complete/live customer documents"));
+    }
+
+    #[test]
+    fn snapshot_candidate_readme_language_and_incomplete_staging_are_explicit() {
+        assert!(
+            readme_in_language(crate::final_report::Language::Hungarian, "test", 1, 1)
+                .contains("fizikai olvashatóság ISMERETLEN")
+        );
+        assert!(
+            readme_in_language(crate::final_report::Language::English, "test", 1, 1)
+                .contains("physical readability is UNKNOWN")
+        );
+        assert!(should_exclude(Path::new(
+            "Recovery/SnapshotCandidates/001/.tmp-snapshot-1-2/Files/0001/candidate.doc"
+        )));
+        assert!(should_exclude(Path::new(
+            "Recovery/SnapshotCandidates/001/.fluxvault-snapshot.lock"
+        )));
+        assert!(!should_exclude(Path::new(
+            "Recovery/SnapshotCandidates/001/attempt_000_v1_hash/SnapshotCandidates.json"
+        )));
     }
 }
