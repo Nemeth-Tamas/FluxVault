@@ -677,8 +677,8 @@ fn readme_in_language(
 ) -> String {
     let mut text = readme_base_in_language(language, project_name, file_count, total_bytes);
     text.push_str(match language {
-        crate::final_report::Language::Hungarian => "\r\nA Recovery/SnapshotCandidates mappa kizárólag korábban mentett lemezkép-bájtokból származó fájljelölteket tartalmazhat. A beolvasási szektortérkép hiányzik vagy ellentmondásos; a fizikai olvashatóság ISMERETLEN. Ezek nem igazolt teljes ügyfélfájlok, nem módosítják az eredeti lemezképet vagy a szokásos konverziót. A SnapshotCandidates.json rögzíti a forráslenyomatot, bájttartományokat és korlátokat. Használat előtt ellenőrizze a jelölteket.\r\n",
-        crate::final_report::Language::English => "\r\nRecovery/SnapshotCandidates may contain files derived only from observed saved-image bytes. The acquisition sector map is absent or contradictory; physical readability is UNKNOWN. These are not certified complete customer files, do not change original images and never enter ordinary conversion. SnapshotCandidates.json records source hashes, byte extents and limits. Review candidates before use.\r\n",
+        crate::final_report::Language::Hungarian => "\r\nA Recovery/SnapshotCandidates mappa kizárólag korábban mentett lemezkép-bájtokból származó fájljelölteket tartalmazhat. A beolvasási szektortérkép hiányozhat vagy ellentmondásos lehet; más jelöltek ismert olvashatatlan tartományok mentett helykitöltő/hibás bájtjait is tartalmazzák. A fizikai tartalom teljessége ISMERETLEN. Ezek nem igazolt teljes ügyfélfájlok, nem módosítják az eredeti lemezképet vagy a szokásos konverziót. A SnapshotCandidates.json rögzíti a forráslenyomatot, bájttartományokat, ismert hiányokat és korlátokat. Hiányzó adatot nem találunk ki. Használat előtt ellenőrizze a jelölteket.\r\n",
+        crate::final_report::Language::English => "\r\nRecovery/SnapshotCandidates may contain files derived only from observed saved-image bytes. Acquisition maps may be absent/contradictory; other copies retain existing filler/corruption in explicitly known unreadable ranges. Complete physical content is UNKNOWN. These are not certified complete customer files, do not change original images and never enter ordinary conversion. SnapshotCandidates.json records source hashes, byte extents, known holes and limits. No missing bytes are invented. Review candidates before use.\r\n",
     });
     text
 }
@@ -1173,11 +1173,19 @@ mod tests {
     fn snapshot_candidate_readme_language_and_incomplete_staging_are_explicit() {
         assert!(
             readme_in_language(crate::final_report::Language::Hungarian, "test", 1, 1)
-                .contains("fizikai olvashatóság ISMERETLEN")
+                .contains("fizikai tartalom teljessége ISMERETLEN")
         );
         assert!(
             readme_in_language(crate::final_report::Language::English, "test", 1, 1)
-                .contains("physical readability is UNKNOWN")
+                .contains("Complete physical content is UNKNOWN")
+        );
+        assert!(
+            readme_in_language(crate::final_report::Language::Hungarian, "test", 1, 1)
+                .contains("Hiányzó adatot nem találunk ki")
+        );
+        assert!(
+            readme_in_language(crate::final_report::Language::English, "test", 1, 1)
+                .contains("explicitly known unreadable ranges")
         );
         assert!(should_exclude(Path::new(
             "Recovery/SnapshotCandidates/001/.tmp-snapshot-1-2/Files/0001/candidate.doc"

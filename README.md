@@ -1,6 +1,6 @@
 # FluxVault
 
-Saved legacy images with missing/contradictory acquisition maps now yield separate, hash/extent-bound [snapshot candidates](docs/recovery/SNAPSHOT_CANDIDATES.md) automatically during extraction. They remain forensic attention, not ordinary verified files or automatic conversions.
+Saved legacy images now yield separate, hash/extent-bound [snapshot candidates and damaged-file copies](docs/recovery/SNAPSHOT_CANDIDATES.md) automatically during extraction. Missing/contradictory maps stay unknown; known data holes retain their original offsets and saved filler bytes, with exact warnings. These remain forensic attention, not ordinary verified files or automatic conversions.
 
 **Read floppies. Keep the evidence. Recover files. Prepare a checked customer archive.**
 

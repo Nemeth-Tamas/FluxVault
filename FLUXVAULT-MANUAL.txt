@@ -1007,12 +1007,19 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
 
     recovery snapshot N [--plan] [--project PATH] [--json]
     Preview or preserve byte candidates from a completed legacy saved image
-    whose acquisition map is absent or contradictory. --plan writes nothing;
+    whose acquisition map is absent/contradictory or records known data holes.
+    Known-hole copies require complete unambiguous allocation and preserve
+    existing saved filler/corruption at exact logical offsets; no missing
+    bytes are guessed or filled. Metadata holes/unmapped tails/shared ownership
+    refuse full-length copies. This command remains legacy-image-only.
+    --plan writes nothing;
     saving returns attention exit 3. extract all invokes this fallback
     automatically. Files/reports live under Recovery/SnapshotCandidates,
     never replace originals, and do not enter ordinary extraction counts or
     conversion. Physical readability remains UNKNOWN; no sector map is
-    invented. recovery trace N EXACT_PATH verifies candidate source extents.
+    invented. V1 retains unknown maps; V2 explicitly records known bad LBAs
+    and EOF-clipped file hole ranges. Both stay outside intact-file counts.
+    recovery trace N EXACT_PATH verifies candidate source extents and holes.
     benchmark compare reports their additional exact matches separately.
     Read docs/recovery/SNAPSHOT_CANDIDATES.md before using candidate files.
 

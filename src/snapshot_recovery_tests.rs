@@ -41,6 +41,23 @@ impl Fixture {
     fn log(&self, claim: &str) {
         fs::write(self.project.logs_dir().join("001.log"),format!("BEGIN floppy=001\nGEOMETRY cylinders=80 heads=2 sectors_per_track=9 bytes_per_sector=512 total_sectors=1440 total_bytes=737280\nSHA256 {claim}\nEND status=OK bad_sectors=0 recovered_after_retry=0 track_fallbacks=0 duration_seconds=1.0\n")).unwrap();
     }
+    fn bad_log(&self, lbas: &[u64]) {
+        self.log(&self.attempt().sha256);
+        let path = self.project.logs_dir().join("001.log");
+        let text = fs::read_to_string(&path).unwrap().replace(
+            "status=OK bad_sectors=0",
+            &format!("status=PARTIAL bad_sectors={}", lbas.len()),
+        );
+        let records = lbas
+            .iter()
+            .map(|l| format!("BAD_SECTOR LBA={l}\n"))
+            .collect::<String>();
+        fs::write(
+            path,
+            text.replace("END status=", &format!("{records}END status=")),
+        )
+        .unwrap();
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -72,6 +89,177 @@ fn image() -> Vec<u8> {
     b[at + 28..at + 32].copy_from_slice(&(PAYLOAD.len() as u32).to_le_bytes());
     b[14 * 512..14 * 512 + PAYLOAD.len()].copy_from_slice(PAYLOAD);
     b
+}
+
+#[test]
+fn known_holes_copy_saved_bytes_without_filling_and_preserve_offset_provenance() {
+    let f = Fixture::new(None);
+    f.bad_log(&[14]);
+    let a = f.attempt();
+    assert_eq!(a.bad_sectors, vec![14]);
+    let source = fs::read(f.project.images_dir().join("001.bin")).unwrap();
+    let original_log = fs::read(f.project.logs_dir().join("001.log")).unwrap();
+    let r = f.recover(false).unwrap();
+    assert_eq!(r.report.engine_version, 2);
+    assert!(r.report.acquisition_mask_known);
+    assert_eq!(r.report.bad_sector_count, Some(1));
+    assert_eq!(r.report.known_bad_lbas, vec![14]);
+    assert_eq!(r.report.files.len(), 1);
+    let c = &r.report.files[0];
+    assert_eq!(c.method, "fully_mapped_damaged_snapshot_copy");
+    assert_eq!(
+        c.known_unreadable_ranges,
+        vec![Gap {
+            file_offset: 0,
+            bytes: PAYLOAD.len(),
+            source_lbas: vec![14]
+        }]
+    );
+    assert_eq!(fs::read(r.output_directory.join(&c.path)).unwrap(), PAYLOAD);
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001.bin")).unwrap(),
+        source
+    );
+    assert_eq!(
+        fs::read(f.project.logs_dir().join("001.log")).unwrap(),
+        original_log
+    );
+    assert!(!f.project.extracted_dir().join("001").exists());
+    assert!(!r.report.customer_delivery_certified);
+    assert!(f.recover(false).unwrap().reused);
+    let relative = format!(
+        "Recovery/SnapshotCandidates/001/{}/{}",
+        r.output_directory.file_name().unwrap().to_string_lossy(),
+        c.path
+    );
+    let trace = crate::file_lineage::inspect(&f.project, 1, &relative).unwrap();
+    assert_eq!(trace["file"]["acquisition_mask_known"], true);
+    assert_eq!(
+        trace["file"]["known_unreadable_ranges"][0]["bytes"],
+        PAYLOAD.len()
+    );
+    assert_eq!(trace["files_written"], 0);
+}
+
+fn set_fat(bytes: &mut [u8], cluster: usize, next: u16) {
+    for base in [512, 4 * 512] {
+        let at = base + cluster * 3 / 2;
+        let mut packed = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        packed = if cluster.is_multiple_of(2) {
+            (packed & 0xf000) | (next & 0xfff)
+        } else {
+            (packed & 0x000f) | ((next & 0xfff) << 4)
+        };
+        bytes[at..at + 2].copy_from_slice(&packed.to_le_bytes());
+    }
+}
+
+#[test]
+fn fragmented_damaged_copy_preserves_logical_order_and_eof_clipped_holes() {
+    let mut bytes = image();
+    set_fat(&mut bytes, 2, 5);
+    set_fat(&mut bytes, 5, 0xfff);
+    bytes[7 * 512 + 28..7 * 512 + 32].copy_from_slice(&1300u32.to_le_bytes());
+    bytes[14 * 512..15 * 512].fill(b'a');
+    bytes[15 * 512..16 * 512].fill(0x55);
+    bytes[20 * 512..21 * 512].fill(0xaa);
+    let f = Fixture::new(Some(bytes.clone()));
+    f.bad_log(&[15, 20]);
+    let r = f.recover(false).unwrap();
+    let c = &r.report.files[0];
+    assert_eq!(
+        c.extents,
+        vec![
+            Extent {
+                offset: 14 * 512,
+                bytes: 512
+            },
+            Extent {
+                offset: 15 * 512,
+                bytes: 512
+            },
+            Extent {
+                offset: 20 * 512,
+                bytes: 276
+            }
+        ]
+    );
+    assert_eq!(
+        c.known_unreadable_ranges,
+        vec![Gap {
+            file_offset: 512,
+            bytes: 788,
+            source_lbas: vec![15, 20]
+        }]
+    );
+    let got = fs::read(r.output_directory.join(&c.path)).unwrap();
+    assert_eq!(&got[..512], vec![b'a'; 512]);
+    assert_eq!(&got[512..1024], vec![0x55; 512]);
+    assert_eq!(&got[1024..], vec![0xaa; 276]);
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001.bin")).unwrap(),
+        bytes
+    );
+}
+
+#[test]
+fn ambiguous_ownership_metadata_holes_and_unmapped_tail_are_not_full_length_copies() {
+    for case in ["shared", "metadata", "tail"] {
+        let mut bytes = image();
+        let bad = if case == "metadata" {
+            vec![7]
+        } else {
+            vec![14]
+        };
+        if case == "shared" {
+            let entry = bytes[7 * 512..7 * 512 + 32].to_vec();
+            bytes[7 * 512 + 32..7 * 512 + 64].copy_from_slice(&entry);
+            bytes[7 * 512 + 32..7 * 512 + 43].copy_from_slice(b"OTHER   RTF");
+        } else if case == "tail" {
+            bytes[7 * 512 + 28..7 * 512 + 32].copy_from_slice(&1025u32.to_le_bytes());
+        }
+        let f = Fixture::new(Some(bytes));
+        f.bad_log(&bad);
+        let r = f.recover(true).unwrap();
+        assert!(r.report.files.is_empty(), "{case}");
+        assert!(r.report.acquisition_mask_known);
+    }
+}
+
+#[test]
+fn fabricated_hole_range_is_refused_even_with_unchanged_candidate_payload() {
+    let f = Fixture::new(None);
+    f.bad_log(&[14]);
+    let r = f.recover(false).unwrap();
+    let mut forged = r.report.clone();
+    forged.files[0].known_unreadable_ranges[0].bytes -= 1;
+    fs::write(&r.report_path, serde_json::to_vec(&forged).unwrap()).unwrap();
+    assert!(f.recover(false).is_err());
+    assert_eq!(
+        fs::read(r.output_directory.join(&r.report.files[0].path)).unwrap(),
+        PAYLOAD
+    );
+}
+
+#[test]
+fn original_v1_report_serialization_and_generation_remain_replay_compatible() {
+    let f = Fixture::new(None);
+    let r = f.recover(false).unwrap();
+    let value = serde_json::to_value(&r.report).unwrap();
+    assert!(value.get("known_bad_lbas").is_none());
+    assert!(value["files"][0].get("known_unreadable_ranges").is_none());
+    assert_eq!(r.report.engine_version, 1);
+    assert!(
+        verified_existing(
+            &f.project.images_dir(),
+            &f.project.recovery_dir(),
+            1,
+            &f.attempt()
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(f.recover(false).unwrap().reused);
 }
 
 #[test]

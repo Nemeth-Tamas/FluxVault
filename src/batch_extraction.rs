@@ -559,6 +559,25 @@ fn native_recovery(
         stage,
     );
     match native {
+        Ok(result) if crate::snapshot_recovery::eligible(&request.images_directory, attempt) => {
+            match crate::snapshot_recovery::recover(
+                &request.images_directory,
+                &request.recovery_root,
+                disk,
+                attempt,
+                false,
+                stage,
+            ) {
+                Ok(copy) => stage(&format!(
+                    "Disk {disk:03}: {} separate damaged snapshot copies; known holes retained, normal extraction counts unchanged",
+                    copy.report.files.len()
+                )),
+                Err(error) => stage(&format!(
+                    "Disk {disk:03}: separate snapshot copy refused: {error}"
+                )),
+            }
+            Ok(result)
+        }
         Err(error) if crate::snapshot_recovery::eligible(&request.images_directory, attempt) => {
             match crate::snapshot_recovery::recover(
                 &request.images_directory,

@@ -223,3 +223,124 @@ fn automatic_fixture(overclaimed_extent: bool) {
     }
     assert!(!p.logs_dir().join("external-tools.jsonl").exists());
 }
+
+#[test]
+fn damaged_snapshot_is_automatic_but_matches_only_in_separate_noncertified_accounting() {
+    damaged_snapshot_fixture(false);
+}
+
+#[test]
+fn damaged_temporary_file_is_not_counted_as_a_payload_or_known_hole_payload_candidate() {
+    damaged_snapshot_fixture(true);
+}
+
+fn damaged_snapshot_fixture(excluded: bool) {
+    let f = Fixture::new();
+    let p = f.project();
+    let mut bytes = image();
+    if excluded {
+        bytes[19 * 512..19 * 512 + 11].copy_from_slice(b"NOTE    TMP");
+    }
+    for base in [512, 10 * 512] {
+        bytes[base + 4] |= 0xf0;
+        bytes[base + 5] = 0xff;
+    }
+    let at = 19 * 512 + 32;
+    bytes[at..at + 11].copy_from_slice(b"GOOD    TXT");
+    bytes[at + 11] = 0x20;
+    bytes[at + 26..at + 28].copy_from_slice(&3u16.to_le_bytes());
+    bytes[at + 28..at + 32].copy_from_slice(&4u32.to_le_bytes());
+    bytes[34 * 512..34 * 512 + 4].copy_from_slice(b"good");
+    fs::write(p.images_dir().join("001.bin"), &bytes).unwrap();
+    use sha2::{Digest, Sha256};
+    let log = format!(
+        "BEGIN floppy=001\nGEOMETRY cylinders=80 heads=2 sectors_per_track=18 bytes_per_sector=512 total_sectors=2880 total_bytes=1474560\nBAD_SECTOR LBA=33\nSHA256 {:x}\nEND status=PARTIAL bad_sectors=1 recovered_after_retry=0 track_fallbacks=0 duration_seconds=1.0\n",
+        Sha256::digest(&bytes)
+    );
+    fs::write(p.logs_dir().join("001.log"), &log).unwrap();
+    let events = fluxvault::batch_extraction::spawn_batch_extraction(
+        fluxvault::batch_extraction::BatchExtractionRequest {
+            seven_zip_executable: PathBuf::from(env!("CARGO_BIN_EXE_mock_gw")),
+            images_directory: p.images_dir(),
+            logs_directory: p.logs_dir(),
+            extracted_root: p.extracted_dir(),
+            recovery_root: p.recovery_dir(),
+            reports_directory: p.reports_dir(),
+            command_audit_path: p.logs_dir().join("external-tools.jsonl"),
+        },
+    );
+    let result = loop {
+        if let fluxvault::batch_extraction::BatchExtractionEvent::Finished(result) = events
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap()
+        {
+            break (*result).unwrap();
+        }
+    };
+    assert_eq!(result.extracted_disks, 1);
+    assert_eq!(result.recovery_disks, 1);
+    let saved = command(p.root(), &["recovery", "snapshot", "1", "--json"]);
+    assert_eq!(saved.status.code(), Some(3));
+    let saved = json(&saved);
+    assert_eq!(saved["reused"], true);
+    assert_eq!(saved["report"]["acquisition_mask_known"], true);
+    assert_eq!(saved["report"]["files"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        saved["report"]["files"][0]["known_unreadable_ranges"][0]["bytes"],
+        10
+    );
+    let reference = f.zip(&[
+        ("Images/001.bin", &bytes),
+        ("Logs/001.log", log.as_bytes()),
+        (
+            if excluded {
+                "Extracted/001/$Root/partial.tmp"
+            } else {
+                "Extracted/001/$Root/partial.txt"
+            },
+            b"candidate!",
+        ),
+        ("Extracted/001/$Root/good.txt", b"good"),
+    ]);
+    let compare = || {
+        command(
+            p.root(),
+            &[
+                "benchmark",
+                "compare",
+                "--baseline",
+                reference.to_str().unwrap(),
+                "--json",
+            ],
+        )
+    };
+    let output = compare();
+    assert_eq!(output.status.code(), Some(if excluded { 0 } else { 3 }));
+    let v = json(&output);
+    assert_eq!(v["comparison"]["matched_payloads"], 1);
+    assert_eq!(v["comparison"]["missing_payloads"], usize::from(!excluded));
+    assert_eq!(
+        v["comparison"]["snapshot_candidates"][0]["additional_exact_reference_matches"],
+        usize::from(!excluded)
+    );
+    assert_eq!(
+        v["comparison"]["snapshot_candidates"][0]["known_unreadable_candidates"],
+        usize::from(!excluded)
+    );
+    assert_eq!(
+        v["comparison"]["snapshot_candidates"][0]["acquisition_mask_known"],
+        true
+    );
+    assert_eq!(v["comparison"]["customer_delivery_certified"], false);
+    let report = PathBuf::from(saved["report_path"].as_str().unwrap());
+    let mut forged = saved["report"].clone();
+    forged["files"][0]["known_unreadable_ranges"][0]["bytes"] = Value::from(9);
+    fs::write(report, serde_json::to_vec(&forged).unwrap()).unwrap();
+    assert_eq!(compare().status.code(), Some(2));
+    assert_eq!(fs::read(p.images_dir().join("001.bin")).unwrap(), bytes);
+    assert_eq!(
+        fs::read_to_string(p.logs_dir().join("001.log")).unwrap(),
+        log
+    );
+    assert!(!p.logs_dir().join("external-tools.jsonl").exists());
+}

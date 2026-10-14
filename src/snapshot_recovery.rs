@@ -12,11 +12,21 @@ use std::{
 };
 
 const ENGINE: u32 = 1;
+const DAMAGED_ENGINE: u32 = 2;
 const REPORT: &str = "SnapshotCandidates.json";
 const MAX_FILES: usize = 512;
 const MAX_TOTAL: usize = fat12::MAX_IMAGE_BYTES * 2;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const WARNING: &str = "Snapshot byte candidates only: physical readable-sector evidence is unavailable or contradictory. Source extents and structural/allocation observations bind saved bytes, not successful media reads, original content, ownership or semantic completeness. No missing bytes are filled, no source/acquisition map is rewritten, and these files never enter normal managed extraction or automatic conversion. Readability and customer certification remain unknown; inspect candidates before use.";
+const DAMAGED_WARNING: &str = "Damaged snapshot copies only: completed legacy acquisition evidence identifies unavailable sectors. Fully mapped, independently coherent allocation supplies the saved bytes at their original logical offsets, INCLUDING existing filler/corruption in every reported hole. No bytes are guessed, filled, repaired or certified. Exact hole ranges and source extents are retained; copies remain separate from intact extraction and automatic conversion. Historical byte equality does not certify usable documents or original content.";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gap {
+    pub file_offset: usize,
+    pub bytes: usize,
+    pub source_lbas: Vec<u64>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,6 +45,8 @@ pub struct Candidate {
     pub validation: String,
     pub extents: Vec<Extent>,
     pub metadata_lbas: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_unreadable_ranges: Vec<Gap>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +64,8 @@ pub struct Report {
     pub acquisition_mask_known: bool,
     pub physical_readability: String,
     pub bad_sector_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_bad_lbas: Vec<u64>,
     pub filesystem_error: Option<String>,
     pub carving_limits_reached: bool,
     pub rejected_signatures: usize,
@@ -96,7 +110,10 @@ fn directory(path: &Path, parent: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 pub(crate) fn eligible(images: &Path, attempt: &AttemptSummary) -> bool {
-    attempt.legacy_image
+    candidate_engine(images, attempt).is_some()
+}
+fn candidate_engine(images: &Path, attempt: &AttemptSummary) -> Option<u32> {
+    let family = attempt.legacy_image
         && attempt.metadata_path.as_os_str().is_empty()
         && !attempt
             .parsed_log
@@ -106,11 +123,18 @@ pub(crate) fn eligible(images: &Path, attempt: &AttemptSummary) -> bool {
             .parsed_dmde_log
             .as_ref()
             .is_some_and(|l| l.status == crate::dmde_logs::DmdeLogStatus::InProgress)
-        && !attempt.status.to_ascii_uppercase().contains("PROGRESS")
-        && observed_sectors(images, attempt).is_some_and(|sectors| {
-            crate::fat12_recovery::validate_sector_evidence(attempt, sectors, &attempt.sha256)
-                .is_err()
-        })
+        && !attempt.status.to_ascii_uppercase().contains("PROGRESS");
+    if !family {
+        return None;
+    }
+    let sectors = observed_sectors(images, attempt)?;
+    if crate::fat12_recovery::validate_sector_evidence(attempt, sectors, &attempt.sha256).is_err() {
+        Some(ENGINE)
+    } else if !attempt.bad_sectors.is_empty() {
+        Some(DAMAGED_ENGINE)
+    } else {
+        None
+    }
 }
 fn observed_sectors(images: &Path, attempt: &AttemptSummary) -> Option<usize> {
     // The catalogue may repeat a historical log's geometry even when the saved
@@ -128,7 +152,7 @@ fn analyze(
     attempt: &AttemptSummary,
 ) -> Result<(Report, Vec<u8>, PathBuf), String> {
     if !(1..=4096).contains(&disk) || !eligible(images, attempt) {
-        return Err("Snapshot candidates require a completed saved legacy snapshot with unavailable/contradictory sector evidence; use ordinary native extraction for a trustworthy map".into());
+        return Err("Snapshot candidates require a completed saved legacy snapshot with unavailable/contradictory sector evidence or known data holes; use ordinary native extraction for clean trustworthy evidence".into());
     }
     sector_inspection::regular(images, true)?;
     let images = images.canonicalize().map_err(|e| e.to_string())?;
@@ -173,19 +197,33 @@ fn analyze(
             "Snapshot extent/hash changed or is unsupported; candidate publication refused".into(),
         );
     }
-    let refusal = crate::fat12_recovery::validate_sector_evidence(
+    let sector_evidence = crate::fat12_recovery::validate_sector_evidence(
         attempt,
         snapshot.len() / 512,
         &attempt.sha256,
-    )
-    .err()
-    .ok_or("Snapshot sector evidence now validates; use ordinary native extraction")?;
+    );
+    let known_mask = sector_evidence.is_ok();
+    if known_mask && attempt.bad_sectors.is_empty() {
+        return Err(
+            "Snapshot sector evidence now validates; use ordinary native extraction".into(),
+        );
+    }
+    let refusal = sector_evidence.err().unwrap_or_else(|| "Completed legacy sector map is available; whole-file recovery refused for known unreadable/conflicting data. Present snapshot bytes are copied, not restored.".into());
     // An empty exclusion vector here describes a local byte-parser experiment,
     // NOT an acquisition/readability map. Never serialize it as physical evidence.
-    let analysis = fat12::analyze(&snapshot, &[]);
+    let analysis = fat12::analyze(
+        &snapshot,
+        if known_mask {
+            &attempt.bad_sectors
+        } else {
+            &[]
+        },
+    );
     let mut files = Vec::new();
     let mut known = Vec::new();
-    if let Ok(a) = &analysis {
+    if let Ok(a) = &analysis
+        && !known_mask
+    {
         for f in &a.recovered_files {
             crate::cancellation::check()?;
             let bytes = fat12::file_bytes(&snapshot, f);
@@ -206,8 +244,60 @@ fn analyze(
                 return Err("Snapshot FAT extent binding failed".into());
             }
             files.push(Candidate { path: format!("Files/{:04}/{}", files.len()+1, safe_name(&f.path)), observed_name: Some(f.path.clone()), bytes: f.bytes,
-                sha256:f.sha256.clone(),method:"observed_snapshot_fat_chain".into(),validation:"Coherent observed FAT/name/chain extent; physical readability and original ownership unknown".into(),extents,metadata_lbas:f.metadata_lbas.clone() });
+                sha256:f.sha256.clone(),method:"observed_snapshot_fat_chain".into(),validation:"Coherent observed FAT/name/chain extent; physical readability and original ownership unknown".into(),extents,metadata_lbas:f.metadata_lbas.clone(), known_unreadable_ranges: vec![] });
             known.push(f.sha256.clone());
+        }
+    }
+    if let Ok(a) = &analysis
+        && known_mask
+    {
+        // A second local byte interpretation is an allocation/ownership
+        // witness only. It never overrides the trusted acquisition mask.
+        if let Ok(observed) = fat12::analyze(&snapshot, &[]) {
+            for parent in &a.unrecovered_files {
+                let f = &parent.record;
+                if parent.unmapped_tail_bytes != 0
+                    || parent.unreadable_ranges.is_empty()
+                    || !fat12::partial_file_safe(parent, a)
+                    || f.metadata_lbas.iter().any(|l| a.bad_lbas.contains(l))
+                    || !observed.recovered_files.iter().any(|other| {
+                        other.directory_entry_offset == f.directory_entry_offset
+                            && other.path == f.path
+                            && other.bytes == f.bytes
+                            && other.data_lbas == f.data_lbas
+                            && other.clusters == f.clusters
+                    })
+                {
+                    continue;
+                }
+                crate::cancellation::check()?;
+                let extents = f
+                    .data_lbas
+                    .iter()
+                    .enumerate()
+                    .map(|(index, lba)| Extent {
+                        offset: *lba as usize * 512,
+                        bytes: f.bytes.saturating_sub(index * 512).min(512),
+                    })
+                    .filter(|e| e.bytes > 0)
+                    .collect::<Vec<_>>();
+                let bytes = fat12::file_bytes(&snapshot, f);
+                if bytes.len() != f.bytes {
+                    return Err(
+                        "Damaged snapshot allocation does not cover declared file extent".into(),
+                    );
+                }
+                files.push(Candidate {
+                    path: format!("Files/{:04}/{}", files.len()+1, safe_name(&f.path)),
+                    observed_name: Some(f.path.clone()), bytes: f.bytes, sha256: hash(&bytes),
+                    method: "fully_mapped_damaged_snapshot_copy".into(),
+                    validation: "Coherent allocation/ownership observed twice; saved bytes include acquisition-unavailable ranges. No intact-content or format-validation assertion.".into(),
+                    extents, metadata_lbas: f.metadata_lbas.clone(),
+                    known_unreadable_ranges: parent.unreadable_ranges.iter().map(|g| Gap {
+                        file_offset: g.file_offset, bytes: g.bytes, source_lbas: g.source_lbas.clone(),
+                    }).collect(),
+                });
+            }
         }
     }
     let regions = if let Ok(a) = &analysis {
@@ -215,8 +305,12 @@ fn analyze(
     } else {
         carving::raw_readable_regions(&snapshot, &[])
     };
-    let carved = carving::analyze(&snapshot, &[], &regions, &known)?;
-    for f in &carved.files {
+    let carved = if known_mask {
+        None
+    } else {
+        Some(carving::analyze(&snapshot, &[], &regions, &known)?)
+    };
+    for f in carved.iter().flat_map(|c| &c.files) {
         let bytes = carving::file_bytes(&snapshot, f)?;
         if hash(&bytes) != f.sha256 {
             return Err("Snapshot signature extent binding failed".into());
@@ -237,6 +331,7 @@ fn analyze(
                 })
                 .collect(),
             metadata_lbas: f.metadata_lbas.clone(),
+            known_unreadable_ranges: vec![],
         });
     }
     let total = files
@@ -248,7 +343,7 @@ fn analyze(
     }
     let report = Report {
         schema_version: 1,
-        engine_version: ENGINE,
+        engine_version: if known_mask { DAMAGED_ENGINE } else { ENGINE },
         disk,
         attempt: attempt.attempt_number,
         source_image: attempt.image_file.clone(),
@@ -257,15 +352,20 @@ fn analyze(
         historical_log_sha256_claim: attempt.parsed_log.as_ref().and_then(|l| l.sha256.clone()),
         observed_log_file_sha256,
         sector_evidence_refusal: refusal,
-        acquisition_mask_known: false,
+        acquisition_mask_known: known_mask,
         physical_readability: "unknown".into(),
-        bad_sector_count: None,
+        bad_sector_count: known_mask.then_some(attempt.bad_sectors.len()),
+        known_bad_lbas: if known_mask {
+            attempt.bad_sectors.clone()
+        } else {
+            vec![]
+        },
         filesystem_error: analysis.err(),
-        carving_limits_reached: carved.limits_reached,
-        rejected_signatures: carved.rejected.len(),
+        carving_limits_reached: carved.as_ref().is_some_and(|c| c.limits_reached),
+        rejected_signatures: carved.as_ref().map_or(0, |c| c.rejected.len()),
         files,
         total_bytes: total,
-        warning: WARNING.into(),
+        warning: if known_mask { DAMAGED_WARNING } else { WARNING }.into(),
         customer_delivery_certified: false,
         default_live_extraction_changed: false,
     };
@@ -324,8 +424,9 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 fn folder(report: &Report) -> String {
     format!(
-        "attempt_{:03}_v{ENGINE}_{}_{}",
+        "attempt_{:03}_v{}_{}_{}",
         report.attempt,
+        report.engine_version,
         &report.source_sha256[..16],
         &hash(&serde_json::to_vec(report).expect("Snapshot report fields serialize"))[..12]
     )
@@ -510,8 +611,9 @@ pub(crate) fn verified_existing(
         return Err("Invalid snapshot catalogue hash".into());
     }
     let prefix = format!(
-        "attempt_{:03}_v{ENGINE}_{}_",
+        "attempt_{:03}_v{}_{}_",
         attempt.attempt_number,
+        candidate_engine(images, attempt).ok_or("Snapshot candidate mode changed")?,
         &attempt.sha256.to_ascii_lowercase()[..16]
     );
     let mut found = false;
@@ -593,8 +695,9 @@ pub(crate) fn trace_candidate(
                         serde_json::json!({"kind":"unverified_snapshot_candidate","path":relative.to_string_lossy().replace('\\',"/"),"bytes":file.bytes,"sha256":file.sha256,
                         "confidence":"hash_bound_saved_snapshot_bytes_only; physical_readability_unknown","method":file.method,"structural_validation":file.validation,
                         "source_image":{"image_file":report.source_image,"sha256":report.source_sha256,"attempt":report.attempt,"bytes":report.source_bytes},
-                        "source_extents":file.extents,"observed_metadata_lbas":file.metadata_lbas,"observed_name":file.observed_name,"acquisition_mask_known":false,
-                        "read_pass_provenance":"unknown; no sector/read/corroboration assertion","report_sha256":hash(&read(&output.join(REPORT),16*1024*1024)?),"customer_delivery_certified":false}),
+                        "source_extents":file.extents,"observed_metadata_lbas":file.metadata_lbas,"observed_name":file.observed_name,"acquisition_mask_known":report.acquisition_mask_known,
+                        "known_bad_lbas":report.known_bad_lbas,"known_unreadable_ranges":file.known_unreadable_ranges,
+                        "read_pass_provenance":if report.acquisition_mask_known { "Completed legacy sector map; holes retained, no independent media/CRC assertion" } else { "unknown; no sector/read/corroboration assertion" },"report_sha256":hash(&read(&output.join(REPORT),16*1024*1024)?),"customer_delivery_certified":false}),
                     );
                 }
             }

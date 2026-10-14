@@ -88,6 +88,8 @@ pub struct SnapshotComparison {
     pub additional_exact_reference_matches: usize,
     pub current_only_candidates: usize,
     pub physical_readability: &'static str,
+    pub acquisition_mask_known: bool,
+    pub known_unreadable_candidates: usize,
     pub normal_payload_totals_changed: bool,
     pub files: Vec<FileComparison>,
 }
@@ -804,6 +806,19 @@ fn compare(
                 additional_exact_reference_matches: matched,
                 current_only_candidates: extra,
                 physical_readability: "unknown",
+                acquisition_mask_known: proof.1.acquisition_mask_known,
+                known_unreadable_candidates: proof
+                    .1
+                    .files
+                    .iter()
+                    .filter(|f| {
+                        !f.known_unreadable_ranges.is_empty()
+                            && category(
+                                f.observed_name.as_deref().unwrap_or(&f.path),
+                                f.bytes as u64,
+                            ) == "payload"
+                    })
+                    .count(),
                 normal_payload_totals_changed: false,
                 files: comparisons,
             });
