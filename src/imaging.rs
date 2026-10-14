@@ -1125,8 +1125,14 @@ fn load_legacy_attempt(
                 .map(|log| log.status.label().to_owned())
         })
         .unwrap_or_else(|| "MISSING LOG".to_owned());
-    let attention_required =
-        claimed_hash_disagrees || !status.eq_ignore_ascii_case("OK") || !bad_sectors.is_empty();
+    let extent_matches = u64::try_from(total_sectors)
+        .ok()
+        .and_then(|sectors| sectors.checked_mul(sector_size))
+        == Some(image_metadata.len());
+    let attention_required = claimed_hash_disagrees
+        || !extent_matches
+        || !status.eq_ignore_ascii_case("OK")
+        || !bad_sectors.is_empty();
     let image_file = image_path
         .file_name()
         .and_then(|name| name.to_str())

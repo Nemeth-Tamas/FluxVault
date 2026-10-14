@@ -150,6 +150,44 @@ pub(crate) fn run_audit(
         }
         record.image_sha256 = actual_image_hash.clone();
         record.image_hash_verified = !attempt.sha256.is_empty();
+        if attempt.legacy_image {
+            // A matching hash identifies the snapshot, not the log's extent.
+            // The catalogue can retain a larger historical geometry when an
+            // image is truncated; keep this distinct from reader conflicts.
+            let sector_size = attempt
+                .parsed_log
+                .as_ref()
+                .and_then(|log| log.geometry.bytes_per_sector)
+                .or_else(|| {
+                    attempt
+                        .parsed_dmde_log
+                        .as_ref()
+                        .and_then(|log| log.sector_size)
+                })
+                .unwrap_or(512) as u64;
+            let expected = u64::try_from(attempt.total_sectors)
+                .ok()
+                .and_then(|sectors| sectors.checked_mul(sector_size));
+            match fs::metadata(&image_path) {
+                Ok(metadata) if expected != Some(metadata.len()) => append_issue(
+                    &mut record.issue,
+                    &format!(
+                        "Legacy sector extent disagrees with saved image: catalogue {} sectors x {sector_size} bytes (expected bytes: {}), observed {} bytes. Historical geometry/read completeness is not certified; no tail is padded.",
+                        attempt.total_sectors,
+                        expected.map_or_else(
+                            || "unrepresentable".to_owned(),
+                            |bytes| bytes.to_string()
+                        ),
+                        metadata.len()
+                    ),
+                ),
+                Err(error) => append_issue(
+                    &mut record.issue,
+                    &format!("Image extent cannot be checked: {error}"),
+                ),
+                _ => {}
+            }
+        }
         if attempt.legacy_image
             && let Some(claimed) = attempt
                 .parsed_log
@@ -191,7 +229,7 @@ pub(crate) fn run_audit(
                     }
                     Err(error) => {
                         record.extraction_status = "INVALID".to_owned();
-                        record.issue = error;
+                        append_issue(&mut record.issue, &error);
                     }
                 }
             }
@@ -203,17 +241,22 @@ pub(crate) fn run_audit(
                 record.extraction_status = "MANUAL_UNVERIFIED".to_owned();
                 record.extracted_files = file_count;
                 record.extracted_bytes = total_bytes;
-                record.issue =
-                    "Manual recovery has no managed per-file integrity inventory.".to_owned();
+                append_issue(
+                    &mut record.issue,
+                    "Manual recovery has no managed per-file integrity inventory.",
+                );
             }
             Ok(ExtractionPresence::InvalidAutomatic { detail, .. }) => {
                 record.extraction_status = "INVALID".to_owned();
-                record.issue = detail;
+                append_issue(&mut record.issue, &detail);
             }
             Ok(ExtractionPresence::Missing { .. }) => {
-                record.issue = "No extraction for the selected best attempt.".to_owned();
+                append_issue(
+                    &mut record.issue,
+                    "No extraction for the selected best attempt.",
+                );
             }
-            Err(error) => record.issue = error,
+            Err(error) => append_issue(&mut record.issue, &error),
         }
         let conversion_ok = match &conversion_evidence {
             Ok(Some(by_disk)) => match by_disk.get(&record.disk) {
@@ -242,6 +285,7 @@ pub(crate) fn run_audit(
             }
         };
         if record.image_hash_verified
+            && record.issue.is_empty()
             && !attempt.attention_required
             && !recovery_attention
             && record.extracted_hashes_verified
@@ -283,7 +327,11 @@ pub(crate) fn run_audit(
                 record.issue = "Conversion has not been audited or has invalid outputs.".to_owned();
             }
         }
-        if attempt.status == "OK" && attempt.bad_sectors.is_empty() && attempt.attention_required {
+        if !attempt.legacy_image
+            && attempt.status == "OK"
+            && attempt.bad_sectors.is_empty()
+            && attempt.attention_required
+        {
             record.evidence_status = "CONFIRMED_CROSS_READER_CONFLICTS".to_owned();
             append_issue(
                 &mut record.issue,

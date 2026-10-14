@@ -160,10 +160,31 @@ fn executable_preview_publication_and_comparison_do_not_promote_or_double_count_
 
 #[test]
 fn automatic_extraction_retains_recovery_attention_but_materializes_snapshot_candidates() {
+    automatic_fixture(false);
+}
+
+#[test]
+fn automatic_extraction_routes_extent_contradiction_to_separate_candidates_not_seven_zip() {
+    automatic_fixture(true);
+}
+
+fn automatic_fixture(overclaimed_extent: bool) {
     let f = Fixture::new();
     let p = f.project();
     let bytes = image();
     fs::write(p.images_dir().join("001.bin"), &bytes).unwrap();
+    let log = if overclaimed_extent {
+        use sha2::{Digest, Sha256};
+        let text = format!(
+            "BEGIN floppy=001\nGEOMETRY cylinders=80 heads=2 sectors_per_track=18 bytes_per_sector=512 total_sectors=2881 total_bytes=1475072\nSHA256 {:x}\nEND status=OK bad_sectors=0 recovered_after_retry=0 track_fallbacks=0 duration_seconds=1.0\n",
+            Sha256::digest(&bytes)
+        );
+        fs::write(p.logs_dir().join("001.log"), &text).unwrap();
+        assert!(imaging::load_attempts_for_disk(&p.images_dir(), 1).unwrap()[0].attention_required);
+        Some(text)
+    } else {
+        None
+    };
     let request = fluxvault::batch_extraction::BatchExtractionRequest {
         seven_zip_executable: PathBuf::from(env!("CARGO_BIN_EXE_mock_gw")),
         images_directory: p.images_dir(),
@@ -194,4 +215,11 @@ fn automatic_extraction_retains_recovery_attention_but_materializes_snapshot_can
     assert!(p.recovery_dir().join("SnapshotCandidates/001").is_dir());
     assert!(!p.extracted_dir().join("001").exists());
     assert_eq!(fs::read(p.images_dir().join("001.bin")).unwrap(), bytes);
+    if let Some(log) = log {
+        assert_eq!(
+            fs::read_to_string(p.logs_dir().join("001.log")).unwrap(),
+            log
+        );
+    }
+    assert!(!p.logs_dir().join("external-tools.jsonl").exists());
 }

@@ -8,8 +8,10 @@ use std::{
     io::Write,
     path::PathBuf,
     process::{Command, Output, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 struct Fixture {
     root: PathBuf,
     project: ProjectState,
@@ -19,13 +21,15 @@ struct Fixture {
 impl Fixture {
     fn new(document: bool) -> Self {
         let root = std::env::temp_dir().join(format!(
-            "fv-production-flow-cli-{}-{}",
+            "fv-production-flow-cli-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
+        fs::create_dir(&root).unwrap();
         let project = ProjectState::create_without_session(root.join("project")).unwrap();
         let app = root.join("appdata");
         fs::create_dir_all(app.join("FluxVault")).unwrap();
@@ -116,7 +120,21 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap();
+        if let Err(error) = fs::remove_dir_all(&self.root) {
+            if std::thread::panicking() {
+                // Preserve the original diagnostic instead of aborting the
+                // entire harness with a second panic during cleanup.
+                eprintln!(
+                    "Production fixture cleanup failed at {}: {error}",
+                    self.root.display()
+                );
+            } else {
+                panic!(
+                    "Production fixture cleanup failed at {}: {error}",
+                    self.root.display()
+                );
+            }
+        }
     }
 }
 fn value(o: &Output) -> Value {

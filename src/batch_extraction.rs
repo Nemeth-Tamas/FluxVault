@@ -559,7 +559,7 @@ fn native_recovery(
         stage,
     );
     match native {
-        Err(error) if crate::snapshot_recovery::eligible(attempt) => {
+        Err(error) if crate::snapshot_recovery::eligible(&request.images_directory, attempt) => {
             match crate::snapshot_recovery::recover(
                 &request.images_directory,
                 &request.recovery_root,

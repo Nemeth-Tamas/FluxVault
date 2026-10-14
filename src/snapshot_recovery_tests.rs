@@ -125,10 +125,10 @@ fn publication_replays_extents_and_reuses_without_managed_extraction_or_source_w
 fn known_map_and_in_progress_sources_are_not_relabelled_unknown_candidates() {
     let f = Fixture::new(None);
     f.log(&f.attempt().sha256);
-    assert!(!eligible(&f.attempt()));
+    assert!(!eligible(&f.project.images_dir(), &f.attempt()));
     assert!(f.recover(false).is_err());
     fs::write(f.project.logs_dir().join("001.log"), "BEGIN floppy=001\n").unwrap();
-    assert!(!eligible(&f.attempt()));
+    assert!(!eligible(&f.project.images_dir(), &f.attempt()));
     assert!(f.recover(false).is_err());
     assert!(!f.project.recovery_dir().join("SnapshotCandidates").exists());
 }
@@ -147,6 +147,123 @@ fn contradictory_historical_hash_stays_separate_and_never_authorizes_sector_reco
     assert!(!r.report.acquisition_mask_known);
     assert_eq!(f.attempt().sha256, a.sha256);
     assert!(crate::fat12_recovery::validate_sector_evidence(&a, 1440, &a.sha256).is_err());
+}
+
+#[test]
+fn overclaimed_log_extent_uses_actual_snapshot_size_without_rewriting_evidence() {
+    let f = Fixture::new(None);
+    f.log(&f.attempt().sha256);
+    let log = f.project.logs_dir().join("001.log");
+    let original = fs::read_to_string(&log)
+        .unwrap()
+        .replace("total_sectors=1440", "total_sectors=1441")
+        .replace("total_bytes=737280", "total_bytes=737792");
+    fs::write(&log, &original).unwrap();
+    let a = f.attempt();
+    assert_eq!(a.total_sectors, 1441);
+    assert!(a.attention_required);
+    assert!(crate::fat12_recovery::validate_sector_evidence(&a, 1441, &a.sha256).is_ok());
+    assert!(crate::fat12_recovery::validate_sector_evidence(&a, 1440, &a.sha256).is_err());
+    assert!(eligible(&f.project.images_dir(), &a));
+    let result = f.recover(false).unwrap();
+    assert_eq!(result.report.source_bytes, 737_280);
+    assert_eq!(result.report.files.len(), 1);
+    assert_eq!(result.report.files[0].sha256, hash(PAYLOAD));
+    assert_eq!(result.report.bad_sector_count, None);
+    assert!(!result.report.acquisition_mask_known);
+    assert_eq!(fs::read_to_string(log).unwrap(), original);
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001.bin")).unwrap(),
+        image()
+    );
+    assert_eq!(f.attempt().total_sectors, 1441);
+    assert!(f.recover(false).unwrap().reused);
+}
+
+#[test]
+fn extent_attention_audit_keeps_extent_and_extraction_issues_without_inventing_reader_conflicts() {
+    let f = Fixture::new(None);
+    f.log(&f.attempt().sha256);
+    let log = f.project.logs_dir().join("001.log");
+    let original = fs::read_to_string(&log)
+        .unwrap()
+        .replace("total_sectors=1440", "total_sectors=1441");
+    fs::write(&log, &original).unwrap();
+    let audit = crate::audit::run_audit(&f.project, &|_| {}).unwrap();
+    let row = &audit.document.disks[0];
+    assert!(row.image_hash_verified);
+    assert_eq!(audit.verified_disks, 0);
+    assert!(row.issue.contains("Legacy sector extent disagrees"));
+    assert!(row.issue.contains("No extraction"));
+    assert!(!row.issue.contains("differing USB/GW"));
+    assert_ne!(row.evidence_status, "CONFIRMED_CROSS_READER_CONFLICTS");
+    assert!(
+        fs::read_to_string(audit.csv_path)
+            .unwrap()
+            .contains("Legacy sector extent disagrees")
+    );
+    assert_eq!(fs::read_to_string(log).unwrap(), original);
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001.bin")).unwrap(),
+        image()
+    );
+}
+
+#[test]
+fn historical_hash_audit_issue_is_not_overwritten_by_missing_extraction_or_reader_conflict() {
+    let f = Fixture::new(None);
+    f.log(&"a".repeat(64));
+    let audit = crate::audit::run_audit(&f.project, &|_| {}).unwrap();
+    let row = &audit.document.disks[0];
+    assert!(row.image_hash_verified);
+    assert_eq!(audit.verified_disks, 0);
+    assert!(
+        row.issue
+            .contains("Legacy acquisition-log SHA-256 claim disagrees")
+    );
+    assert!(row.issue.contains("No extraction"));
+    assert!(!row.issue.contains("differing USB/GW"));
+    assert_ne!(row.evidence_status, "CONFIRMED_CROSS_READER_CONFLICTS");
+}
+
+#[test]
+fn truncated_snapshot_only_carves_present_bytes_and_never_pads_missing_tail() {
+    let mut truncated = image();
+    truncated.truncate(15 * 512);
+    let f = Fixture::new(Some(truncated.clone()));
+    f.log(&f.attempt().sha256);
+    let original_log = fs::read(f.project.logs_dir().join("001.log")).unwrap();
+    let a = f.attempt();
+    assert_eq!(a.total_sectors, 1440);
+    assert!(eligible(&f.project.images_dir(), &a));
+    let r = f.recover(false).unwrap();
+    assert_eq!(r.report.source_bytes, truncated.len());
+    assert!(r.report.filesystem_error.is_some());
+    assert!(r.report.files.iter().any(|c| c.sha256 == hash(PAYLOAD)));
+    for c in &r.report.files {
+        assert!(
+            c.extents
+                .iter()
+                .all(|e| e.offset + e.bytes <= truncated.len())
+        );
+        assert_eq!(
+            fs::read(r.output_directory.join(&c.path)).unwrap(),
+            payload(&truncated, c).unwrap()
+        );
+    }
+    assert!(!r.report.acquisition_mask_known);
+    assert_eq!(r.report.physical_readability, "unknown");
+    assert!(!r.report.customer_delivery_certified);
+    assert!(!f.project.extracted_dir().join("001").exists());
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001.bin")).unwrap(),
+        truncated
+    );
+    assert_eq!(
+        fs::read(f.project.logs_dir().join("001.log")).unwrap(),
+        original_log
+    );
+    assert!(f.recover(false).unwrap().reused);
 }
 
 #[test]

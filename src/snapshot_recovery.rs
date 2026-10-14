@@ -95,7 +95,7 @@ fn directory(path: &Path, parent: &Path) -> Result<PathBuf, String> {
     }
     Ok(path)
 }
-pub(crate) fn eligible(attempt: &AttemptSummary) -> bool {
+pub(crate) fn eligible(images: &Path, attempt: &AttemptSummary) -> bool {
     attempt.legacy_image
         && attempt.metadata_path.as_os_str().is_empty()
         && !attempt
@@ -107,19 +107,27 @@ pub(crate) fn eligible(attempt: &AttemptSummary) -> bool {
             .as_ref()
             .is_some_and(|l| l.status == crate::dmde_logs::DmdeLogStatus::InProgress)
         && !attempt.status.to_ascii_uppercase().contains("PROGRESS")
-        && crate::fat12_recovery::validate_sector_evidence(
-            attempt,
-            attempt.total_sectors,
-            &attempt.sha256,
-        )
-        .is_err()
+        && observed_sectors(images, attempt).is_some_and(|sectors| {
+            crate::fat12_recovery::validate_sector_evidence(attempt, sectors, &attempt.sha256)
+                .is_err()
+        })
+}
+fn observed_sectors(images: &Path, attempt: &AttemptSummary) -> Option<usize> {
+    // The catalogue may repeat a historical log's geometry even when the saved
+    // image is truncated. Check evidence against actual bounded source bytes,
+    // never the log's own claim, and never follow an unsafe input path.
+    let image = recovery_plan::resolve_image_path(images, &attempt.image_file).ok()?;
+    sector_inspection::regular(&image, false).ok()?;
+    let bytes = fs::metadata(image).ok()?.len();
+    (bytes >= 512 && bytes <= fat12::MAX_IMAGE_BYTES as u64 && bytes.is_multiple_of(512))
+        .then_some(bytes as usize / 512)
 }
 fn analyze(
     images: &Path,
     disk: u32,
     attempt: &AttemptSummary,
 ) -> Result<(Report, Vec<u8>, PathBuf), String> {
-    if !(1..=4096).contains(&disk) || !eligible(attempt) {
+    if !(1..=4096).contains(&disk) || !eligible(images, attempt) {
         return Err("Snapshot candidates require a completed saved legacy snapshot with unavailable/contradictory sector evidence; use ordinary native extraction for a trustworthy map".into());
     }
     sector_inspection::regular(images, true)?;
@@ -134,7 +142,7 @@ fn analyze(
                 && (a.log_file.is_empty()
                     || Path::new(&a.log_file).canonicalize().ok()
                         == Path::new(&attempt.log_file).canonicalize().ok())
-                && eligible(a)
+                && eligible(&images, a)
         })
     {
         return Err("Snapshot candidate disk/attempt does not bind the current catalogue".into());
@@ -170,7 +178,8 @@ fn analyze(
         snapshot.len() / 512,
         &attempt.sha256,
     )
-    .unwrap_err();
+    .err()
+    .ok_or("Snapshot sector evidence now validates; use ordinary native extraction")?;
     // An empty exclusion vector here describes a local byte-parser experiment,
     // NOT an acquisition/readability map. Never serialize it as physical evidence.
     let analysis = fat12::analyze(&snapshot, &[]);
@@ -477,7 +486,7 @@ pub(crate) fn verified_existing(
     disk: u32,
     attempt: &AttemptSummary,
 ) -> Result<Option<(Report, PathBuf)>, String> {
-    if !eligible(attempt) {
+    if !eligible(images, attempt) {
         return Ok(None);
     }
     sector_inspection::regular(recovery, true)?;

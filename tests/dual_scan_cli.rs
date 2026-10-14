@@ -6,9 +6,11 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
@@ -18,13 +20,17 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "fv-dual-cli-{}-{}",
+            "fv-dual-cli-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
+        // Clock precision is not exclusive admission: parallel test cases must
+        // never share journals, settings, device reservations or source images.
+        fs::create_dir(&root).unwrap();
         let project = ProjectState::create_without_session(root.join("project")).unwrap();
         let appdata = root.join("appdata");
         fs::create_dir_all(appdata.join("FluxVault")).unwrap();
@@ -90,7 +96,7 @@ impl Fixture {
         let start = Instant::now();
         loop {
             let path = self.project.root().join(".fluxvault-production.json");
-            if let Ok(bytes) = fs::read(path)
+            if let Ok(bytes) = fs::read(&path)
                 && let Ok(v) = serde_json::from_slice::<Value>(&bytes)
                 && v["disks"][disk.to_string()]["phase"] == phase
             {
@@ -98,7 +104,13 @@ impl Fixture {
             }
             assert!(
                 start.elapsed() < Duration::from_secs(20),
-                "timed out waiting for {disk} {phase}"
+                "timed out waiting for {disk} {phase} in {}; journal: {}",
+                path.display(),
+                fs::read_to_string(&path)
+                    .unwrap_or_else(|e| e.to_string())
+                    .chars()
+                    .take(2048)
+                    .collect::<String>()
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -512,7 +524,13 @@ fn cli_no_verify_and_missing_usb_assertion_fail_before_owner_or_production_state
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(2));
-        assert!(!f.project.root().join(".fluxvault-production.json").exists());
+        assert!(
+            !f.project.root().join(".fluxvault-production.json").exists(),
+            "invalid command created journal in {}; stdout: {}; stderr: {}",
+            f.project.root().display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(!f.project.root().join(".fluxvault-processing.lock").exists());
     }
 }
