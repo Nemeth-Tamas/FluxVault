@@ -664,3 +664,13 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
 - [x] Add project create/open and settings/tool-health structures.
 - [x] Push the first checkpoint even if some planned pieces are still stubbed.
 - [x] Then start the Windows read-only floppy backend immediately; do not spend three days making pretty cards before we can read a disk. :D
+
+## 21. Deferred until after v1 release
+
+This backlog is outside the current 479-item checklist and does not block v1. Proposed flags below are not implemented commands.
+
+- **Opt-in USB first-error handoff to GW** (requested 2026-10-14; provisional flag `--usb-fast-handoff`): in a shared scan with an active GW station (`--double`, or a future `--trio`), stop USB acquisition at the first sector that remains unreadable after a small bounded per-sector retry budget (initial proposal: up to two retries, configurable). Do not continue scanning the remaining tracks/sectors or start further whole-disk retry passes; retain the partial acquisition and route that same numbered disk into the durable GW recovery queue. Default OFF; existing acquisition behavior remains unchanged unless explicitly enabled.
+  - USB-only must retain best-effort acquisition. Reject this incompatible flag before acquisition in USB-only/no-GW mode rather than silently abandoning a disk without a recovery station. Merely having GW installed is not sufficient; it must be part of the shared scan.
+  - Preserve all observed bytes, source hashes, attempt identity and the exact failed sector/retry history. Mark the remaining unattempted ranges as **not read/unknown**, not successfully read and not falsely measured as physically bad sectors. Any fixed-size image placeholders must remain explicitly unavailable evidence; preserve project/report compatibility and never certify the partial as complete.
+  - Publish an explicit partial/early-handoff reason and a prominent remove/set-aside-for-GW cue only once USB access has stopped. Respect custody/removal confirmation and exactly-once transfer/resume semantics; GW and other stations continue independently. Low-level Windows reads can still block, so bound retries and retain honest elapsed/cancellation reporting rather than promise instantaneous driver interruption.
+  - Acceptance: clean disks still finish through USB; a persistent first error stops further USB sector reads and queues GW; a retry-resolved error continues; remaining ranges stay unknown; USB-only/default-off behavior is unchanged; stop/restart preserves partial evidence and creates no duplicate queue entry. All source-media operations remain strictly read-only.
