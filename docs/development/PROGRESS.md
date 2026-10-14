@@ -1,5 +1,9 @@
 # FluxVault progress — 2026-10-14, 464/479
 
+Latest restart-safety slice: prepared raw capture/decode publication now resumes offline in the same slot, even after physical stage-budget expiry. Atomic synced receipt updates and non-replacing publication preserve existing evidence; six new routine tests exercise completed/unsealed cuts, changed sources/settings, conflicts and no-probe/no-read recovery. USB/flux planning/comparison also refuse contradictory legacy sector maps. **782 routine tests / 33 opt-ins**, full gate and release build pass. Checklist remains **464/479**; universal crash/power-loss and every-boundary acceptance stay open. [Contracts and regression evidence](../testing/CAPTURE_PUBLICATION_RESTART.md).
+
+## Same-evidence replay checkpoint
+
 Latest: **464/479 (96.9%), 15 open**, no scope/denominator changes. New opt-in `project import --images-only` enables an uncontaminated extraction replay: no old recovered files copied, independently ZIP-reverified image/log inputs before/after comparison. Measured 136 identical source images: **882/1,159 exact in-scope reference payload matches**, zero same-path changed payloads, 277 unmatched candidates and 37 current-only. This extraction-only historical-input result is not normal modern-capture recovery percentage or full production parity. Fixed legacy snapshot/hash-claim confusion; 020/047/112 retain attention and cannot donate their contradictory sector maps. **776 routine tests / 33 opt-ins**, full gate and strict lint pass. [Scope, receipts and next investigations](../testing/SAME_EVIDENCE_REPLAY.md).
 
 ## Previous hardware/background checkpoint

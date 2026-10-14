@@ -10,6 +10,13 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+#[path = "flux_capture_publication.rs"]
+mod publication;
+pub(crate) use publication::{resume_capture_publication, resume_decode_publication};
+#[cfg(test)]
+#[path = "flux_capture_publication_tests.rs"]
+mod publication_tests;
+
 use crate::{
     greaseweazle::{
         CaptureSettings, GreaseweazleBackend, GreaseweazleCommand, GreaseweazleProfile,
@@ -258,6 +265,7 @@ pub fn plan_flux_recovery(
             )
         })
         .ok_or_else(|| format!("No saved USB image for disk {disk_number:03}"))?;
+    usb.require_legacy_sector_binding()?;
     let status = inspect_disk(project, disk_number)?;
     let (older, newer) = latest_two_decodes(&status)?;
     if older.profile != newer.profile {
@@ -484,6 +492,7 @@ pub fn compare_with_usb(
             )
         })
         .ok_or_else(|| format!("No saved USB image for disk {disk_number:03}"))?;
+    usb.require_legacy_sector_binding()?;
     let usb_path = recovery_plan::resolve_image_path(&images_dir, &usb.image_file)?;
     let status = inspect_disk(project, disk_number)?;
     if status.preferred_profile.is_none()
@@ -911,6 +920,7 @@ fn capture_at_slot(
         capture_settings: Some(settings.clone()),
     };
     reserve_record(&partial_metadata, &record)?;
+    publication::checkpoint("capture_reserved")?;
 
     let execution = match backend.execute(&command) {
         Ok(execution) => execution,
@@ -981,15 +991,20 @@ fn capture_at_slot(
     if path_occupied(&final_flux)? || path_occupied(&final_metadata)? {
         return Err("Capture destination already exists; refusing to overwrite".to_owned());
     }
-    fs::rename(&partial_flux, &final_flux)
-        .map_err(|error| format!("Cannot finalize raw-flux capture: {error}"))?;
+    publication::checkpoint("capture_host_finished")?;
     record.status = "complete".to_owned();
     record.flux_file = Some(format!("{stem}.scp"));
     record.bytes = Some(bytes);
     record.sha256 = Some(sha256.clone());
+    // Seal a complete host result before publishing its payload. A restart can
+    // verify this prepared receipt and finish the same slot without a new read.
+    publication::sync_payload(&partial_flux)?;
     save_record(&partial_metadata, &record)?;
-    fs::rename(&partial_metadata, &final_metadata)
-        .map_err(|error| format!("Cannot finalize capture metadata: {error}"))?;
+    publication::checkpoint("capture_prepared")?;
+    crate::flux_recovery::publish_image_no_replace(&partial_flux, &final_flux)?;
+    publication::checkpoint("capture_payload")?;
+    crate::flux_recovery::publish_image_no_replace(&partial_metadata, &final_metadata)?;
+    publication::checkpoint("capture_committed")?;
     Ok(CaptureResult {
         disk_number: request.disk_number,
         attempt_number,
@@ -1062,6 +1077,10 @@ pub fn decode(
         Some(profile) => profile,
         None => GreaseweazleProfile::parse(&record.profile)?,
     };
+    if let Some(result) = resume_decode_publication(project, disk_number, capture_attempt, profile)?
+    {
+        return Ok(result);
+    }
     let derived_dir = resolve_derived_dir(&flux_dir, true)?;
     let profile_slug = profile.argument().replace('.', "_");
     let prefix = format!("{disk_number:03}_flux_{capture_attempt:03}_{profile_slug}");
@@ -1101,6 +1120,7 @@ pub fn decode(
         capture_settings: record.capture_settings.clone(),
     };
     reserve_decode_record(&partial_metadata, &decode_record)?;
+    publication::checkpoint("decode_reserved")?;
     let execution = match backend.execute(&command) {
         Ok(execution) => execution,
         Err(error) => {
@@ -1171,17 +1191,20 @@ pub fn decode(
         .and_then(|s| s.cylinders.as_deref());
     let gw_bad_lbas = parse_sector_map_selected(&execution.stdout, profile, selected)
         .or_else(|| parse_sector_map_selected(&execution.stderr, profile, selected));
-    fs::rename(&partial_image, &final_image)
-        .map_err(|error| format!("Cannot finalize decoded image: {error}"))?;
+    publication::checkpoint("decode_host_finished")?;
     decode_record.output_sha256 = output_hash.clone();
     decode_record.bytes = bytes;
     decode_record.status = "unverified_sector_quality".to_owned();
     decode_record.reported_found_sectors = reported_sectors.map(|(found, _)| found);
     decode_record.reported_total_sectors = reported_sectors.map(|(_, total)| total);
     decode_record.gw_bad_lbas = gw_bad_lbas.clone();
+    publication::sync_payload(&partial_image)?;
     save_decode_record(&partial_metadata, &decode_record)?;
-    fs::rename(&partial_metadata, &final_metadata)
-        .map_err(|error| format!("Cannot finalize decode metadata: {error}"))?;
+    publication::checkpoint("decode_prepared")?;
+    crate::flux_recovery::publish_image_no_replace(&partial_image, &final_image)?;
+    publication::checkpoint("decode_payload")?;
+    crate::flux_recovery::publish_image_no_replace(&partial_metadata, &final_metadata)?;
+    publication::checkpoint("decode_committed")?;
     Ok(DecodeResult {
         disk_number,
         capture_attempt,
@@ -1443,6 +1466,7 @@ fn reserve_record(path: &Path, record: &CaptureRecord) -> Result<(), String> {
         .map_err(|error| format!("Cannot reserve capture attempt: {error}"))?;
     output
         .write_all(&serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?)
+        .and_then(|_| output.sync_all())
         .map_err(|error| format!("Cannot record capture attempt: {error}"))
 }
 
@@ -1454,23 +1478,16 @@ fn reserve_decode_record(path: &Path, record: &DecodeRecord) -> Result<(), Strin
         .map_err(|error| format!("Cannot reserve decode attempt: {error}"))?;
     output
         .write_all(&serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?)
+        .and_then(|_| output.sync_all())
         .map_err(|error| format!("Cannot record decode attempt: {error}"))
 }
 
 fn save_decode_record(path: &Path, record: &DecodeRecord) -> Result<(), String> {
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("Cannot update decode metadata: {error}"))
+    publication::save_record(path, record)
 }
 
 fn save_record(path: &Path, record: &CaptureRecord) -> Result<(), String> {
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("Cannot update capture metadata: {error}"))
+    publication::save_record(path, record)
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
@@ -1518,8 +1535,8 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct ArtifactBackend {
-        commands: Vec<GreaseweazleCommand>,
+    pub(super) struct ArtifactBackend {
+        pub(super) commands: Vec<GreaseweazleCommand>,
         fail: bool,
     }
 
@@ -1564,7 +1581,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (ProjectState, PathBuf) {
+    pub(super) fn fixture() -> (ProjectState, PathBuf) {
         let root = std::env::temp_dir().join(format!(
             "fluxvault-flux-fixture-{}-{}",
             std::process::id(),

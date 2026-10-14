@@ -251,6 +251,12 @@ fn legacy_snapshot_identity_and_log_claim_remain_separate_across_recovery_and_au
     assert_eq!(attempt.status, "OK"); // Historical label, not current certification.
     assert!(attempt.attention_required);
     assert!(attempt.require_legacy_sector_binding().is_err());
+    for refusal in [
+        crate::flux_capture::plan_flux_recovery(&project, 7).unwrap_err(),
+        crate::flux_capture::compare_with_usb(&project, 7).unwrap_err(),
+    ] {
+        assert!(refusal.contains("readable-sector map is untrusted"));
+    }
     let plan = crate::recovery_plan::plan_project(&project.images_dir()).unwrap();
     assert!(plan[0].reason.contains("readable-sector map is untrusted"));
     assert_eq!(

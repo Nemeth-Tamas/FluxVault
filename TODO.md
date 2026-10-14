@@ -57,6 +57,7 @@ For operating the current build, start with [README](README.md), [the beginner/a
 - [ ] Every automatic decision records its evidence, confidence, limits, and provenance so automation never hides guessing or fabricates recovered data.
 - [x] A disk may finish as **verified**, **partially recovered**, or **unrecoverable within policy**; the program must not block the entire batch waiting for manual repair. Supported scans retain partial/raw-only attention outcomes and continue feeding after bounded recovery; hardware/tool/integrity failures still stop safely. This is not a guarantee that missing content can be recovered.
 - [ ] All stages are resumable after application restart or workstation failure without repeating completed evidence-preserving work.
+  - 2026-10-14: prepared raw-capture/decode receipts now finish their same immutable publication slot offline, including after stage-budget expiry. Six deterministic regression tests cover sealed/unsealed cuts, tamper/collision refusal and no-probe/no-read replay. This is not every journal/cursor/downstream boundary or arbitrary power-loss qualification; the universal item remains open. [Scope and evidence](docs/testing/CAPTURE_PUBLICATION_RESTART.md).
 - [x] No normal production prompt asks for a technical choice the program can derive safely. Default format/policy/worker/packing/recovery choices remain automatic; physical identity, protection and reseating are unavoidable operator actions. Expert overrides remain optional.
 
 ## 1. Safety invariants — must exist before real media testing

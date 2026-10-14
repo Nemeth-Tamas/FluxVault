@@ -848,6 +848,21 @@ fn recover_impl(
             }
             continue;
         }
+        if let Some(stage) = j.stages.get(index)
+            && flux_capture::resume_capture_publication(
+                project,
+                CaptureRequest {
+                    disk_number: disk,
+                    profile,
+                    drive,
+                    revolutions: pass.revolutions,
+                },
+                &stage.settings,
+                stage.capture_attempt,
+            )?
+        {
+            progress("Finished a hash-verified prepared capture publication; no physical reread.");
+        }
         let pending_raw = j.stages.get(index).is_some_and(|stage| {
             flux.join(format!(
                 "{disk:03}_attempt_{:03}.json",
@@ -1057,6 +1072,7 @@ fn recover_impl(
                 report.display()
             ));
         }
+        flux_capture::resume_decode_publication(project, disk, capture, profile)?;
         let existing = flux_capture::inspect_disk(project, disk)?
             .decodes
             .into_iter()
