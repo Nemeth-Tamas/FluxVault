@@ -130,6 +130,7 @@ impl Language {
             "SHA256" => "SHA-256",
             "SourceImageSha256" => "Forráslemez SHA-256",
             "ManagedInventoryVerified" => "Fájljegyzék ellenőrizve",
+            "DetectedContent" => "Tartalom alapján felismert formátum",
             "DeliveryEligible" => "Átadásra kiválasztható",
             "OriginalForensicPath" => "Eredeti bizonyíték útvonala",
             "SourceSHA256" => "Forrás SHA-256",
@@ -229,6 +230,8 @@ struct Recovered {
     source_image_sha256: String,
     managed_inventory_verified: bool,
     delivery_eligible: bool,
+    #[serde(default)]
+    detected_content: Option<conversion::ContentDetection>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -406,6 +409,9 @@ fn collect(project: &ProjectState, audit: &audit::AuditResult) -> Result<Documen
                     delivery_eligible: conversion::delivery_eligible(Path::new(
                         &file.relative_path,
                     )),
+                    detected_content: crate::office_content::inspect(
+                        &output_directory.join(&file.relative_path),
+                    )?,
                 });
                 disk.source_recovered_files += 1;
             }
@@ -429,6 +435,7 @@ fn collect(project: &ProjectState, audit: &audit::AuditResult) -> Result<Documen
                     source_image_sha256: evidence.image_sha256.clone(),
                     managed_inventory_verified: false,
                     delivery_eligible: conversion::delivery_eligible(relative),
+                    detected_content: crate::office_content::inspect(&file)?,
                 });
                 disk.source_recovered_files += 1;
             }
@@ -542,7 +549,22 @@ fn collect(project: &ProjectState, audit: &audit::AuditResult) -> Result<Documen
     let mut invalid_report_state = !report.issues.is_empty();
     for file in &report.recovered_files {
         if file.delivery_eligible
-            && conversion::requires_conversion(Path::new(&file.recovered_path))
+            && let Some(reason) = file
+                .detected_content
+                .as_ref()
+                .and_then(|d| d.blocked_reason.as_ref())
+        {
+            disks
+                .get_mut(&file.floppy)
+                .ok_or("Recovered file has no disk")?
+                .issues
+                .push(format!("{}: {reason}", file.recovered_path));
+        }
+        if file.delivery_eligible
+            && conversion::requires_conversion(
+                Path::new(&file.recovered_path),
+                file.detected_content.as_ref(),
+            )
             && !report.conversions.iter().any(|r| {
                 key(&r.floppy, &r.original_forensic_path) == key(&file.floppy, &file.recovered_path)
             })

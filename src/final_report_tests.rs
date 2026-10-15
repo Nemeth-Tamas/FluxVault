@@ -43,6 +43,63 @@ fn both_customer_notice_languages_keep_raw_evidence_and_prior_generation_unchang
 }
 
 struct Fixture(ProjectState);
+
+#[test]
+fn generic_word_and_unknown_encrypted_packages_remain_visible_when_conversion_is_absent() {
+    for encrypted in [false, true] {
+        let f = Fixture::files(false);
+        let directory = f.0.extracted_dir().join("001/attempt_001");
+        fs::remove_file(directory.join("=formula.txt")).unwrap();
+        let mut c = cfb::CompoundFile::create(std::io::Cursor::new(vec![])).unwrap();
+        if encrypted {
+            for name in ["/EncryptionInfo", "/EncryptedPackage"] {
+                c.create_stream(name).unwrap().write_all(&[0; 8]).unwrap();
+            }
+        } else {
+            let mut fib = [0; 32];
+            fib[..4].copy_from_slice(&[0xdc, 0xa5, 0x65, 0]);
+            c.create_stream("/WordDocument")
+                .unwrap()
+                .write_all(&fib)
+                .unwrap();
+        }
+        c.flush().unwrap();
+        let bytes = c.into_inner().into_inner();
+        fs::write(directory.join("saved.ole"), &bytes).unwrap();
+        let files = extraction::inventory_files(&directory).unwrap();
+        let mut inventory: Value =
+            serde_json::from_slice(&fs::read(directory.join(".fluxvault-inventory.json")).unwrap())
+                .unwrap();
+        inventory["files"] = serde_json::to_value(&files).unwrap();
+        fs::write(
+            directory.join(".fluxvault-inventory.json"),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        let marker = directory.join(".fluxvault-extraction.json");
+        let mut value: Value = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        value["total_bytes"] = json!(bytes.len());
+        fs::write(marker, serde_json::to_vec(&value).unwrap()).unwrap();
+        let report = f.report();
+        let file = &report.recovered_files[0];
+        assert!(file.detected_content.is_some());
+        let issues = report.floppies[0].issues.join("\n");
+        if encrypted {
+            assert!(
+                issues.contains("Password-protected Office package"),
+                "{issues}"
+            );
+        } else {
+            assert!(
+                issues.contains("Convertible recovered file has no current conversion result"),
+                "{issues}"
+            );
+        }
+        assert_eq!(fs::read(directory.join("saved.ole")).unwrap(), bytes);
+        assert!(!report.customer_delivery_certified);
+    }
+}
+
 impl Fixture {
     fn empty() -> Self {
         let root = std::env::temp_dir().join(format!(

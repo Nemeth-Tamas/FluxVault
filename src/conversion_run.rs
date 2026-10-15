@@ -929,6 +929,15 @@ fn convert_output(
         Ok(false) => {}
     }
 
+    // Re-probe current bytes rather than trusting optional/stale plan metadata.
+    // Verified already-published outputs above remain reusable without Office.
+    match crate::office_content::inspect(&job.source_path) {
+        Ok(Some(content)) if content.blocked_reason.is_some() => {
+            return failure(content.blocked_reason.unwrap());
+        }
+        Err(error) => return failure(error),
+        _ => {}
+    }
     let source_bytes = match fs::metadata(&job.source_path) {
         Ok(info) => info.len(),
         Err(error) => return failure(format!("Cannot estimate conversion source: {error}")),
@@ -1368,6 +1377,63 @@ fn unix_ms() -> u64 {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn password_protected_source_fails_without_launch_or_retry_even_with_old_job_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "fv-password-{}-{}",
+            std::process::id(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("Extracted/001")).unwrap();
+        let source = root.join("Extracted/001/locked.xls");
+        let mut c = cfb::CompoundFile::create(std::io::Cursor::new(vec![])).unwrap();
+        c.create_stream("/Book")
+            .unwrap()
+            .write_all(&[
+                9, 8, 8, 0, 0, 5, 5, 0, 0, 0, 0, 0, 0x2f, 0, 4, 0, 0, 0, 0, 0,
+            ])
+            .unwrap();
+        c.flush().unwrap();
+        let original = c.into_inner().into_inner();
+        fs::write(&source, &original).unwrap();
+        let executable = root.join("must-not-launch.exe");
+        fs::write(&executable, []).unwrap();
+        let request = ConversionRequest {
+            planning: ConversionPlanningRequest {
+                extracted_root: root.join("Extracted"),
+                converted_root: root.join("Converted"),
+                reports_directory: root.join("Reports"),
+            },
+            libreoffice_executable: executable,
+            command_audit_path: root.join("audit.jsonl"),
+            timeout_seconds: 10,
+            workers: 2,
+            selected_sources: None,
+            previous_result: None,
+        };
+        let result = run_conversion(&request, &|_| {}, &|_, _| {}).unwrap();
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.retried_outputs, 0);
+        assert!(!request.command_audit_path.exists());
+        let mut job = result.rows[0].job.clone();
+        job.content_detection = None; // old snapshots are re-probed, not trusted
+        let out = convert_output(
+            &request,
+            &job,
+            &job.modern_path,
+            "xlsx",
+            &job.modern_filter,
+            None,
+            &|_| {},
+        );
+        assert!(out.detail.contains("Password-protected Excel"));
+        assert!(!out.retryable && out.retry_count == 0);
+        assert!(result.rows[0].pdf.detail.contains("FilePass"));
+        assert!(!job.modern_path.exists() && !job.pdf_path.exists());
+        assert_eq!(fs::read(&source).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn worker_wait_notices_reach_controller_before_job_completion() {

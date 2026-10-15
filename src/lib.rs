@@ -46,6 +46,7 @@ pub mod manifest;
 pub mod manual_recovery_import;
 pub mod media_change;
 pub mod mfm_evidence;
+mod office_content;
 mod offline_images;
 pub mod package;
 mod performance_history;

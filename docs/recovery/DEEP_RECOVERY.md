@@ -117,6 +117,31 @@ Bounds: 256 KiB readable input per parent; 4 MiB combined input, 64 parents, 500
 
 Saved **022**, `nka261056994.rtf`: engine 2 yields **5,318 readable UTF-16 positions** from selected attempt 2, up from engine 1's 330. It reaches file byte **143,867**, stopping on a control token cut by the 143,872-byte readable prefix boundary, not by guessing its delimiter. Attempt 1 yields **3,583 positions** within its 73,728-byte prefix. Unsupported symbol glyphs remain explicit gaps; the rest of the file remains uninterpreted with unknown text length. Engine 1's earlier editions, raw fragments and completed archival snapshots stay intact. Saved 128's `.rtf`-named candidate is correctly refused by the RTF decoder but now independently salvaged through validated binary-Word dispatch.
 
+## Office conversion by content
+
+Normal processing now checks supported root compound-file streams as well as the filename extension. Older Word6/95 containers recovered as generic `.ole` files, supported Word97–2003 containers, and Excel BIFF5/7/8 workbooks can use the appropriate existing DOCX/XLSX and PDF conversion filters. There is no new command or policy: new processing uses this automatically. To refresh only conversions in an existing idle project:
+
+```powershell
+fv conversion run
+fv conversion issues
+```
+
+Originals and delivery mirrors keep their exact names, extensions and bytes. A generated name such as `carved_... [from OLE].docx` records that provenance. `ConversionPlan.csv` and conversion-state jobs record detected format/root-header evidence; final recovered-file reports carry `DetectedContent` and flag missing conversions even for recognized `.ole` files. Existing conversion receipts can still reuse unchanged successful outputs. Earlier extraction generations and completed ZIPs are not rewritten.
+
+The probe reads regular saved files only, at most 8 MiB per container. It examines root streams, never nested objects as substitute application identities. Excel globals inspection stops at EOF or bounded 64 KiB/4,096-record work per workbook stream; payload bytes resembling record headers are not scanned as headers. Excel's paired `Book`/`Workbook` compatibility streams stay supported: both are checked for protection, with the newer workbook profile preferred otherwise; semantic equivalence is not certified. Inconclusive/unsupported detection keeps the existing extension-based/import behavior where applicable; it is not a document-completeness validator. Conflicting root application families are preserved with attention rather than arbitrarily assigned a converter.
+
+Observed Word FIB encryption, supported Excel FilePass records, and paired root `EncryptionInfo`/`EncryptedPackage` streams get explicit password-protection attention. Unfinished protected conversions are not repeatedly launched or retried; existing hash-bound successful outputs remain reusable. Unknown encrypted-package application types are not guessed. No passwords are tried, original encryption is not removed, and a malformed or truncated probe is not proof of encryption. See the primary [Microsoft FilePass description](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xls/cf9ae8d5-4e8c-40a2-95f1-3b31f16b5529) and [LibreOffice legacy Word reader](https://docs.libreoffice.org/sw/html/ww8scan_8cxx_source.html).
+
+Real saved-file validation on 2026-10-15 identified six distinct `.ole` Word candidates on disks 030/131/136. An isolated copy-only project converted all six into **12 checked DOCX/PDF outputs**, using 12 Office conversion invocations. Disk 136's previously failing carved XLS has a BIFF5 globals FilePass record: it now receives a precise password-protected result, with zero Office attempts/retries for that source. These are newly accessible editions of already recovered candidate bytes, not six newly recovered whole original files, semantic/layout certification, or general damaged-container repair.
+
+The complete 136-label saved project additionally found **18 `.wbk` Word backups and four temporary-name Word files**. All **28 newly recognized sources** produced modern/PDF editions: **693 total jobs, 692 successful, one password-protected failure, zero partial/timeouts/retries**. All **1,328 earlier successful outputs** reused; no prior job disappeared. The 28 new results retain original filename/source hash/type and exact forensic identity (`NewlyConverted28.csv` in the local receipts). Existing backup/temp originals were already recovered/delivery-eligible files, not newly discovered deleted records. Converting them improves access, not whole-file recovery yield or historical name/meaning certainty.
+
+Final optimized-release replay reused **all 1,384 successful outputs**, with no Office conversion needed and the protected source still explicit. All 28 new DOCX main-document XML payloads contain text (**146,835 aggregate text characters**, not semantic/layout validation). The current audit remains 94 verified / 42 attention. **4,261 pre-existing image/extraction/conversion/recovery files and 13 published ZIP/checksum/front-report files** are byte-identical. `package verify` independently rechecks the unchanged historical ZIP and its 11 bound reports; it does not pretend that snapshot includes the newer editions. Use normal finalization for a new handoff generation when wanted.
+
+The final format/locked all-target check/strict Clippy/all-target test gate passes **843 routine tests, 33 explicit opt-ins**. Release SHA-256: `0fb6e7bfaf5e6451e99d8c1d12f0aae178ec6e7aadaeed07e75bf1e69b228a14`. `OfficeContentQualityGateFinal-20261015.log` in the receipts' parent records the complete gate. Synthetic regressions include root-only routing, backup/temp/misleading extensions, Word/BIFF encryption, paired Excel compatibility streams, malformed/bounded probes, old job metadata, no-host/no-retry protection handling and final-report missing-conversion attention.
+
+Local conversion receipts/logs: `C:\Users\User\Documents\Codex\2026-09-22\referenced-chatgpt-conversation-this-is-an\OfficeContent-20261015`.
+
 ## Checked against saved evidence — 2026-10-08
 
 - Isolated customer **021–032** retains all **64 existing payloads** (53 reachable / 11 carved) and nine raw fragments / 449,539 bytes. Original saved image bytes remain unchanged.

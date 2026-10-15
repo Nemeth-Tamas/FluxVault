@@ -7,6 +7,7 @@ use std::{
     thread,
 };
 
+pub use crate::office_content::{ContentDetection, OfficeFamily};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -56,6 +57,8 @@ pub struct ConversionJob {
     pub pdf_filter: String,
     pub modern_path: PathBuf,
     pub pdf_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_detection: Option<ContentDetection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +119,7 @@ struct ConversionPlanRow {
     pdf_filter: String,
     modern_path: String,
     pdf_path: String,
+    detected_content: String,
 }
 
 pub fn spawn_conversion_planning(
@@ -295,7 +299,14 @@ pub(crate) fn build_conversion_plan_reserved(
                 source_sha256: source_sha256.clone(),
             });
 
-            let Some(plan) = office_plan(&source) else {
+            let content_detection = crate::office_content::inspect(&source)?;
+            if let Some(reason) = content_detection
+                .as_ref()
+                .and_then(|d| d.blocked_reason.as_ref())
+            {
+                send_stage(&format!("{}: {reason}", source.display()));
+            }
+            let Some(plan) = office_plan_for(&source, content_detection.as_ref()) else {
                 continue;
             };
             let extension = source
@@ -334,6 +345,12 @@ pub(crate) fn build_conversion_plan_reserved(
                 pdf_filter: plan.pdf_filter.to_owned(),
                 modern_path: modern_path.display().to_string(),
                 pdf_path: pdf_path.display().to_string(),
+                detected_content: content_detection
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_default(),
             });
             jobs.push(ConversionJob {
                 floppy: floppy.clone(),
@@ -348,6 +365,7 @@ pub(crate) fn build_conversion_plan_reserved(
                 pdf_filter: plan.pdf_filter.to_owned(),
                 modern_path,
                 pdf_path,
+                content_detection,
             });
         }
     }
@@ -561,8 +579,23 @@ fn office_plan(path: &Path) -> Option<OfficePlan> {
     }
 }
 
-pub(crate) fn requires_conversion(path: &Path) -> bool {
-    office_plan(path).is_some()
+fn office_plan_for(path: &Path, content: Option<&ContentDetection>) -> Option<OfficePlan> {
+    match content {
+        Some(ContentDetection {
+            family: Some(OfficeFamily::Word),
+            ..
+        }) => office_plan(Path::new("detected.doc")),
+        Some(ContentDetection {
+            family: Some(OfficeFamily::Excel),
+            ..
+        }) => office_plan(Path::new("detected.xls")),
+        Some(_) => None,
+        None => office_plan(path),
+    }
+}
+
+pub(crate) fn requires_conversion(path: &Path, content: Option<&ContentDetection>) -> bool {
+    office_plan_for(path, content).is_some()
 }
 
 pub(crate) fn delivery_eligible(path: &Path) -> bool {
@@ -620,7 +653,7 @@ fn write_path_map(path: &Path, rows: &[PathMapRow]) -> Result<(), String> {
 
 fn write_conversion_plan(path: &Path, rows: &[ConversionPlanRow]) -> Result<(), String> {
     let mut csv = String::from(
-        "\u{feff}\"Floppy\",\"SourcePath\",\"OriginalForensicPath\",\"DeliveryOriginalPath\",\"RecoveryMethod\",\"SourceType\",\"ModernFormat\",\"ModernFilter\",\"PdfFilter\",\"ModernPath\",\"PdfPath\"\r\n",
+        "\u{feff}\"Floppy\",\"SourcePath\",\"OriginalForensicPath\",\"DeliveryOriginalPath\",\"RecoveryMethod\",\"SourceType\",\"ModernFormat\",\"ModernFilter\",\"PdfFilter\",\"ModernPath\",\"PdfPath\",\"DetectedContent\"\r\n",
     );
     for row in rows {
         let values = [
@@ -635,6 +668,7 @@ fn write_conversion_plan(path: &Path, rows: &[ConversionPlanRow]) -> Result<(), 
             row.pdf_filter.as_str(),
             row.modern_path.as_str(),
             row.pdf_path.as_str(),
+            row.detected_content.as_str(),
         ];
         csv.push_str(
             &values

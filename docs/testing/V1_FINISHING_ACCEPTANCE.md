@@ -31,6 +31,8 @@ The real 7-Zip/LibreOffice `process --conversion-workers 12` run completed with 
 
 The failed item is disk 136's `SignatureRecovery/carved_000a0a00_fb1217b03c17.xls`: LibreOffice reports that the source cannot be loaded. It remains a failed carved candidate, not a fabricated repaired spreadsheet. The first full conversion run used the prior release; the subsequent finalization used the new debug implementation, revalidated/reused completed bindings and retried the failed item.
 
+Later same-day content triage identifies this XLS as BIFF5 with a FilePass open-password record. New runs explain password protection and skip Office/retries for this source; the earlier archive/report remains an unchanged historical snapshot. Content-based conversion additionally opens six existing `.ole` Word candidates; see [measured routing scope](../recovery/DEEP_RECOVERY.md#office-conversion-by-content).
+
 `finalize --allow-attention --conversion-workers 12` then completed in **257.164 seconds**, including **79.398 seconds** of package building/verification. It reused all three derived-image publications. It created an HU-default verified archival ZIP with **4,435 source entries / 497,764,039 source bytes**, plus the package README/manifest sidecars:
 
 - ZIP: `Same-Evidence-20261014_20261015_133325_837.zip`
