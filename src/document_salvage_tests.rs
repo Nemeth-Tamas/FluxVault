@@ -2,6 +2,8 @@ use super::*;
 use std::io::Cursor;
 #[path = "document_cfb_tests.rs"]
 mod cfb_tests;
+#[path = "document_headerless_tests.rs"]
+mod headerless_tests;
 #[path = "document_word6_tests.rs"]
 mod word6_tests;
 
@@ -364,14 +366,27 @@ fn native_service_detects_misnamed_word_and_keeps_original_name_and_evidence() {
 }
 
 fn native_service_case(short_name: &[u8; 11]) {
-    let (source, parent, _) = fixture(false, true);
+    native_service_variant(short_name, false);
+}
+
+#[test]
+fn native_headerless_service_preserves_reuses_localizes_archives_and_rejects_tampered_editions() {
+    native_service_variant(b"BROKEN  DOC", true);
+}
+
+fn native_service_variant(short_name: &[u8; 11], headerless: bool) {
+    let (source, parent, _) = fixture(false, !headerless);
     let word = word_mapping(&source, &parent);
     let physical = word.sources[1536].unwrap();
-    let logical = parent
-        .data_lbas
-        .iter()
-        .position(|l| *l == (physical / 512) as u64)
-        .unwrap();
+    let logical = if headerless {
+        0
+    } else {
+        parent
+            .data_lbas
+            .iter()
+            .position(|l| *l == (physical / 512) as u64)
+            .unwrap()
+    };
     let payload = fat12::file_bytes(&source, &parent);
     let mut image = fat12::tests::image();
     let clusters = (0..payload.len().div_ceil(512))
@@ -429,15 +444,27 @@ fn native_service_case(short_name: &[u8; 11]) {
     let first = run().unwrap();
     assert_eq!(first.files, 0);
     let text = first.document_salvage.unwrap();
-    assert_eq!(text.text_segments, 2);
-    assert_eq!(text.recovered_character_positions, 644);
-    assert_eq!(text.missing_character_positions, 256);
+    assert_eq!(text.text_segments, if headerless { 1 } else { 2 });
+    assert_eq!(
+        text.recovered_character_positions,
+        if headerless { 900 } else { 644 }
+    );
+    assert_eq!(
+        text.missing_character_positions,
+        if headerless { 0 } else { 256 }
+    );
     assert_eq!(text.repaired_originals, 0);
     assert_eq!(text.engine_version, ENGINE_VERSION);
     assert_eq!(text.readable_editions, 1);
     let edition = &text.readable_edition_paths[0];
     let edition_bytes = fs::read(edition).unwrap();
-    assert!(String::from_utf8_lossy(&edition_bytes).contains("HIÁNYZÓ / ÉRVÉNYTELEN SZÖVEG"));
+    assert!(
+        String::from_utf8_lossy(&edition_bytes).contains(if headerless {
+            "FEJLÉC NÉLKÜLI SZERKEZETI SZÖVEGJELÖLT"
+        } else {
+            "HIÁNYZÓ / ÉRVÉNYTELEN SZÖVEG"
+        })
+    );
     assert!(!text.reused);
     // Old generations are operator/evidence-owned and must never be migrated in place.
     let legacy = text
@@ -496,7 +523,10 @@ fn native_service_case(short_name: &[u8; 11]) {
     assert_eq!(cli.exit_code, 3);
     let value: serde_json::Value = serde_json::from_str(&cli.output).unwrap();
     assert_eq!(value["physical_media_access"], false);
-    assert_eq!(value["document_salvage"]["text_segments"], 2);
+    assert_eq!(
+        value["document_salvage"]["text_segments"],
+        if headerless { 1 } else { 2 }
+    );
     assert_eq!(value["document_salvage"]["readable_editions"], 1);
     assert_eq!(value["document_salvage"]["customer_language"], "hu");
     let english = crate::cli::run(
@@ -546,7 +576,11 @@ fn native_service_case(short_name: &[u8; 11]) {
     .unwrap();
     assert!(
         english_html.contains("<html lang=\"en\">")
-            && english_html.contains("MISSING / INVALID TEXT")
+            && english_html.contains(if headerless {
+                "HEADERLESS STRUCTURAL TEXT CANDIDATE"
+            } else {
+                "MISSING / INVALID TEXT"
+            })
     );
     assert_eq!(fs::read(edition).unwrap(), edition_bytes);
     crate::project_settings::update(&p, "customer-language", Some("hu")).unwrap();

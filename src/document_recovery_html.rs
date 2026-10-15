@@ -106,7 +106,11 @@ pub(super) fn render_in_language(
         *note=slots.protect("A fájl tartalma Word-adatfolyamokat tartalmaz a megtévesztő kiterjesztés ellenére. Az eredeti név és bájtok változatlanok; a szükséges Word/táblázat/FIB/CLX leképezések ellenőrizve vannak, de a teljes eredeti dokumentum épsége nem igazolt.".into());
     }
     if let Some(evidence) = &mut masked.cfb_recovery {
-        evidence.warning=slots.protect("A szöveg csak a külön ellenőrizhető, olvasható Word- és tábla-adatfolyamokból származik. Hiányzó, független metaadatok áthidalása nem igazolja a teljes összetett tároló épségét vagy minden történeti tulajdonviszonyt. Kötelező metaadat vagy kiosztási kapcsolat nem lett kitalálva.".into());
+        evidence.warning=slots.protect(if evidence.inferred_header.is_some() {
+            "FEJLÉC NÉLKÜLI SZERKEZETI SZÖVEGJELÖLT. Az eredeti összetett tároló teljes fejléce olvashatatlan. Egyedi, olvasható FAT és gyökérkönyvtár támasztja alá a feltételezett 512 bájtos, egy-FAT-os elrendezést. Csak külön ellenőrzött Word- és tábla-kiosztás/FIB/CLX alapján ismert szöveg szerepel; a fejléc nem lett helyreállítva. A mini-FAT, teljes tárolóazonosság, formázás és eredeti jelentés nem igazolt. Ez nem javított eredeti DOC."
+        } else {
+            "A szöveg csak a külön ellenőrizhető, olvasható Word- és tábla-adatfolyamokból származik. Hiányzó, független metaadatok áthidalása nem igazolja a teljes összetett tároló épségét vagy minden történeti tulajdonviszonyt. Kötelező metaadat vagy kiosztási kapcsolat nem lett kitalálva."
+        }.into());
     }
     if let Some(evidence) = &mut masked.incomplete_fib {
         evidence.warning=slots.protect("A Word-fejléc nem teljesen olvasható. Csak a külön igazolt közös fejlécmezők és CLX-leképezés alapján történt főszövegkimentés. A hiányzó bővítményszám, tényleges verzió és teljes fejlécérvényesség ismeretlen marad; nem kerültek kitalálásra.".into());

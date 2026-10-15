@@ -14,7 +14,7 @@ use std::{
 const MAX_CHARACTERS: usize = 200_000;
 const MAX_SEGMENTS: usize = 4096;
 const MAX_WORK: usize = 64 * 1024 * 1024;
-pub const ENGINE_VERSION: u32 = 6;
+pub const ENGINE_VERSION: u32 = 7;
 #[path = "document_cfb.rs"]
 mod cfb_recovery;
 pub use cfb_recovery::Evidence as CfbEvidence;
@@ -322,6 +322,20 @@ fn parent_mapping(
     parent: &fat12::FileRecord,
     bad: &BTreeSet<u64>,
 ) -> Result<SparseStream, String> {
+    let mapping = sparse_parent_mapping(image, parent, bad)?;
+    if mapping.bytes[..8] != [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
+        || mapping.sources[..512].iter().any(Option::is_none)
+    {
+        return Err("No readable supported compound-document header; legacy/non-OLE Word remains unresolved".into());
+    }
+    Ok(mapping)
+}
+
+fn sparse_parent_mapping(
+    image: &[u8],
+    parent: &fat12::FileRecord,
+    bad: &BTreeSet<u64>,
+) -> Result<SparseStream, String> {
     if parent.bytes > fat12::MAX_IMAGE_BYTES || parent.bytes < 512 {
         return Err("Unsupported document size".into());
     }
@@ -344,11 +358,6 @@ fn parent_mapping(
             sources[index * 512 + j] = Some(at + j);
         }
     }
-    if bytes[..8] != [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
-        || sources[..512].iter().any(Option::is_none)
-    {
-        return Err("No readable supported compound-document header; legacy/non-OLE Word remains unresolved".into());
-    }
     Ok(SparseStream { bytes, sources })
 }
 fn extract(
@@ -361,7 +370,25 @@ fn extract(
             "Word parent name/allocation metadata touches missing or disputed sectors".into(),
         );
     }
-    let mapping = parent_mapping(image, parent, bad)?;
+    let mapping = match parent_mapping(image, parent, bad) {
+        Ok(mapping) => mapping,
+        Err(strict) => {
+            let mapping = sparse_parent_mapping(image, parent, bad)?;
+            let (word, table, mut metadata, evidence) =
+                cfb_recovery::headerless::streams(&mapping.bytes, &mapping.sources)
+                    .map_err(|e| format!("{strict}; headerless CFB refusal: {e}"))?;
+            metadata.extend(parent.metadata_lbas.iter().copied());
+            let mut doc =
+                if known(&word, 0, 4).is_ok_and(|b| u16at(b, 0) == 0xa5dc && u16at(b, 2) == 0x65) {
+                    legacy::decode(parent, &word, metadata)?
+                } else {
+                    decode_streams(parent, &word, &table, metadata)?
+                };
+            doc.cfb_recovery = Some(evidence);
+            doc.strict_parser_refusal = Some(strict);
+            return Ok(doc);
+        }
+    };
     match extract_strict(&mapping.bytes, &mapping.sources, parent) {
         Ok(d) => Ok(d),
         Err(strict) => {

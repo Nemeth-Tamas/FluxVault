@@ -11,6 +11,19 @@ const FREE: u32 = 0xffff_ffff;
 const FAT: u32 = 0xffff_fffd;
 const MAX_ENTRIES: usize = 4096;
 const MAX_VISITS: usize = 65_536;
+#[path = "document_headerless.rs"]
+pub(super) mod headerless;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeaderInference {
+    pub unavailable_header_bytes: usize,
+    pub assumed_sector_bytes: usize,
+    pub fat_sector_id: u32,
+    pub directory_first_sector_id: u32,
+    pub header_reconstructed: bool,
+    pub mini_fat_mapping_known: bool,
+    pub warning: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Link {
@@ -55,6 +68,8 @@ pub struct Evidence {
     pub allocation_issues: Vec<String>,
     #[serde(default)]
     pub ignored_storage_fields: Vec<StorageFields>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inferred_header: Option<HeaderInference>,
     pub whole_container_verified: bool,
     pub warning: String,
 }
@@ -536,7 +551,7 @@ pub(super) fn streams(
         directory_sector_ids:directory,missing_directory_stream_ids:missing,
         root_sibling_entries:root_evidence.into_iter().map(|e| EntryEvidence {stream_id:e.id,name:e.name,directory_parent_byte_offset:e.offset,raw_entry_hex:e.raw.iter().map(|b|format!("{b:02x}")).collect()}).collect(),
         allocation_links:p.links.into_values().collect(),selected_streams:selected,allocation_issues:issues,ignored_storage_fields,
-        whole_container_verified:false,
+        inferred_header:None, whole_container_verified:false,
         warning:"Selective stream salvage, NOT compound-container repair. Readable complete root sibling paths identify Word/table streams; missing non-root entries and unrelated allocation failures remain unresolved. Known allocation crosslinks are refused, but unavailable entries cannot establish every historical ownership claim. Only recorded links/extents are followed; no missing entry/link/name is synthesized, no macros/embedded objects are executed and no original semantics certified.".into() };
     Ok((word, table, p.metadata, evidence))
 }

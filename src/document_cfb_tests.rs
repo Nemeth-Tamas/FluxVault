@@ -640,6 +640,14 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                         .file_name()
                         .to_string_lossy()
                         .ends_with("_word_text_v6_en")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v7_hu")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v7_en")
             {
                 continue;
             }

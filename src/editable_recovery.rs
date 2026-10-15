@@ -227,6 +227,12 @@ fn blocks(
     if !out.iter().any(|(editorial, s)| !editorial && !s.is_empty()) {
         return Err("No verified decoded text to reconstruct".into());
     }
+    if word && !doc["cfb_recovery"]["inferred_header"].is_null() {
+        out.insert(0, (true, language.text(
+            "FEJLÉC NÉLKÜLI SZERKEZETI SZÖVEGJELÖLT: a tároló fejléce olvashatatlan. Az 512 bájtos, egy-FAT-os elrendezés következtetés; a mini-FAT és a teljes eredeti tárolóazonosság nem igazolt. Csak a külön ellenőrzött adatfolyamok megfigyelt szövege szerepel, nem javított eredeti dokumentum.",
+            "HEADERLESS STRUCTURAL TEXT CANDIDATE: the compound header is unavailable. The 512-byte single-FAT geometry is inferred; mini-FAT and whole original container identity remain unverified. Only observed text from independently checked streams is included, not a repaired original document.",
+        ).into()));
+    }
     if word && !doc["legacy_text"].is_null() {
         out.insert(0, (true, language.text(
             "Word6 szöveges értelmezés a rögzített karakterkészlet vagy területi beállítás alapján. A betűtípusonkénti szimbólumok és az eredeti formázás/jelentés nem igazolt; részletek a word-text.json fájlban.",

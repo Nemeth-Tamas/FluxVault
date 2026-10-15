@@ -182,6 +182,8 @@ No floppy, host tool or project writer is opened. Missing/conflicting placeholde
 
 ## Saved damage and file tracing
 
+`recovery documents N` now also produces warned readable/editable text candidates for eligible small Word files with a wholly unreadable compound header but uniquely corroborated regular-stream structures. Normal `process` uses the same fallback. It does not repair a header, choose disputed bytes or make a complete-DOC claim; HU/default and `--language en` editions retain the inference warning. [Bounds and real disk-136 result](../recovery/DEEP_RECOVERY.md#unavailable-compound-headers).
+
 `fv recovery impact all` inspects the whole saved batch: summary, per-disk table and known affected file names. `--json` includes complete per-disk impact details; progress stays on stderr. One preferred/default image per discovered label; no global `--attempt`. Refused/legacy/raw-only disks remain visible, not silently clean. Run after background processing is idle. Exit 2 may carry a useful batch report with refused rows; exit 3 indicates attention without refusals. This is not declared-range or customer-completeness certification.
 
 `fv recovery impact 59` maps missing/disputed sectors to filesystem regions and known live file dependencies. `fv recovery trace 59 'FOLDER\LETTER.DOC'` traces logical file bytes, holes, metadata LBAs and saved origins. Both accept `--attempt N` and `--json`, use native saved evidence only, and write nothing. Unknown directory ownership stays unknown; confirmed USB/GW conflicts stay attention. [Examples, scope and exit codes](../recovery/EVIDENCE_IMPACT.md).

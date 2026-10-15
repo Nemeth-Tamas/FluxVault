@@ -1,5 +1,7 @@
 # FluxVault
 
+Saved-image recovery can now salvage supported small Word documents even when their entire compound header is unreadable. Disk 136's previously refused `level1.doc` yields all **1,744 main-text positions**, with separate Hungarian/English readable and editable editions and explicit structural-inference warnings. [Scope and evidence](docs/recovery/DEEP_RECOVERY.md#unavailable-compound-headers).
+
 Recovered Office files no longer need the right filename extension: supported compound Word/Excel contents choose the conversion filters automatically. The saved batch gained DOCX/PDF editions for **28 previously skipped sources** (`.ole`, `.wbk`, `.tmp`); password-protected files get an explicit explanation instead of wasted import retries. Originals keep their names and bytes. [Content routing and limits](docs/recovery/DEEP_RECOVERY.md#office-conversion-by-content).
 
 Saved older Windows Word6 documents now get separate readable/editable text copies through the existing `fv recovery documents N` path. Tested on seven real documents from disk 133, with disputed bytes excluded and charset/font limitations visible. [Word6 support and limits](docs/recovery/DEEP_RECOVERY.md#windows-word6-text-copies).
