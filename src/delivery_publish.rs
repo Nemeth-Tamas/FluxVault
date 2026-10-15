@@ -15,6 +15,10 @@ use zip::ZipArchive;
 const HISTORY: &str = ".fluxvault-delivery";
 const READY: &str = "DELIVERY_READY.json";
 const REPORT_LIMIT: u64 = 64 * 1024 * 1024;
+#[path = "delivery_verify.rs"]
+mod verification;
+pub(crate) use verification::verify_ready;
+type ArchivedArtifact = (String, Vec<u8>, Option<String>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -250,6 +254,33 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
     }
     let mut zip = ZipArchive::new(File::open(&source).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
+    let contents = archived_contents(&mut zip, &sha, &archive_name)?;
+    let r = Receipt {
+        schema: 1,
+        project: root.clone(),
+        source_zip: source.clone(),
+        archive_sha256: sha.clone(),
+        archive: archive_name,
+        archive_bytes: fs::metadata(&source).map_err(|e| e.to_string())?.len(),
+        reports: contents
+            .iter()
+            .map(|(name, bytes, member)| Artifact {
+                name: name.clone(),
+                bytes: bytes.len() as u64,
+                sha256: hash(bytes),
+                member: member.clone(),
+            })
+            .collect(),
+        customer_delivery_certified: false,
+    };
+    publish_contents(package, &root, &source, &sha, r, contents)
+}
+
+fn archived_contents(
+    zip: &mut ZipArchive<File>,
+    sha: &str,
+    archive_name: &str,
+) -> Result<Vec<ArchivedArtifact>, String> {
     if zip.len() > 100_000 {
         return Err("Handoff archive entry limit exceeded".into());
     }
@@ -267,11 +298,11 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
     let mut contents = Vec::new();
     let short = &sha[..16];
     if names.contains("reports/finalreportlatest.json") {
-        let binding_bytes = member(&mut zip, "Reports/FinalReportLatest.json", 64 * 1024)?;
+        let binding_bytes = member(zip, "Reports/FinalReportLatest.json", 64 * 1024)?;
         let binding = final_report::Binding::parse(&binding_bytes)?;
         for (file, expected) in &binding.artifacts_sha256 {
             let path = format!("Reports/{}/{file}", binding.directory);
-            let bytes = member(&mut zip, &path, REPORT_LIMIT)?;
+            let bytes = member(zip, &path, REPORT_LIMIT)?;
             if hash(&bytes) != expected.to_ascii_lowercase() {
                 return Err("Archived final-report hash mismatch".into());
             }
@@ -303,7 +334,7 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
                 })
             })
             .ok_or("Missing raw-only report")?;
-        let bytes = member(&mut zip, &actual, REPORT_LIMIT)?;
+        let bytes = member(zip, &actual, REPORT_LIMIT)?;
         let _: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         contents.push((
             format!("FINAL_RawEvidence-{short}.json"),
@@ -317,32 +348,25 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
         checksum.into_bytes(),
         None,
     ));
-    let r = Receipt {
-        schema: 1,
-        project: root.clone(),
-        source_zip: source.clone(),
-        archive_sha256: sha.clone(),
-        archive: archive_name,
-        archive_bytes: fs::metadata(&source).map_err(|e| e.to_string())?.len(),
-        reports: contents
-            .iter()
-            .map(|(name, bytes, member)| Artifact {
-                name: name.clone(),
-                bytes: bytes.len() as u64,
-                sha256: hash(bytes),
-                member: member.clone(),
-            })
-            .collect(),
-        customer_delivery_certified: false,
-    };
+    Ok(contents)
+}
+
+fn publish_contents(
+    package: &mut Value,
+    root: &Path,
+    source: &Path,
+    sha: &str,
+    r: Receipt,
+    contents: Vec<ArchivedArtifact>,
+) -> Result<(), String> {
     // Validate an existing ready pointer before producing any new output.
     let pointer = root.join(READY);
     if fs::symlink_metadata(&pointer).is_ok() {
-        let old = load(&pointer, &root)?;
+        let old = load(&pointer, root)?;
         let history = root
             .join(HISTORY)
             .join(format!("{}.json", old.archive_sha256));
-        if old != load(&history, &root)? {
+        if old != load(&history, root)? {
             return Err("Unowned/changed ready pointer; preserve it and inspect manually".into());
         }
     }
@@ -355,7 +379,7 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
     checked(&history, true)?;
     let intent = history.join(format!("{sha}.json"));
     if fs::symlink_metadata(&intent).is_ok() {
-        if load(&intent, &root)? != r {
+        if load(&intent, root)? != r {
             return Err("Handoff intent binding changed".into());
         }
     } else {
@@ -375,10 +399,10 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
     let archive_target = root.join(&r.archive);
     eprintln!("HANDOFF / checking or copying the ready ZIP into the project root...");
     if fs::symlink_metadata(&archive_target).is_ok() {
-        verify(&archive_target, r.archive_bytes, &sha)?;
+        verify(&archive_target, r.archive_bytes, sha)?;
     } else {
         let stage = history.join(format!("{}.partial.zip", nonce()));
-        let mut input = File::open(&source).map_err(|e| e.to_string())?;
+        let mut input = File::open(source).map_err(|e| e.to_string())?;
         let mut output = OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -407,7 +431,7 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
         }
         output.sync_all().map_err(|e| e.to_string())?;
         drop(output);
-        verify(&stage, r.archive_bytes, &sha)?;
+        verify(&stage, r.archive_bytes, sha)?;
         promote(&stage, &archive_target)?;
     }
     for ((_, bytes, _), artifact) in contents.iter().zip(&r.reports) {
@@ -424,8 +448,8 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
     }
     // A ready pointer is the commit marker, never publish it before all copies.
     eprintln!("HANDOFF / final hash checks and ready receipt...");
-    verify(&source, r.archive_bytes, &sha)?;
-    verify(&archive_target, r.archive_bytes, &sha)?;
+    verify(source, r.archive_bytes, sha)?;
+    verify(&archive_target, r.archive_bytes, sha)?;
     for a in &r.reports {
         crate::cancellation::check()?;
         verify(&root.join(&a.name), a.bytes, &a.sha256)?;
@@ -437,8 +461,8 @@ pub(crate) fn publish(project: &ProjectState, package: &mut Value) -> Result<(),
     )?;
     crate::cancellation::check()?;
     if fs::symlink_metadata(&pointer).is_ok() {
-        let old = load(&pointer, &root)?;
-        if old != load(&history.join(format!("{}.json", old.archive_sha256)), &root)? {
+        let old = load(&pointer, root)?;
+        if old != load(&history.join(format!("{}.json", old.archive_sha256)), root)? {
             return Err("Ready pointer changed before publication".into());
         }
         fs::rename(&stage, &pointer).map_err(|e| e.to_string())?;

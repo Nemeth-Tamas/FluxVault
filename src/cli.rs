@@ -206,6 +206,7 @@ Usage:
   fluxvault package build --destination PATH [--keep-staging] [--project PATH]
                                     Create and verify an archival ZIP
   fluxvault package publish         Copy verified finished ZIP/final reports beside project.json; no tools/media
+  fluxvault package verify          Read-only integrity check of the published ZIP and front reports
   fluxvault --help                  Show this help
   fluxvault completions powershell Generate static PowerShell 7+ Tab completion
 Options:
@@ -1215,9 +1216,11 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     let workstation_write = matches!(
         positional.first().map(String::as_str),
-        Some("process" | "extract" | "files" | "audit" | "report" | "package" | "acquire")
-    ) || (positional.first().is_some_and(|s| s == "conversion")
-        && positional.get(1).is_some_and(|s| s != "issues"))
+        Some("process" | "extract" | "files" | "audit" | "report" | "acquire")
+    ) || (positional.first().is_some_and(|s| s == "package")
+        && positional != ["package", "verify"])
+        || (positional.first().is_some_and(|s| s == "conversion")
+            && positional.get(1).is_some_and(|s| s != "issues"))
         || (positional.first().is_some_and(|s| s == "recovery")
             && positional
                 .get(1)
@@ -3021,6 +3024,37 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 json_output,
                 report_language,
             );
+        }
+        Some("package") if positional == ["package", "verify"] => {
+            let mut flags = args.iter();
+            while let Some(arg) = flags.next() {
+                match arg.as_str() {
+                    "--project" => {
+                        flags.next();
+                    }
+                    "package" | "verify" | "--json" => {}
+                    _ => return Err("package verify accepts only --project PATH and --json".into()),
+                }
+            }
+            let root = resolve_project_root(cwd, project_override.as_deref())?;
+            let result = crate::delivery_publish::verify_ready(
+                &ProjectState::open_without_session(root)?,
+                &|s| eprintln!("{s}"),
+            )?;
+            return Ok(CliResponse {
+                exit_code: 0,
+                output: if json_output {
+                    result.to_string()
+                } else {
+                    format!(
+                        "PUBLISHED SNAPSHOT INTEGRITY VERIFIED\nZIP: {}\nSHA-256: {}\nFront reports verified: {}\n{}",
+                        result["archive"].as_str().unwrap_or(""),
+                        result["archive_sha256"].as_str().unwrap_or(""),
+                        result["reports_verified"],
+                        result["warning"].as_str().unwrap_or("")
+                    )
+                },
+            });
         }
         Some("package") if positional == ["package", "publish"] && destination.is_none() => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;

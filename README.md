@@ -1,5 +1,7 @@
 # FluxVault
 
+Latest v1 finishing checkpoint: the full 136-image saved-only replay completed recovery, real Office conversion (**664/665 jobs**), reports and a verified ready ZIP. New conversion receipts survive a forced exit before batch state is saved. `fv package verify` checks a published ZIP/front-report snapshot without changing it. [Measured results and restart guarantees](docs/testing/V1_FINISHING_ACCEPTANCE.md).
+
 Saved legacy images now yield separate, hash/extent-bound [snapshot candidates and damaged-file copies](docs/recovery/SNAPSHOT_CANDIDATES.md) automatically during extraction. Missing/contradictory maps stay unknown; known data holes retain their original offsets and saved filler bytes, with exact warnings. These remain forensic attention, not ordinary verified files or automatic conversions.
 
 **Read floppies. Keep the evidence. Recover files. Prepare a checked customer archive.**

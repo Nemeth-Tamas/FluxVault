@@ -46,7 +46,9 @@ fn main() {
             source.file_stem().unwrap().to_string_lossy(),
             extension
         ));
-        if env::var_os("MOCK_GW_OFFICE_TREE").is_some() {
+        if env::var_os("MOCK_GW_OFFICE_TREE").is_some()
+            || env::var("MOCK_GW_OFFICE_HANG_FORMAT").is_ok_and(|f| f == extension)
+        {
             mock_tree(Some(&target));
         }
         if extension == "pdf" {

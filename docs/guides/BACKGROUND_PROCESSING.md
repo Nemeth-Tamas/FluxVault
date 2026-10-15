@@ -24,7 +24,7 @@ fv status
 
 `processing status` shows the recorded stage, pending/failed jobs, attention jobs and whether a processing owner is actually active. A stale stage after interruption is explicitly flagged. Add `--json` for source bindings/details. These commands do not check tools or access hardware.
 
-While processing owns the project, another extraction/conversion/audit/report/package command is refused. Read-only status remains available. This prevents two processes from racing shared delivery files or reports. Use final reconciled reports after feeding/draining ends: intermediate project audits may include newly arrived images not processed yet. [Finalization](FINALIZATION.md) then refreshes saved processing/reports and verifies an archive under one continuous owner; optional `--allow-attention` retains partial-result warnings and exit 3. `finalize status`/`resume` need no media. Automatic endpoint-triggered packaging remains planned.
+While processing owns the project, another extraction/conversion/audit/report/package command is refused. Read-only status remains available. This prevents two processes from racing shared delivery files or reports. Use final reconciled reports after feeding/draining ends: intermediate project audits may include newly arrived images not processed yet. [Finalization](FINALIZATION.md) then refreshes saved processing/reports and verifies an archive under one continuous owner; optional `--allow-attention` retains partial-result warnings and exit 3. `finalize status`/`resume` need no media. `production start/resume` already invokes this finishing chain automatically at its checked endpoint.
 
 ## After interruption, without a floppy
 
@@ -38,6 +38,14 @@ The first drains pending/failed image jobs and performs a final whole-project re
 Alternatively, continue the same `fv scan` command: durable scan history re-enqueues verified completed results. Custody confirmation remains necessary for an interrupted physical read. Do not edit queues or reset numbering to recover from an error.
 
 Closing/killing the process does not erase jobs. Graceful feeding completion drains them. On an acquisition error, already-running saved-file work can finish before exit; not-yet-started jobs remain durable. Immediate coordinated cancellation of all child tools is a separate acceptance item.
+
+## Conversion restart checkpoints
+
+New Office outputs have an individual, synced publication receipt **before** appearing at their final path. Each receipt binds the project, exact source path/hash, output path/hash, format and filter. On restart, unchanged sealed outputs can be restored/reused even if the process ended before the whole-batch `ConversionState.json` was saved. Existing older aggregate source/output bindings remain supported; merely finding a valid-looking DOCX/PDF is never sufficient to adopt it.
+
+LibreOffice reads a private hash-checked input copy. Changed source bytes, changed output/receipt/payload bytes, differing settings and unowned destination collisions refuse reuse; nothing is silently overwritten. Unsealed scratch is retained but not treated as a completed output. These checks establish byte identity and structural validation, not document meaning or full original content.
+
+Private sealed payloads/receipts stay under `Reports/.fluxvault-conversion-output` for restart and are excluded from customer ZIPs. Keep them with the working project; they cost roughly another copy of successful modern/PDF outputs. Admission includes these copies and a bounded independent publication copy. There is no automatic recovery-cache deletion in this change. Source and individual output snapshots are bounded to 128 MiB. [Crash-test scope](../testing/V1_FINISHING_ACCEPTANCE.md).
 
 ## Worker settings
 

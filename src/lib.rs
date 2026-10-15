@@ -8,6 +8,7 @@ pub mod cli;
 pub mod composite;
 pub mod conversion;
 mod conversion_lock;
+mod conversion_publication;
 pub mod conversion_run;
 mod customer_language;
 mod delivery_maintenance;

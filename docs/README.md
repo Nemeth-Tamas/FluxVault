@@ -56,6 +56,7 @@ The saved-batch review records results; pilot/runbook documents also retain earl
 - [2026-10-13 clean/DD/damaged/program and USB metadata checks](testing/HARDWARE_20261013.md)
 - [2026-10-13 measured physical-read/background overlap and host input isolation](testing/HARDWARE_OVERLAP_20261013.md)
 - [Completed capture/decode publication restart and refusal tests](testing/CAPTURE_PUBLICATION_RESTART.md)
+- [136-image finishing, Office crash/resume and ready-ZIP verification](testing/V1_FINISHING_ACCEPTANCE.md)
 
 ## Development and historical handoffs
 

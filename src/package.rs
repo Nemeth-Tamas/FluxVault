@@ -441,6 +441,7 @@ fn should_exclude(path: &Path) -> bool {
         Component::Normal(name) => {
             let name = name.to_string_lossy();
             name.eq_ignore_ascii_case("System Volume Information")
+                || name.eq_ignore_ascii_case(".fluxvault-conversion-output")
                 || name.eq_ignore_ascii_case("$RECYCLE.BIN")
                 || name.starts_with(".tmp-fragments-")
                 || name.starts_with(".tmp-word-text-")
@@ -925,6 +926,16 @@ mod tests {
             b"internal state",
         )
         .unwrap();
+        let private_office =
+            project.join("Reports/.fluxvault-conversion-output/binding/generation");
+        fs::create_dir_all(&private_office).unwrap();
+        for name in ["payload", "receipt.json", "receipt.partial.json"] {
+            fs::write(
+                private_office.join(name),
+                b"private Office restart evidence",
+            )
+            .unwrap();
+        }
         fs::write(
             project
                 .join("Reports")
@@ -1014,6 +1025,14 @@ mod tests {
             zip.by_name("Reports/ConversionHistory/ConversionState-test.json")
                 .is_err()
         );
+        for name in ["payload", "receipt.json", "receipt.partial.json"] {
+            assert!(
+                zip.by_name(&format!(
+                    "Reports/.fluxvault-conversion-output/binding/generation/{name}"
+                ))
+                .is_err()
+            );
+        }
         assert!(
             zip.by_name("Extracted/001/System Volume Information/IndexerVolumeGuid")
                 .is_err()

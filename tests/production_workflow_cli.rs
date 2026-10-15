@@ -192,6 +192,32 @@ fn production_archives_at_endpoint_and_repeated_start_never_reads_again() {
             .iter()
             .any(|s| s == "--no-verify")
     );
+    let protected = [
+        "project.json",
+        ".fluxvault-run-control.json",
+        "DELIVERY_READY.json",
+        "Logs/external-tools.jsonl",
+    ]
+    .map(|p| (p, fs::read(f.project.root().join(p)).unwrap()));
+    let checked = f.run(
+        &["package", "verify", "--json"],
+        b"",
+        &[("MOCK_GW_DEVICE_NOT_FOUND", "1")],
+    );
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let checked = value(&checked);
+    assert_eq!(checked["integrity_verified"], true);
+    assert_eq!(checked["reports_verified"], 11);
+    assert_eq!(checked["files_written"], 0);
+    assert_eq!(checked["host_tools_invoked"], false);
+    assert_eq!(checked["physical_media_access"], false);
+    for (p, bytes) in protected {
+        assert_eq!(fs::read(f.project.root().join(p)).unwrap(), bytes, "{p}");
+    }
 }
 #[test]
 fn early_quit_retains_feed_state_and_does_not_archive_then_resumes() {

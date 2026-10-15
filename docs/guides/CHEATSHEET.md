@@ -112,6 +112,8 @@ Destination must exist outside the project, never on a floppy. Default finalize 
 
 ### Already finished on an older version?
 
+To check an already-published ready ZIP and its front reports without changing anything, run `fv package verify`. Success confirms that snapshot's integrity, not complete recovery; no floppy or tools needed. It does not repair missing copies or include newer project work.
+
 From its project folder, `fv package publish` checks/copies the saved ZIP and its final reports into the project root, with no rescan, conversion or ZIP rebuilding. Copies cost extra storage. For newly changed project content, use a new `finalize` instead.
 
 ### Optional: bring in an old script ZIP

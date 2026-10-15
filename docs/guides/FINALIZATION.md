@@ -27,6 +27,17 @@ fv package publish
 
 This verifies/copies the recorded ZIP and its **embedded** final reports without media, tools, extraction, conversion or archive rebuilding. It does not refresh an old archive to match newer project changes: run a new finalization for that. Linked paths, changed archive/copies, foreign pointers and unowned filename collisions refuse; partial publication stays resumable and only all-verified copies receive a ready commit receipt. Workstation filesystems must support safe non-replacing hard-link promotion for staged copies (tested on Windows NTFS); this never links a handoff copy to its original archive/evidence.
 
+## Check an existing handoff without changing it
+
+```powershell
+fv package verify
+fv package verify --project 'C:\full\project\path' --json
+```
+
+This read-only check rehashes the ready ZIP beside `project.json`, replays its embedded final-report inventory, and checks the front-and-center reports, checksum and matching ownership receipt. It does not create locks/files, repair a missing copy, invoke tools, inspect a floppy or require the outside-project original ZIP. Existing writer locks are respected; wait for processing/publication to finish before checking.
+
+Exit **0** confirms the published snapshot's integrity only. It does not clear attention, certify damaged documents, compare with newer project files or refresh the archived edition. A missing/changed/foreign copy returns an error without replacing it. Use `package publish` for interrupted handoff copying; use a new finalization for newer project contents.
+
 ## Archive partial results explicitly
 
 If you want a complete archival snapshot of what was recovered, including limitations:

@@ -1,6 +1,8 @@
 use super::*;
 use crate::package::{PackageRequest, build_package};
+use std::sync::atomic::{AtomicU64, Ordering};
 use zip::{ZipWriter, write::SimpleFileOptions};
+static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
@@ -9,7 +11,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!("fv-root-delivery-{}", nonce()));
+        let root = std::env::temp_dir().join(format!(
+            "fv-root-delivery-{}-{}",
+            nonce(),
+            FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
         let project = ProjectState::create_without_session(root.join("project")).unwrap();
         let output = root.join("archives");
         fs::create_dir(&output).unwrap();
@@ -87,8 +94,187 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap();
+        if let Err(error) = fs::remove_dir_all(&self.root) {
+            if std::thread::panicking() {
+                eprintln!("Delivery fixture cleanup failed: {error}");
+            } else {
+                panic!("Delivery fixture cleanup failed: {error}");
+            }
+        }
     }
+}
+
+fn inventory(root: &Path) -> std::collections::BTreeMap<PathBuf, String> {
+    let mut found = std::collections::BTreeMap::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let value = if path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".fluxvault-")
+                    && path.extension().is_some_and(|e| e == "lock")
+                {
+                    assert_eq!(fs::metadata(&path).unwrap().len(), 0);
+                    "zero-byte lock".to_string()
+                } else {
+                    crate::conversion::sha256_file(&path).unwrap()
+                };
+                found.insert(path.clone(), value);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn published_snapshot_verification_is_read_only_and_independent_of_external_archive() {
+    let mut f = Fixture::new();
+    f.publish().unwrap();
+    fs::rename(
+        f.package["zip"].as_str().unwrap(),
+        f.root.join("stored-original.zip"),
+    )
+    .unwrap();
+    let before = inventory(&f.root);
+    for _ in 0..2 {
+        let v = verify_ready(&f.project, &|_| {}).unwrap();
+        assert_eq!(v["integrity_verified"], true);
+        assert_eq!(v["reports_verified"], 11);
+        assert_eq!(v["files_written"], 0);
+        assert_eq!(v["source_archive_required"], false);
+        assert_eq!(v["current_project_reprocessed"], false);
+        assert_eq!(v["customer_delivery_certified"], false);
+    }
+    assert_eq!(inventory(&f.root), before);
+}
+
+#[test]
+fn changed_or_missing_published_copies_refuse_without_any_repair_or_writes() {
+    for case in ["zip", "report", "checksum", "missing"] {
+        let mut f = Fixture::new();
+        f.publish().unwrap();
+        let root = f.project.root();
+        let r = load(&root.join(READY), &root.canonicalize().unwrap()).unwrap();
+        let path = match case {
+            "zip" => f.root_copy(),
+            "checksum" => root.join(
+                r.reports
+                    .iter()
+                    .find(|a| a.member.is_none())
+                    .unwrap()
+                    .name
+                    .clone(),
+            ),
+            _ => root.join(&r.reports[0].name),
+        };
+        if case == "missing" {
+            fs::remove_file(&path).unwrap();
+        } else {
+            fs::write(&path, b"operator changed bytes").unwrap();
+        }
+        let before = inventory(&f.root);
+        assert!(verify_ready(&f.project, &|_| {}).is_err(), "{case}");
+        assert_eq!(inventory(&f.root), before, "{case}");
+    }
+}
+
+#[test]
+fn even_matching_ready_and_ledger_cannot_hide_an_omitted_archive_report() {
+    let mut f = Fixture::new();
+    f.publish().unwrap();
+    let root = f.project.root().canonicalize().unwrap();
+    let mut r = load(&root.join(READY), &root).unwrap();
+    r.reports.remove(0);
+    let bytes = serde_json::to_vec(&r).unwrap();
+    fs::write(root.join(READY), &bytes).unwrap();
+    fs::write(
+        root.join(HISTORY)
+            .join(format!("{}.json", r.archive_sha256)),
+        bytes,
+    )
+    .unwrap();
+    let before = inventory(&f.root);
+    assert!(
+        verify_ready(&f.project, &|_| {})
+            .unwrap_err()
+            .contains("inventory")
+    );
+    assert_eq!(inventory(&f.root), before);
+}
+
+#[test]
+fn active_writer_and_midcheck_report_changes_refuse_snapshot_verification() {
+    let mut f = Fixture::new();
+    f.publish().unwrap();
+    let owner = crate::project_work::reserve(f.project.root()).unwrap();
+    let before = inventory(&f.root);
+    assert!(
+        verify_ready(&f.project, &|_| {})
+            .unwrap_err()
+            .contains("busy")
+    );
+    assert_eq!(inventory(&f.root), before);
+    drop(owner);
+    let root = f.project.root().canonicalize().unwrap();
+    let r = load(&root.join(READY), &root).unwrap();
+    let target = root.join(&r.reports[0].name);
+    assert!(
+        verify_ready(&f.project, &|s| {
+            if s.contains("rechecking") {
+                fs::write(&target, b"changed during verification").unwrap();
+            }
+        })
+        .is_err()
+    );
+    assert_eq!(fs::read(target).unwrap(), b"changed during verification");
+}
+
+#[test]
+fn verify_cli_rejects_mutating_flags_and_creates_nothing_for_unpublished_project() {
+    let mut f = Fixture::new();
+    let before = inventory(&f.root);
+    assert!(
+        crate::cli::run(
+            &["package".into(), "verify".into(), "--json".into()],
+            f.project.root()
+        )
+        .is_err()
+    );
+    assert_eq!(inventory(&f.root), before);
+    f.publish().unwrap();
+    let before = inventory(&f.root);
+    let response = crate::cli::run(
+        &["package".into(), "verify".into(), "--json".into()],
+        f.project.root(),
+    )
+    .unwrap();
+    assert_eq!(response.exit_code, 0);
+    assert_eq!(
+        serde_json::from_str::<Value>(&response.output).unwrap()["files_written"],
+        0
+    );
+    for flag in [
+        "--allow-attention",
+        "--keep-staging",
+        "--no-verify",
+        "--usb",
+    ] {
+        assert!(
+            crate::cli::run(
+                &["package".into(), "verify".into(), flag.into()],
+                f.project.root()
+            )
+            .is_err(),
+            "{flag}"
+        );
+    }
+    assert_eq!(inventory(&f.root), before);
 }
 
 #[test]
@@ -275,6 +461,12 @@ fn raw_only_archive_has_explicit_report_not_invented_office_outputs() {
             .unwrap()
             .contains("FINAL_RawEvidence")
     );
+    let before = inventory(&f.root);
+    let checked = verify_ready(&f.project, &|_| {}).unwrap();
+    assert_eq!(checked["reports_verified"], 1);
+    assert_eq!(checked["customer_delivery_certified"], false);
+    assert_eq!(checked["files_written"], 0);
+    assert_eq!(inventory(&f.root), before);
 }
 
 #[test]

@@ -306,6 +306,15 @@ SAVED CONVERSION STATE
     bindings. Changed outputs, changed sources and malformed snapshots are
     still refused; history is internal, not customer delivery content.
 
+    New Office outputs also seal individual source/path/filter/output-hash
+    receipts before publication. A restart can reuse them even before whole-batch
+    state was saved. Office reads a private verified source copy. Unsealed
+    scratch and changed/unowned outputs are never silently adopted or overwritten.
+    Reports/.fluxvault-conversion-output retains private restart payloads;
+    these cost extra working storage but are excluded from customer archives.
+    Keep them with the project. Individual source/output snapshots are bounded
+    to 128 MiB. Byte/structural checks are not document-content certification.
+
 CAPTURE PACKING AND FORMAT DISCOVERY
 
     storage benchmark N uses saved raw or transparently materialized packed
@@ -455,6 +464,7 @@ INSTALLATION AND COMMAND CATALOG
         fluxvault package build --destination C:\CustomerPackages
         fluxvault package build --destination C:\CustomerPackages --keep-staging
         fluxvault package publish
+        fluxvault package verify
         fluxvault finalize --destination C:\CustomerPackages
         fluxvault finalize --destination C:\CustomerPackages --allow-attention
         fluxvault finalize status
@@ -1053,6 +1063,13 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     receipt without media, tools, conversion or ZIP rebuilding. Edited/unowned
     targets refuse; older archive/report editions remain. This costs extra ZIP
     storage and does not refresh old archives to match new project content.
+
+    package verify [--project PATH] [--json] is a read-only check of that ready
+    root ZIP, archived report generation, front reports, checksum and receipt.
+    No files/locks are created, tools invoked or media read. The outside-project
+    ZIP is not required. A busy writer or missing/changed copy refuses. Exit 0
+    confirms snapshot integrity only, not intact documents or newer project
+    completeness. Use publish for interrupted copies, a new finalize for changes.
 
     The CLI has guided read-only acquisition, bounded IBM discovery/raw-only
     exception continuation, native intact-chain/layout recovery and coalesced

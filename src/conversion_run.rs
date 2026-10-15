@@ -455,12 +455,24 @@ pub(crate) fn run_conversion_mode(
                 )
             } else {
                 (
-                    inspect_without_conversion(
+                    inspect_bound_without_conversion(
+                        request,
+                        job,
                         previous.map(|row| &row.modern),
                         &job.modern_path,
                         &job.modern_format.to_ascii_lowercase(),
+                        &job.modern_filter,
+                        &notice,
                     ),
-                    inspect_without_conversion(previous.map(|row| &row.pdf), &job.pdf_path, "pdf"),
+                    inspect_bound_without_conversion(
+                        request,
+                        job,
+                        previous.map(|row| &row.pdf),
+                        &job.pdf_path,
+                        "pdf",
+                        &job.pdf_filter,
+                        &notice,
+                    ),
                 )
             };
             JobResult {
@@ -661,6 +673,35 @@ fn compatible_previous(
     Ok(bound)
 }
 
+fn inspect_bound_without_conversion(
+    request: &ConversionRequest,
+    job: &ConversionJob,
+    previous: Option<&OutputResult>,
+    target: &Path,
+    extension: &str,
+    filter: &str,
+    stage: &impl Fn(&str),
+) -> OutputResult {
+    match crate::conversion_publication::context(
+        &request.planning.reports_directory,
+        job,
+        target,
+        extension,
+        filter,
+    )
+    .and_then(|context| context.replay_with_stage(stage))
+    {
+        Ok(Some(sha)) => OutputResult {
+            state: OutputState::Reused,
+            detail: "Replayed durable per-output source/hash publication receipt".into(),
+            retryable: false,
+            retry_count: 0,
+            output_sha256: Some(sha),
+        },
+        Ok(None) => inspect_without_conversion(previous, target, extension),
+        Err(error) => failure(error),
+    }
+}
 fn inspect_without_conversion(
     previous: Option<&OutputResult>,
     target: &Path,
@@ -853,6 +894,29 @@ fn convert_output(
     previous: Option<&OutputResult>,
     stage: &impl Fn(&str),
 ) -> OutputResult {
+    let publication = match crate::conversion_publication::context(
+        &request.planning.reports_directory,
+        job,
+        target,
+        extension,
+        filter,
+    ) {
+        Ok(context) => context,
+        Err(error) => return failure(error),
+    };
+    match publication.replay_with_stage(stage) {
+        Ok(Some(sha)) => {
+            return OutputResult {
+                state: OutputState::Reused,
+                detail: "Replayed durable per-output source/hash publication receipt".into(),
+                retryable: false,
+                retry_count: 0,
+                output_sha256: Some(sha),
+            };
+        }
+        Ok(None) => {}
+        Err(error) => return failure(error),
+    }
     match validate_output(target, extension) {
         Ok(true) => return reuse_if_bound(previous, target),
         Ok(false) if target.exists() => {
@@ -869,8 +933,13 @@ fn convert_output(
         Ok(info) => info.len(),
         Err(error) => return failure(format!("Cannot estimate conversion source: {error}")),
     };
-    let reserve = source_bytes
-        .saturating_mul(4)
+    // Keep admission for the private source, host output, sealed recovery copy
+    // and independent published copy. Never nest permits while Office is running.
+    let project_reserve = crate::conversion_publication::LIMIT
+        .saturating_mul(2)
+        .saturating_add(64 * crate::resource_budget::MIB);
+    let temp_reserve = source_bytes
+        .saturating_add(crate::conversion_publication::LIMIT)
         .saturating_add(64 * crate::resource_budget::MIB);
     let temp = std::env::temp_dir();
     // Reuse needs no admission. Wait before scratch creation and before the
@@ -885,9 +954,9 @@ fn convert_output(
         &[
             (
                 target.parent().unwrap_or(&request.planning.converted_root),
-                reserve,
+                project_reserve,
             ),
-            (&temp, reserve),
+            (&temp, temp_reserve),
         ],
         stage,
     ) {
@@ -911,6 +980,14 @@ fn convert_output(
             .map_err(|error| format!("Temporary output directory error: {error}"))?;
         fs::create_dir(&profile_directory)
             .map_err(|error| format!("Temporary LibreOffice profile error: {error}"))?;
+        let input_directory = root.join("input");
+        fs::create_dir(&input_directory).map_err(|e| e.to_string())?;
+        let private_source = input_directory.join(
+            job.source_path
+                .file_name()
+                .ok_or("Office source has no filename")?,
+        );
+        publication.snapshot_source(&private_source)?;
         let stdout_path = root.join("stdout.txt");
         let stderr_path = root.join("stderr.txt");
         let stdout = File::create(&stdout_path)
@@ -928,7 +1005,7 @@ fn convert_output(
             format!("{extension}:{filter}"),
             "--outdir".to_owned(),
             output_directory.display().to_string(),
-            job.source_path.display().to_string(),
+            private_source.display().to_string(),
         ];
         let executable = external_tools::libreoffice_console_host(&request.libreoffice_executable);
         let started_unix_ms = unix_ms();
@@ -1035,13 +1112,7 @@ fn convert_output(
                 target.display()
             )));
         }
-        let output_sha256 = conversion::sha256_file(&made)?;
-        fs::rename(&made, target).map_err(|error| {
-            format!(
-                "Cannot publish validated conversion output {}: {error}",
-                target.display()
-            )
-        })?;
+        let output_sha256 = publication.publish(&made, &|_| Ok(()))?;
         Ok(OutputResult {
             state: OutputState::Ok,
             detail: "Integrity validation passed".to_owned(),
