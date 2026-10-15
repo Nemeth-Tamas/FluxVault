@@ -975,18 +975,27 @@ NATIVE FILE RECOVERY FROM DAMAGED SAVED IMAGES
     tail association remains unproven; competing candidates are retained, not
     silently certified. recovery documents N [--json] invokes the same native
     service and focuses output on forensic Word main-text salvage. Word-text
-    engine 5 can also detect misnamed compound Word content and selectively map
+    engine 6 also supports narrow Windows Word6 text copies and retains misnamed
+    compound Word detection and selective mapping of
     surviving root Word/table regular/mini streams
     past unrelated missing CFB directory entries; missing required
     metadata/encryption/unsupported formats remain refusals. Exact CP/source
     extents, UTF-8 segments, generated offline readable HTML and the report
-    live under Recovery/NNN/attempt_NNN_word_text_v5_hu (or _en); v1-v4 evidence stays
+    live under Recovery/NNN/attempt_NNN_word_text_v6_hu (or _en); v1-v5 evidence stays
     intact. Human output prints edition paths; JSON returns
     readable_edition_paths, readable_editions, selectively_mapped_documents and
     engine_version. Editions show explicit gaps and do not execute field
     codes/macros or fetch assets. No original replaced/repaired, extra
     whole-file count or routine Office conversion. Exit 3, including reuse; no
     physical media/external tools. Full bounds and examples (docs/recovery/DEEP_RECOVERY.md).
+
+    Windows Word6 (0xa5dc/0x65) uses its validated embedded or contiguous text
+    map, without a Word97 table stream. Supported FIB charset/locale selects
+    Windows-1250/1252; the report and generated editions disclose that fallback
+    and unverified font-specific glyphs. Confirmed cross-reader conflicts are
+    excluded, never silently selected. Missing/undefined/control bytes become
+    explicit gaps. Hungarian/English output is automatic as above. Original DOCs
+    remain unchanged; unsupported locale, Mac/DBCS/wide and non-OLE Word refuse.
 
     The same recovery documents N command and automatic native processing also
     try damaged RTF readable prefixes, including misnamed RTF1 content.

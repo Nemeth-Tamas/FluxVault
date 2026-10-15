@@ -115,6 +115,12 @@ pub(crate) fn hungarian_markup(mut template: String) -> String {
             "Hiányos Word-fejléc — csak szöveges jelölt",
         ),
         (
+            "Legacy Word6 text interpretation",
+            "Régi Word6 szöveges értelmezés",
+        ),
+        ("FIB charset: ", "FIB-karakterkészlet: "),
+        (" / language: ", " / nyelv: "),
+        (
             "Unavailable extension count at Word stream byte ",
             "Nem olvasható bővítményszám a Word-adatfolyam következő bájtjánál: ",
         ),

@@ -2,6 +2,8 @@ use super::*;
 use std::io::Cursor;
 #[path = "document_cfb_tests.rs"]
 mod cfb_tests;
+#[path = "document_word6_tests.rs"]
+mod word6_tests;
 
 fn fixture(compressed: bool, mini: bool) -> (Vec<u8>, fat12::FileRecord, Vec<usize>) {
     let mut word = vec![0; 8192];

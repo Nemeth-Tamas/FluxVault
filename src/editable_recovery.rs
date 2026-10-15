@@ -227,6 +227,12 @@ fn blocks(
     if !out.iter().any(|(editorial, s)| !editorial && !s.is_empty()) {
         return Err("No verified decoded text to reconstruct".into());
     }
+    if word && !doc["legacy_text"].is_null() {
+        out.insert(0, (true, language.text(
+            "Word6 szöveges értelmezés a rögzített karakterkészlet vagy területi beállítás alapján. A betűtípusonkénti szimbólumok és az eredeti formázás/jelentés nem igazolt; részletek a word-text.json fájlban.",
+            "Word6 text interpretation using the recorded charset or locale fallback. Font-specific glyphs and original formatting/meaning remain unverified; see word-text.json.",
+        ).into()));
+    }
     if word
         && doc["main_characters"]
             .as_u64()

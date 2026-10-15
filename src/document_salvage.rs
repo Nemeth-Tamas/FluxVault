@@ -14,10 +14,12 @@ use std::{
 const MAX_CHARACTERS: usize = 200_000;
 const MAX_SEGMENTS: usize = 4096;
 const MAX_WORK: usize = 64 * 1024 * 1024;
-pub const ENGINE_VERSION: u32 = 5;
+pub const ENGINE_VERSION: u32 = 6;
 #[path = "document_cfb.rs"]
 mod cfb_recovery;
 pub use cfb_recovery::Evidence as CfbEvidence;
+#[path = "document_word6.rs"]
+mod legacy;
 #[path = "document_probe.rs"]
 mod probe;
 #[path = "document_recovery_html.rs"]
@@ -64,6 +66,16 @@ pub struct FibPrefixEvidence {
     pub warning: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LegacyTextEvidence {
+    pub fib_version: u16,
+    pub fib_charset: u16,
+    pub fib_language: u16,
+    pub code_page: u16,
+    pub encoding_basis: String,
+    pub font_overrides_interpreted: bool,
+    pub warning: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub parent: fat12::FileRecord,
     pub status: String,
@@ -87,6 +99,8 @@ pub struct Document {
     pub incomplete_fib: Option<FibPrefixEvidence>,
     #[serde(default)]
     pub content_detection: Option<String>,
+    #[serde(default)]
+    pub legacy_text: Option<LegacyTextEvidence>,
 }
 #[derive(Serialize, Deserialize)]
 struct Report {
@@ -99,6 +113,8 @@ struct Report {
     source_image: String,
     source_sha256: String,
     bad_lbas: Vec<u64>,
+    #[serde(default)]
+    excluded_cross_reader_conflicts: Vec<u64>,
     documents: Vec<Document>,
     limits_reached: bool,
     warning: String,
@@ -340,6 +356,11 @@ fn extract(
     parent: &fat12::FileRecord,
     bad: &BTreeSet<u64>,
 ) -> Result<Document, String> {
+    if parent.metadata_lbas.iter().any(|lba| bad.contains(lba)) {
+        return Err(
+            "Word parent name/allocation metadata touches missing or disputed sectors".into(),
+        );
+    }
     let mapping = parent_mapping(image, parent, bad)?;
     match extract_strict(&mapping.bytes, &mapping.sources, parent) {
         Ok(d) => Ok(d),
@@ -392,6 +413,10 @@ fn extract_strict(
     }
     trace.lock().unwrap().allow_holes = true;
     let word = stream(&mut compound, "/WordDocument", &trace, bytes, sources)?;
+    let prefix = known(&word, 0, 4)?;
+    if u16at(prefix, 0) == 0xa5dc && u16at(prefix, 2) == 0x65 {
+        return legacy::decode(parent, &word, metadata);
+    }
     let fib = known(&word, 0, 426)?;
     let name = if u16at(fib, 10) & 0x200 != 0 {
         "/1Table"
@@ -543,6 +568,7 @@ fn decode_streams(
         edition_refusal: None,
         incomplete_fib,
         content_detection: None,
+        legacy_text: None,
     };
     for i in 0..pieces {
         if cps[i] >= main {
@@ -704,34 +730,79 @@ pub(crate) fn preserve(
     if native.deleted.is_some() {
         return Ok(None);
     }
-    let bad = a.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
+    let mut bad = a.bad_lbas.iter().copied().collect::<BTreeSet<_>>();
+    let mut conflicts = Vec::new();
+    let metadata_path = source.with_extension("json");
+    if metadata_path.try_exists().map_err(|e| e.to_string())? {
+        let value: serde_json::Value =
+            serde_json::from_slice(&regular_read(&metadata_path)?).map_err(|e| e.to_string())?;
+        if value.get("read_conflicts").is_some_and(|v| !v.is_null()) {
+            let root = source
+                .parent()
+                .and_then(Path::parent)
+                .ok_or("Missing Word source project")?;
+            let project = crate::project::ProjectState::open_without_session(root.to_path_buf())?;
+            let snapshot = crate::sector_inspection::load_snapshot(
+                &project,
+                native.disk,
+                Some(native.attempt),
+            )?;
+            if snapshot.metadata()["sha256"] != native.source_sha256 {
+                return Err("Word conflict mask does not bind the native image".into());
+            }
+            let confirmation: crate::read_conflicts::Confirmation =
+                serde_json::from_value(snapshot.metadata()["read_conflicts"].clone())
+                    .map_err(|e| e.to_string())?;
+            conflicts = confirmation.conflicts.into_iter().map(|c| c.lba).collect();
+            snapshot.unchanged()?;
+            bad.extend(conflicts.iter().copied());
+        }
+    }
     let language = crate::edition_language::source_language(source)?;
     let mut documents = vec![];
     let mut limits = false;
     let mut positions = 0;
     let mut edition_bytes = 0;
-    for parent in &a.unrecovered_files {
-        if !fat12::partial_file_safe(parent, a) {
-            continue;
-        }
-        let name = parent.record.path.to_ascii_lowercase();
+    let candidates = a
+        .unrecovered_files
+        .iter()
+        .filter(|p| fat12::partial_file_safe(p, a))
+        .map(|p| (&p.record, false))
+        .chain(
+            a.recovered_files
+                .iter()
+                .filter(|p| {
+                    let name = p.path.to_ascii_lowercase();
+                    name.ends_with(".doc") || name.ends_with(".dot")
+                })
+                .map(|p| (p, true)),
+        );
+    let mut examined = 0;
+    for (parent, legacy_only) in candidates {
+        let name = parent.path.to_ascii_lowercase();
         let named_word = name.ends_with(".doc") || name.ends_with(".dot");
-        if !named_word && !compound_signature(image, &parent.record, &bad) {
+        if !named_word && !compound_signature(image, parent, &bad) {
             continue;
         }
-        if documents.len() >= 64 || positions >= 500_000 {
+        if examined >= 64 || positions >= 500_000 {
             limits = true;
             break;
         }
-        let mut d = match extract(image, &parent.record, &bad) {
+        examined += 1;
+        if legacy_only && parent.metadata_lbas.iter().any(|l| bad.contains(l)) {
+            continue;
+        }
+        let mut d = match extract(image, parent, &bad) {
+            Ok(doc) if legacy_only && doc.legacy_text.is_none() => continue,
             Ok(doc) => doc,
+            Err(_) if legacy_only => continue,
             Err(e) => Document {
-                parent: parent.record.clone(),
+                parent: parent.clone(),
                 status: "refused_preserved_as_raw_fragments".into(),
                 refusal: Some(e),
                 main_characters: None,
                 table_stream: None,
-                metadata_lbas: parent.record.metadata_lbas.clone(),
+                metadata_lbas: parent.metadata_lbas.clone(),
                 segments: vec![],
                 missing_text: vec![],
                 repaired_original: false,
@@ -742,6 +813,7 @@ pub(crate) fn preserve(
                 edition_refusal: None,
                 incomplete_fib: None,
                 content_detection: None,
+                legacy_text: None,
             },
         };
         if !named_word {
@@ -790,7 +862,7 @@ pub(crate) fn preserve(
     if documents.is_empty() {
         return Ok(None);
     }
-    let report=Report{schema_version:1,engine_version:ENGINE_VERSION,customer_language:language.code().into(),disk:native.disk,attempt:native.attempt,source_image:native.source_image.clone(),source_sha256:native.source_sha256.clone(),bad_lbas:a.bad_lbas.clone(),documents,limits_reached:limits,
+    let report=Report{schema_version:1,engine_version:ENGINE_VERSION,customer_language:language.code().into(),disk:native.disk,attempt:native.attempt,source_image:native.source_image.clone(),source_sha256:native.source_sha256.clone(),bad_lbas:bad.into_iter().collect(),excluded_cross_reader_conflicts:conflicts,documents,limits_reached:limits,
         warning:"FORENSIC TEXT SALVAGE, NOT A REPAIRED DOC OR COMPLETE DOCUMENT. Only readable main-document characters with validated CFB/FIB/CLX mappings are decoded to separate UTF-8 segments. Character-position gaps remain explicit in text reports and generated offline HTML editions; segments are not silently concatenated, unknown bytes never become text, and invalid UTF-16 is not replaced. Formatting, tables, revisions, headers/footnotes, objects, field interpretation and original semantics are not recovered/certified. Encrypted/unsupported documents or missing required metadata are refused. Selective mapping may bypass unrelated missing directory entries, but never certifies the entire compound container. No dictionary/brute-force guessing; original images/native results remain unchanged. Text/editions are excluded from normal whole-file counts, conversion and delivery.".into()};
     let serialized = serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?;
     if serialized.len() > 16 * 1024 * 1024 {

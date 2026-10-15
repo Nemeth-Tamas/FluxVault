@@ -1,6 +1,6 @@
 # Deeper recovery: directories, file tails and Word/RTF text
 
-Native recovery generation **6** adds bounded competing-layout and surviving-content checks when boot metadata is unavailable, including supported custom roots and full roots with no end marker. Existing lost-directory/tail recovery is retained. Word-text engine **5** and RTF-text engine **3** still publish Hungarian/default or English forensic editions with unchanged text/mapping limits. Normal `fv scan` / `fv process` invokes these when native recovery is needed. No floppy, new policy, DMDE step or recovery decision is required. [Missing-boot evidence and limits](LAYOUT_COMPARISON.md).
+Native recovery generation **6** adds bounded competing-layout and surviving-content checks when boot metadata is unavailable, including supported custom roots and full roots with no end marker. Existing lost-directory/tail recovery is retained. Word-text engine **6** adds supported Windows Word6 text interpretation; RTF-text engine **3** is unchanged. Both publish Hungarian/default or English forensic editions. Normal `fv scan` / `fv process` invokes native recovery where needed. No floppy, new policy, DMDE step or recovery decision is required. [Missing-boot evidence and limits](LAYOUT_COMPARISON.md).
 
 ## Beginner: use it
 
@@ -64,6 +64,24 @@ Supported format validation must accept a payload starting at the known file beg
 Bounds include 64 suffix trials, 8 MiB of candidate input and a shared 128 MiB validation-work budget for this search; signature probe limits also apply. Combined signature/hypothesis publication is capped at 256 payloads / 4 MiB. Search-limit attention explicitly means not exhaustive. Multiple erased boundaries, free-cluster rearrangements and arbitrary fragment permutations are not solved by this feature.
 
 ## Advanced: document-aware text salvage
+
+### Windows Word6 text copies
+
+Word-text engine 6 also handles Windows Word6 compound documents with `wIdent=0xa5dc`, `nFib/nFibBack=0x65`, an intact strict CFB map and a validated contiguous or embedded complex-piece map. Unlike Word97, these do not need `0Table`/`1Table`. Both incomplete files and supported intact-chain Word6 DOC/DOT files get separate text/HTML/editable copies during native recovery; ordinary originals/conversions are unchanged. Run the existing `fv recovery documents N` command to refresh a saved disk.
+
+The deliberately small encoding set supports explicit East-European charset 238, or charset 0 with recorded Hungarian `0x040e` / English `0x0409,0x0809` locale fallback: Windows-1250/1252. This follows [LibreOffice's FIB charset/locale fallback](https://docs.libreoffice.org/sw/html/ww8scan_8cxx_source.html); it does not recover a per-font glyph map. `legacy_text` records the original charset/language, chosen code page, interpretation basis and font limitations. HTML and DOCX visibly retain that warning. Source text is not translated.
+
+Missing/unmapped or independently confirmed cross-reader-conflicting sectors are excluded. Unavailable required metadata refuses interpretation. Undefined code-page bytes and unsupported control bytes become explicit position gaps, never replacement letters; paragraph/newline/tab separators remain text. Both original reader editions stay intact. Unsupported locale/charset, encryption, Mac/DBCS/wide Word6, non-OLE Word and missing required CFB mappings remain unsupported. Formatting, font-specific symbols, objects, fields, revision semantics and full-document repair are not claimed.
+
+New reports/HTML live in `attempt_NNN_word_text_v6_hu` / `_en`; earlier v1–v5 generations and editable editions remain untouched. The normal source-binding, bounded work, idempotent reuse and separate forensic-delivery treatment still apply. These text copies do not increase intact-file or ordinary Office-conversion counts.
+
+Measured saved-disk acceptance (2026-10-15): disk **133** produced **seven HTML and seven editable DOCX copies**, containing **13,560 decoded positions** and **146 explicitly uninterpreted control/code-page positions**. None of those 146 gaps represents newly lost acquisition bytes. `V_xB5MOSANG.DOC` retains all **1,519** main-text positions; its disputed sector lies outside the mapped main text. Both confirmed cross-reader conflicts, LBAs **17/773**, were excluded from interpretation. All seven documents use the recorded Hungarian-locale Windows-1250 fallback, with font limitations displayed.
+
+HU -> EN -> HU publication/reuse passes. All **3,653 pre-existing acquisition/extraction/recovery/ready-delivery artifacts** checked unchanged. The saved-report opt-in independently replays **36 old/new document reports**, including eight selective-CFB mappings, exact encoded extents, decoded text, CP coverage and HTML hashes. Seven fixture-only `.doc` aliases of the generated DOCX payloads also passed the actual application conversion service: **7/7 real LibreOffice jobs / 14 checked modern/PDF outputs**. This establishes opening/interoperability, not recovered original formatting, visual layout or seven newly recovered whole files.
+
+Local receipts: `C:\Users\User\Documents\Codex\2026-09-22\referenced-chatgpt-conversation-this-is-an\Word6-Recovery-20261015` contains protected-file hashes, HU/EN/reuse JSON and the isolated Office interoperability project. `Word6QualityGateFinal-20261015.log` in its parent records **833 routine passing tests / 33 explicit opt-ins**, format, locked check and strict lint. The final optimized release also reuses all seven editions unchanged (`FinalReleaseReuse.json`). Release SHA-256: `2466ca9a353ab58e3d987ce41c8a9fff9cf65b34d4d7d2a05e42c8f58a7a6c7d`.
+
+### Word97 and later mappings
 
 Incomplete Word 97–2007 binary candidates can yield readable main-document text when their required CFB mappings, common Word FIB fields and CLX piece table survive. Engine 4 also dispatches readable compound signatures with other extensions; a compound header alone is insufficient: root Word/table streams and FIB/CLX must validate. A misnamed spreadsheet is not treated as Word. JSON records `content_detection` and HTML explains the mismatch; original names/bytes are not changed. Saved **128**, `vasalók.rtf`, is binary Word and yields **683/939 main-text positions**, with an explicit **256-position gap**. Encryption, unsupported versions, inconsistent bindings and missing required text-mapping metadata are refused. Unreadable acquisition bytes never become decoded text.
 

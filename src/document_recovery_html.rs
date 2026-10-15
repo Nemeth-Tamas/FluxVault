@@ -48,6 +48,9 @@ pub(super) fn render(doc: &Document, source: &str, sha: &str) -> Result<String, 
     if let Some(evidence) = &doc.incomplete_fib {
         write!(html,"<aside class=\"warning\"><h2>Incomplete Word header — text-only candidate</h2><p>{}</p><p class=\"meta\">Unavailable extension count at Word stream byte {}. Supported-header exclusion ends at byte {}; this is a conservative search bound, not a reconstructed header.</p></aside>",escaped(&evidence.warning),evidence.unavailable_extension_count_offset,evidence.supported_header_exclusion_end).unwrap();
     }
+    if let Some(evidence) = &doc.legacy_text {
+        write!(html,"<aside class=\"warning\"><h2>Legacy Word6 text interpretation</h2><p>{}</p><p class=\"meta\">FIB charset: {} / language: {} / Windows-{} / {}</p></aside>",escaped(&evidence.warning),evidence.fib_charset,evidence.fib_language,evidence.code_page,escaped(&evidence.encoding_basis)).unwrap();
+    }
     let mut events = doc
         .segments
         .iter()
@@ -107,6 +110,19 @@ pub(super) fn render_in_language(
     }
     if let Some(evidence) = &mut masked.incomplete_fib {
         evidence.warning=slots.protect("A Word-fejléc nem teljesen olvasható. Csak a külön igazolt közös fejlécmezők és CLX-leképezés alapján történt főszövegkimentés. A hiányzó bővítményszám, tényleges verzió és teljes fejlécérvényesség ismeretlen marad; nem kerültek kitalálásra.".into());
+    }
+    if let Some(evidence) = &mut masked.legacy_text {
+        evidence.warning=slots.protect("Régi Windows Word6 dokumentum külön szöveges értelmezése. A kódlap a támogatott FIB-karakterkészletből vagy a rögzített magyar/angol területi beállításból származik; nem a betűtípusonkénti kiosztásból. Az egyedi szimbólumok, formázás, mezők, változtatások és az eredeti jelentés nem igazolt. A hiányzó vagy nem értelmezhető bájtokat külön jelöljük; ez nem javított eredeti DOC.".into());
+        evidence.encoding_basis = slots.protect(
+            match evidence.encoding_basis.as_str() {
+                "explicit_FIB_EastEuropean_charset" => {
+                    "rögzített közép-európai FIB-karakterkészlet"
+                }
+                "FIB_Hungarian_locale_fallback" => "magyar FIB-területi beállítás alapján",
+                _ => "angol FIB-területi beállítás alapján",
+            }
+            .into(),
+        );
     }
     let source = slots.protect(escaped(source));
     let sha = slots.protect(escaped(sha));

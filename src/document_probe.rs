@@ -19,7 +19,7 @@ pub(crate) fn inspect(
                 "missing_positions":doc.missing_text.iter().map(|g|g.cp_count).sum::<usize>(),
                 "segments":doc.segments,"gaps":doc.missing_text,"metadata_lbas":doc.metadata_lbas,
                 "incomplete_fib":doc.incomplete_fib,"strict_parser_refusal":doc.strict_parser_refusal,
-                "cfb_recovery":doc.cfb_recovery,"repaired_original":false}),
+                "cfb_recovery":doc.cfb_recovery,"legacy_text":doc.legacy_text,"repaired_original":false}),
             Err(reason) => json!({"state":"refused","reason":reason}),
         }
     };
@@ -132,7 +132,7 @@ fn compound(
 // Word6's FIB/PLCF layout follows LibreOffice's ww8scan.cxx reader. Narrow
 // admission: Windows Word6 0x65 only, no encryption/Mac/DBCS interpretation.
 // No character encoding is guessed: this returns CP-to-observed-byte extents.
-fn legacy_word6_map(word: &SparseStream) -> Result<Value, String> {
+pub(super) fn legacy_word6_map(word: &SparseStream) -> Result<Value, String> {
     let base = known(word, 0, 88)?;
     let flags = u16at(base, 10);
     if u16at(base, 0) != 0xa5dc

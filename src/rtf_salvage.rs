@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 #[path = "rtf_text.rs"]
-mod text;
+pub(crate) mod text;
 const ENGINE_VERSION: u32 = 3;
 const MAX_PREFIX: usize = 256 * 1024;
 const WARNING_V1: &str = "FORENSIC RTF PREFIX TEXT, NOT A REPAIRED ORIGINAL. Only a source-mapped readable prefix is decoded; parsing stops at the first unreadable/unmapped byte, unsupported encoding/control or malformed structure. No state is guessed across holes and no later fragments are silently joined. Remaining text length, original formatting, tables, objects and semantics are unknown. Hidden/deleted text, fields and non-body destinations are excluded. UTF-8/HTML are separate generated evidence, not whole-file counts, normal Office conversions or customer-certified documents.";

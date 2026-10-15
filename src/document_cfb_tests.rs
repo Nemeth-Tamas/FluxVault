@@ -632,6 +632,14 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                         .file_name()
                         .to_string_lossy()
                         .ends_with("_word_text_v5_en")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v6_hu")
+                    && !folder
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with("_word_text_v6_en")
             {
                 continue;
             }
@@ -681,7 +689,19 @@ fn saved_word_reports_replay_source_extents_and_readable_editions() {
                         })
                         .collect::<Vec<_>>();
                     assert_eq!(encoded.len(), s.encoded_bytes);
-                    let replay: String = if s.encoding == "UTF-16LE" {
+                    let replay: String = if let Some(legacy) = &doc.legacy_text {
+                        encoded
+                            .into_iter()
+                            .map(|b| match b {
+                                b'\r' | b'\n' | b'\t' => b as char,
+                                _ => crate::rtf_salvage::text::byte_character(
+                                    b,
+                                    Some(i32::from(legacy.code_page)),
+                                )
+                                .unwrap(),
+                            })
+                            .collect()
+                    } else if s.encoding == "UTF-16LE" {
                         assert_eq!(encoded.len() % 2, 0);
                         String::from_utf16(
                             &encoded
