@@ -1,5 +1,7 @@
 # Production: feed disks, finish automatically
 
+V1 packages include **START_HERE.html**: the customer extracts the ZIP and opens this offline disk-by-disk page. A bound copy, ready ZIP and final reports appear beside project.json. To refresh an already-saved batch after upgrading, use `fv finish`; interrupted finishing uses `fv finish resume`. [Release quick start](V1_RELEASE.md) · [finishing details](FINALIZATION.md).
+
 Customer delivery text defaults to Hungarian; add `--language en` on first production start for English. The receipt saves the choice, so ordinary resume restores it and refuses a conflicting language. Operator prompts stay English. [Language coverage](CUSTOMER_LANGUAGE.md).
 
 `fv production start` joins the existing read-only scanner, automatic recovery and

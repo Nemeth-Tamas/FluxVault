@@ -6,6 +6,7 @@ Command examples use the repository or an acquisition project as their working d
 
 ## Operator guides
 
+- [v1 release: install, scan, stop/resume and hand over](guides/V1_RELEASE.md)
 - [Tutorial: setup, scanning, recovery and delivery](guides/TUTORIAL.md)
 - [Cheat sheet: everyday commands](guides/CHEATSHEET.md)
 - [CLI: complete advanced reference](guides/CLI.md)

@@ -2,6 +2,10 @@
 
 No coding knowledge needed. Examples use **PowerShell on Windows**. Copy commands inside the blocks, not shell prompts such as `PS>` or `#`.
 
+Using the portable v1 release? Extract the whole ZIP, open PowerShell there, and run `powershell -NoProfile -File .\scripts\install-cli.ps1 -AddToPath`. Reopen the terminal and check `fv --version`. [Release quick start](V1_RELEASE.md). No Rust/coding is required for the portable executable.
+
+Have an old completed scan and just want delivery? From its project folder run `fv finish`, then `fv package verify`. Send the ready ZIP beside `project.json`; the customer extracts it and opens `START_HERE.html`. Partial/unknown files keep their warnings. `fv finish resume` continues interrupted finishing. [Details](FINALIZATION.md).
+
 - [Beginner: first project and scan](#beginner-first-project-and-scan)
 - [Beginner: stop, resume and results](#beginner-stop-resume-and-results)
 - [Beginner: prepare delivery](#beginner-prepare-delivery)

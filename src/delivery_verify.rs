@@ -87,7 +87,8 @@ pub(crate) fn verify_ready(project: &ProjectState, stage: &impl Fn(&str)) -> Res
     Ok(
         json!({"schema_version":1, "scope":"published_archive_and_front_reports_only", "integrity_verified":true,
         "archive":archive, "archive_sha256":receipt.archive_sha256,"archive_bytes":receipt.archive_bytes,
-        "reports_verified":receipt.reports.iter().filter(|a|a.member.is_some()).count(),"checksum_verified":true,
+        "reports_verified":receipt.reports.iter().filter(|a|a.member.is_some() && a.member.as_deref()!=Some("START_HERE.html")).count(),"checksum_verified":true,
+        "customer_index_verified":receipt.reports.iter().any(|a|a.member.as_deref()==Some("START_HERE.html")),
         "ready":pointer,"report_generation_replayed":true,"source_archive_required":false,
         "current_project_reprocessed":false,"customer_delivery_certified":false,
         "physical_media_access":false,"host_tools_invoked":false,"files_written":0,

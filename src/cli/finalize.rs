@@ -166,6 +166,24 @@ pub(super) fn resume_in_language(
     json_output: bool,
     language: Option<crate::final_report::Language>,
 ) -> Result<CliResponse, String> {
+    resume_impl(project, allow_attention, json_output, language, false)
+}
+
+pub(super) fn finish_resume(
+    project: &ProjectState,
+    json_output: bool,
+    language: Option<crate::final_report::Language>,
+) -> Result<CliResponse, String> {
+    resume_impl(project, true, json_output, language, true)
+}
+
+fn resume_impl(
+    project: &ProjectState,
+    allow_attention: bool,
+    json_output: bool,
+    language: Option<crate::final_report::Language>,
+    publish_completed: bool,
+) -> Result<CliResponse, String> {
     // Hold ownership before reading the options, not just before their use.
     let owner = crate::project_work::reserve(project.root())?;
     let record = state::load(project)?.ok_or("No saved finalization to resume")?;
@@ -173,6 +191,9 @@ pub(super) fn resume_in_language(
         return Err("Resume uses the saved customer language; create a new finalization for a different language".into());
     }
     if record.phase.complete() {
+        if publish_completed {
+            return publish_saved(project, json_output);
+        }
         return Err("Finalization already completed. Its receipt is historical, not a fresh verification; use finalize --destination PATH for a new checked archive".into());
     }
     if record.package.is_some() {
@@ -363,14 +384,17 @@ fn response(
         .to_string()
     } else if let Some(package) = package {
         format!(
-            "Finalization complete{}; verified archival ZIP, NOT customer-certified.\n{}\nSHA-256: {}\nReport: {}",
+            "Finalization complete{}; verified archival ZIP, NOT customer-certified.\n{}\nSHA-256: {}\nReport: {}\nStart page: {}",
             if attention { " WITH ATTENTION" } else { "" },
             package["delivery"]["zip"]
                 .as_str()
                 .or_else(|| package["zip"].as_str())
                 .unwrap_or(""),
             package["sha256"].as_str().unwrap_or(""),
-            handoff_report(&package).unwrap_or_else(|| process["workbook"].as_str().unwrap_or(""))
+            handoff_report(&package).unwrap_or_else(|| process["workbook"].as_str().unwrap_or("")),
+            package["delivery"]["entry_page"]
+                .as_str()
+                .unwrap_or("See README.txt inside the archive")
         )
     } else {
         format!(
@@ -426,12 +450,15 @@ pub(super) fn publish_saved(
                 "processing_repeated":false,"archive_rebuilt":false,"attention":attention}).to_string()
         } else {
             format!(
-                "HANDOFF READY{} / verified archival copies, NOT customer-certified\nZIP: {}\nFinal report: {}\nReceipt: {}\nSHA-256: {}",
+                "HANDOFF READY{} / verified archival copies, NOT customer-certified\nZIP: {}\nFinal report: {}\nReceipt: {}\nSHA-256: {}\nStart page: {}",
                 if attention { " WITH ATTENTION" } else { "" },
                 package["delivery"]["zip"].as_str().unwrap_or(""),
                 handoff_report(&package).unwrap_or("See FINAL_* beside project.json"),
                 package["delivery"]["ready"].as_str().unwrap_or(""),
-                package["sha256"].as_str().unwrap_or("")
+                package["sha256"].as_str().unwrap_or(""),
+                package["delivery"]["entry_page"]
+                    .as_str()
+                    .unwrap_or("See README.txt inside the archive")
             )
         },
     })

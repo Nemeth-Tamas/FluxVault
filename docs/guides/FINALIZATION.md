@@ -1,5 +1,22 @@
 # Finish a batch — no floppy needed
 
+## Recommended: one command
+
+From the project folder:
+
+```powershell
+fv finish
+fv package verify
+```
+
+`finish` refreshes the saved-image pipeline and creates a new verified archival edition. It automatically creates sibling `<project-folder>-Delivery`, retains attention/partial results with their warnings, and publishes the ready ZIP, checksum, `FINAL_*` reports and `START_HERE-<edition>.html` beside `project.json`. Nothing reads a floppy. Earlier ready editions stay preserved. Exit 3 means a verified archive can still contain attention, not that its ZIP is broken.
+
+Extract the ZIP and open **START_HERE.html** for a Hungarian-by-default disk-by-disk customer page. Direct PDF/editable links require a current VALID report entry and a matching archived SHA-256. Original/evidence folders and limitations remain separate; the page is not a completeness certificate. Use `fv finish --language en` for English or `--conversion-workers 12` for a requested worker count (resource admission still applies).
+
+Use `fv finish status` to inspect saved state, `fv stop` from another console to cancel active finishing, and `fv finish resume` to continue afterward. If already completed, resume verifies/publishes the same recorded ZIP without rerunning conversions or rebuilding it. A new `fv finish` deliberately refreshes the snapshot. `fv package verify` checks the ready snapshot without changing it.
+
+The older expert `finalize` command below remains available with its original strict attention-blocking default and explicit destination. `finish` uses the production-style permission to archive partial evidence; it does not bypass integrity failures or certify damaged content.
+
 Scanning already processes saved files in the background. **Finalization** refreshes recovery, extraction, conversion, the final audit/workbook, and then builds and verifies an immutable archival ZIP. It uses workstation files only.
 
 Starting a fresh batch with `fv production start --last-disk N` now calls this finishing chain automatically at its checked endpoint, with explicit partial-results archival policy. `production resume` continues its saved options and offline tail; default output is sibling `<project-folder>-Delivery`. Ordinary `finalize` below keeps strict default attention blocking. Entirely raw-only production endpoints use a separate verified-capture/zero-file-yield attention archive, not a bypass for ordinary image finalization. [Production guide](PRODUCTION_WORKFLOW.md).

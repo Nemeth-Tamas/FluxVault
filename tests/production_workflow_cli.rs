@@ -146,6 +146,68 @@ fn value(o: &Output) -> Value {
     );
     serde_json::from_slice(&o.stdout).unwrap()
 }
+
+#[test]
+fn finish_shortcut_refreshes_saved_results_and_resume_never_recaptures() {
+    let f = Fixture::new(true);
+    value(&f.run(
+        &["production", "start", "--last-disk", "1", "--json"],
+        b"1\n",
+        &[],
+    ));
+    let image = f.project.images_dir().join("001_attempt_001.img");
+    let before = fs::read(&image).unwrap();
+    let finished = value(&f.run(
+        &["finish", "--json", "--language", "en"],
+        b"",
+        &[("MOCK_GW_DEVICE_NOT_FOUND", "1")],
+    ));
+    let package = &finished["package"];
+    assert_eq!(finished["allow_attention"], true);
+    assert_eq!(finished["physical_media_access"], false);
+    assert_eq!(finished["customer_delivery_certified"], false);
+    assert!(
+        package["delivery"]["source_zip"]
+            .as_str()
+            .unwrap()
+            .contains("project-Delivery")
+    );
+    let page = fs::read_to_string(package["delivery"]["entry_page"].as_str().unwrap()).unwrap();
+    assert!(page.contains("Read this first"));
+    assert!(page.contains("NOTE"));
+    assert!(!page.contains("No readable final file report"));
+    let zip = fs::read(package["delivery"]["zip"].as_str().unwrap()).unwrap();
+    let resumed = value(&f.run(
+        &["finish", "resume", "--json"],
+        b"",
+        &[("MOCK_GW_DEVICE_NOT_FOUND", "1")],
+    ));
+    assert_eq!(resumed["archive_rebuilt"], false);
+    assert_eq!(resumed["processing_repeated"], false);
+    assert_eq!(
+        zip,
+        fs::read(resumed["package"]["delivery"]["zip"].as_str().unwrap()).unwrap()
+    );
+    value(&f.run(&["finish", "status", "--json"], b"", &[]));
+    assert_eq!(fs::read(image).unwrap(), before);
+    assert!(!f.project.images_dir().join("001_attempt_002.img").exists());
+    let checked = value(&f.run(&["package", "verify", "--json"], b"", &[]));
+    assert_eq!(checked["customer_index_verified"], true);
+}
+
+#[test]
+fn version_is_available_without_project_or_tools() {
+    let f = Fixture::new(false);
+    for flag in ["--version", "-V"] {
+        let out = f.command().current_dir(&f.root).arg(flag).output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap().trim(),
+            concat!("FluxVault ", env!("CARGO_PKG_VERSION"))
+        );
+        assert!(out.stderr.is_empty());
+    }
+}
 #[test]
 fn production_archives_at_endpoint_and_repeated_start_never_reads_again() {
     let f = Fixture::new(false);

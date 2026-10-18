@@ -2,6 +2,14 @@
 
 For operating the current build, start with [README](README.md), [the beginner/advanced tutorial](docs/guides/TUTORIAL.md), or [the quick cheat sheet](docs/guides/CHEATSHEET.md). This checklist includes future commands and goals; it is not an instruction sequence to run.
 
+## Frozen v1 release scope — approved 2026-10-18
+
+The operator explicitly approved shipping the existing supported **scan → recovery → conversion → reports → ZIP** workflow. This is a release boundary, not a claim that all long-term research targets below are solved. Stop adding recovery research to the v1 critical path.
+
+V1 supports the qualified single-GW station and existing optional USB + GW workflow, supported IBM/FAT12 automatic recovery/extraction, separate damaged-file evidence, Office/PDF conversion, stop/resume and verified archival handoff. `fv finish` is the short saved-image finishing command; the customer extracts the ZIP and opens `START_HERE.html`. Fatal integrity failures still refuse; partial/unknown results keep attention. [Operator release guide](docs/guides/V1_RELEASE.md).
+
+**Post-v1, retained unchecked:** rare/other-format qualification, broader damaged-document/container reconstruction and semantic completeness, future extra-drive modes, exhaustive every-boundary/workstation-failure proof, independent USB-adapter write-blocking qualification and universal historical DMDE yield equivalence. The broader targets remain visible below and are not counted as completed by moving them out of the release scope. No denominator expansion is needed for release polish.
+
 > CLI-first floppy archival, forensic imaging, recovery, conversion, audit, and customer-delivery suite. Work from a project folder in PowerShell using `fluxvault` commands; there is no desktop GUI.
 >
 > **Primary rule:** Source floppy media is read-only. FluxVault may write images, logs, extracted files, reports, and packages to the workstation, but it must never intentionally write to a customer floppy.
@@ -619,7 +627,7 @@ All CLI commands must call the same guarded Rust workflow services so safety, pr
   - [x] Add `greaseweazle scan` with numbered custody prompts, durable completion/cursor recovery, partial continuation, automatic downstream tail, JSON summaries, and cross-project CLI drive reservation; mock unit/executable tests cover failure/restart/termination.
   - [x] Add gated CLI `acquire` using the read-only USB backend, positive write-protection and floppy-geometry checks, and a required operator hardware-protection assertion. Live read-only test on customer 007 completed with one unresolved sector; the other 2,879 sectors exactly matched its earlier clean image. Independent physical write-protection validation remains open above.
   - [x] Add a guarded, guided single-drive `scan` loop that requires an explicit READ confirmation for each disk, advances project numbering only after a completed image, and reports the derived recovery queue. Tested with synthetic acquisition, not live hardware.
-  - [ ] Turn guided scanning into the automated production pipeline: automatic post-scan extraction/recovery decisions, crash-safe resume, explicit operator media-change/identity confirmation, and independent hardware validation. Automatic swap detection is not required.
+  - [x] Turn guided scanning into the supported v1 automated production pipeline: automatic post-scan extraction/recovery decisions, guarded stop/resume, explicit operator media-change/identity confirmation, and independent qualified-station hardware validation. Live single/dual cohorts plus full saved-136 finishing and immutable handoff checks pass. Automatic swap detection is not required. Universal every-boundary/workstation-failure acceptance remains separately open above. [Release evidence](docs/testing/V1_RELEASE_ACCEPTANCE.md).
 - [x] Extraction commands for one disk or all eligible disks, preserving manual-recovery detection and immutable recovery backups.
   - [x] `extract all` uses the shared batch service, recovery backups, manual-recovery detection, and manifest generation without requiring LibreOffice.
   - [x] `extract disk N` uses the same eligibility rules, preserves operator recovery, makes/reuses the immutable pass-1 backup when needed, and refreshes the file manifest.

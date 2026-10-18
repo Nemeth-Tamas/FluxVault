@@ -146,6 +146,7 @@ fn published_snapshot_verification_is_read_only_and_independent_of_external_arch
         let v = verify_ready(&f.project, &|_| {}).unwrap();
         assert_eq!(v["integrity_verified"], true);
         assert_eq!(v["reports_verified"], 11);
+        assert_eq!(v["customer_index_verified"], true);
         assert_eq!(v["files_written"], 0);
         assert_eq!(v["source_archive_required"], false);
         assert_eq!(v["current_project_reprocessed"], false);
@@ -156,13 +157,21 @@ fn published_snapshot_verification_is_read_only_and_independent_of_external_arch
 
 #[test]
 fn changed_or_missing_published_copies_refuse_without_any_repair_or_writes() {
-    for case in ["zip", "report", "checksum", "missing"] {
+    for case in ["zip", "report", "checksum", "missing", "customer_index"] {
         let mut f = Fixture::new();
         f.publish().unwrap();
         let root = f.project.root();
         let r = load(&root.join(READY), &root.canonicalize().unwrap()).unwrap();
         let path = match case {
             "zip" => f.root_copy(),
+            "customer_index" => root.join(
+                r.reports
+                    .iter()
+                    .find(|a| a.member.as_deref() == Some("START_HERE.html"))
+                    .unwrap()
+                    .name
+                    .clone(),
+            ),
             "checksum" => root.join(
                 r.reports
                     .iter()
@@ -292,7 +301,7 @@ fn exact_root_handoff_is_idempotent_and_excluded_from_future_archives() {
     )
     .unwrap();
     assert!(!pointer.customer_delivery_certified);
-    assert_eq!(pointer.reports.len(), 12);
+    assert_eq!(pointer.reports.len(), 13);
     for a in &pointer.reports {
         verify(&f.project.root().join(&a.name), a.bytes, &a.sha256).unwrap();
     }

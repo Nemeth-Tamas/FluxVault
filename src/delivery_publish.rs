@@ -342,6 +342,13 @@ fn archived_contents(
             Some(actual),
         ));
     }
+    if names.contains("start_here.html") {
+        contents.push((
+            format!("START_HERE-{short}.html"),
+            member(zip, "START_HERE.html", 8 * 1024 * 1024)?,
+            Some("START_HERE.html".into()),
+        ));
+    }
     let checksum = format!("{sha}  {archive_name}\n");
     contents.push((
         format!("{archive_name}.sha256"),
@@ -470,7 +477,8 @@ fn publish_contents(
         promote(&stage, &pointer)?;
     }
     package["delivery"] = json!({"zip":archive_target,"sha256_file":root.join(format!("{}.sha256",r.archive)),
-        "ready":pointer,"reports":r.reports.iter().filter(|a| a.member.is_some()).map(|a|root.join(&a.name)).collect::<Vec<_>>(),
+        "ready":pointer,"reports":r.reports.iter().filter(|a| a.member.is_some() && a.member.as_deref()!=Some("START_HERE.html")).map(|a|root.join(&a.name)).collect::<Vec<_>>(),
+        "entry_page":r.reports.iter().find(|a| a.member.as_deref()==Some("START_HERE.html")).map(|a|root.join(&a.name)),
         "source_zip":source,"sha256":sha,"customer_delivery_certified":false});
     Ok(())
 }

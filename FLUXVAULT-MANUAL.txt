@@ -8,6 +8,27 @@ SYNOPSIS
     fluxvault COMMAND [SUBCOMMAND] [DISK] [OPTIONS]
 
 DESCRIPTION
+    VERSION 1.0 / RECOMMENDED SHORT WORKFLOW
+      fv --version
+      fv init C:\Floppy-Projects\Customer-136
+      cd C:\Floppy-Projects\Customer-136
+      fv production start --last-disk 136
+    Production automatically finishes at its checked endpoint. For an old
+    saved scan, or a fresh handoff after upgrading:
+      fv finish
+      fv package verify
+    No floppy is needed for finishing. Default sibling <project>-Delivery
+    is created safely. Ready ZIP/checksum, FINAL_* reports and an edition-
+    bound customer page appear beside project.json. Extract the customer
+    ZIP and open START_HERE.html. Hungarian is default; --language en selects
+    English. Partial/unknown content remains attention, never certified.
+      fv finish status           Inspect historical finishing state
+      fv finish resume           Resume, or recheck/publish completed ZIP
+      fv stop                    Cancel active finishing from another shell
+    Resume restores saved settings; a new finish deliberately refreshes
+    recovery/conversion/reports/archive. Old editions remain preserved.
+    Expert finalize retains its original strict attention-blocking default.
+
     Optional saved-batch additions:
       fv production estimate
       fv production benchmark

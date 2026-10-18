@@ -584,6 +584,21 @@ fn metadata(p: &Publication, report: &str, report_hash: &str) -> Value {
             "cylinder":l / (heads * spt), "head":l / spt % heads, "sector":l % spt + 1})).collect::<Vec<_>>(),
         "sha256":p.image_sha256, "offline_provenance":report, "offline_provenance_sha256":report_hash})
 }
+
+// Creator version is descriptive, not the replay identity of immutable bytes.
+// Keep every evidence/geometry/path field exact across application upgrades.
+fn matching_metadata(mut expected: Value, actual: &Value) -> bool {
+    let Some(version) = actual["fluxvault_version"].as_str().filter(|v| {
+        !v.is_empty()
+            && v.len() <= 64
+            && v.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
+    }) else {
+        return false;
+    };
+    expected["fluxvault_version"] = json!(version);
+    &expected == actual
+}
 fn log(p: &Publication) -> String {
     let g = &p.geometry;
     let mut text = format!(
@@ -768,7 +783,22 @@ pub(crate) fn publish(
     let image = root.join("Images").join(format!("{stem}.img"));
     let meta = root.join("Images").join(format!("{stem}.json"));
     let reused = meta.is_file();
-    let value = metadata(&publication, &name, &hash(&report_bytes));
+    let expected = metadata(&publication, &name, &hash(&report_bytes));
+    let (value, metadata_bytes) = match fs::symlink_metadata(&meta) {
+        Ok(_) => {
+            let bytes = read(&meta, CONTROL)?;
+            let value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            if !matching_metadata(expected, &value) {
+                return Err("Existing offline publication metadata/identity changed".into());
+            }
+            (value, bytes) // Preserve the original creator version AND serialization.
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let bytes = serde_json::to_vec_pretty(&expected).map_err(|e| e.to_string())?;
+            (expected, bytes)
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     // Reserve the acquisition slot before publication. A killed writer cannot let
     // a later physical acquisition reuse its planned attempt number.
     write_once(&meta.with_extension("partial.json"), &report_bytes)?;
@@ -778,10 +808,7 @@ pub(crate) fn publish(
         &root.join("Logs").join(format!("{stem}.log")),
         log(&publication).as_bytes(),
     )?;
-    write_once(
-        &meta,
-        &serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?,
-    )?;
+    write_once(&meta, &metadata_bytes)?;
     verify_metadata(&project.images_dir(), &meta, &value)?;
     Ok(Published {
         attempt: publication.attempt,
@@ -839,7 +866,7 @@ pub(crate) fn verify_metadata(
         || name != format!("OfflineDerived-{:03}-{}.json", p.disk, p.key)
         || metadata_path.file_name().and_then(|n| n.to_str())
             != Some(format!("{:03}_attempt_{:03}.json", p.disk, p.attempt).as_str())
-        || &metadata(&p, name, &hash(&bytes)) != value
+        || !matching_metadata(metadata(&p, name, &hash(&bytes)), value)
     {
         return Err("Offline publication metadata/identity changed".into());
     }

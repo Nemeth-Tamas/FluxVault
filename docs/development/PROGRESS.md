@@ -1,4 +1,14 @@
-# FluxVault progress — 2026-10-15, 464/479
+# FluxVault progress — 2026-10-18, supported v1 release
+
+The operator approved a frozen **supported scan → recovery → conversion → reports → ZIP** release boundary. V1 adds `fv finish` / `finish resume` / `finish status`, version reporting, a Hungarian-default offline customer start page, safe portable Windows packaging and creator-version-compatible immutable derived-image replay. A completed resume reuses the recorded archive without more conversion/capture. Existing strict expert commands stay compatible.
+
+Acceptance: **856 routine tests / 33 opt-ins**, clean formatting/locked check/strict lint, release completion-engine checks. Full saved 136-image finishing completed in **30.4s** (existing conversions reused): **692 successful jobs / one protected-file exception**, 94 verified / 42 attention disks, a verified 186,679,842-byte archive, eleven front reports and manifest-bound customer page. Its **1,384 document links** resolve; all **4,354** earlier saved artifacts/handoff files remain unchanged. The old actual-customer archive independently verifies under v1 without writes. [Release acceptance](../testing/V1_RELEASE_ACCEPTANCE.md).
+
+The **actual modern USB + GW 136-disk customer project** was also refreshed: **155.4s**, **832/832 successful conversion jobs**, 107 verified / 29 attention, a new **1,344,319,224-byte** verified root ZIP and **1,664** working customer document links. All **6,798** older saved/handoff artifacts rehash unchanged. This gains 25 successful jobs over its prior 807-job handoff without rescanning; it is still an attention archive, not a claim that every historical file was recovered.
+
+Broader roadmap: **465/479 (97.1%), 14 open**, unchanged denominator. The existing guided-production item is closed for its supported tested scope; exhaustive restart, historical parity, deeper/rare-format research and extra-drive targets remain unchecked post-v1, not silently completed. [v1 operator guide](../guides/V1_RELEASE.md).
+
+## Earlier recovery checkpoints
 
 Latest larger recovery slice: Word-text **engine 7** adds bounded missing-compound-header structural candidates without synthesizing a header. Unique readable single-FAT/root anchors, regular Word/table allocation, complete directory scope and existing FIB/CLX checks recover disk 136's previously refused `level1.doc`: **1,744 additional mapped main-text positions**, with HU/EN HTML and editable DOCX. The original header and whole-container/mini-FAT identity remain unknown. Both editable editions open through real Office conversion (**four outputs**); **61 old/new reports** replay their source extents/text/HTML. Earlier generations and normal whole-file counts remain intact. [Exact scope and measurements](../recovery/DEEP_RECOVERY.md#unavailable-compound-headers).
 

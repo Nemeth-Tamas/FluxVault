@@ -24,7 +24,10 @@ function Check([string]$Line, [string[]]$Expected, [string[]]$Excluded = @(), [i
 
 Check 'fv sc' @('scan') @('status','--usb')
 Check 'fluxvault.exe gre' @('greaseweazle')
-Check 'fv ' @('scan','acquire','finalize','completions')
+Check 'fv ' @('scan','acquire','finalize','finish','completions')
+Check 'fv finish ' @('status','resume','--destination','--conversion-workers','--language')
+Check 'fv finish status --' @('--project','--json') @('--destination','--allow-attention')
+Check 'fv finish resume --' @('--json','--language') @('--destination','--conversion-workers')
 Check 'fv greaseweazle c' @('capture','compare','consensus') @('scan')
 Check 'fv scan --no' @('--no-verify') @('--profile')
 Check 'fv scan --profile ibm.' @('ibm.1440','ibm.720') @('auto')

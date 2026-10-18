@@ -195,6 +195,11 @@ Usage:
   fluxvault audit [--project PATH]  Check saved evidence and current delivery
   fluxvault report export [--project PATH] [--language hu|en]
                                     Export full reports (Hungarian by default)
+  fluxvault finish [--project PATH] [--language hu|en] [--conversion-workers N]
+                                    Finish saved disks into a fresh ready ZIP; no floppy needed
+                                    Default sibling delivery folder; damage stays attention
+  fluxvault finish resume|status    Continue interrupted finishing / inspect its receipt
+  fluxvault --version              Show the installed version without opening a project
   fluxvault process [--project PATH] [--conversion-workers N]
                                     Extract, convert, audit, and report
   fluxvault processing status      Show durable background work without tools or hardware
@@ -323,6 +328,12 @@ mod drive_watch;
 mod mutation_audit;
 pub(crate) use mutation_audit::clear_after_audit;
 fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
+    if args == ["--version"] || args == ["-V"] {
+        return Ok(CliResponse {
+            output: format!("FluxVault {}", env!("CARGO_PKG_VERSION")),
+            exit_code: 0,
+        });
+    }
     // Help must never become an init path (or trigger tools/media access).
     if args
         .iter()
@@ -630,6 +641,13 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         index += 1;
     }
 
+    let finish_shortcut = positional.first().is_some_and(|s| s == "finish");
+    if finish_shortcut {
+        positional[0] = "finalize".into();
+        if positional == ["finalize"] || positional == ["finalize", "resume"] {
+            allow_attention = true;
+        }
+    }
     if keep_staging && positional != ["package", "build"] {
         return Err("--keep-staging is only valid with package build".into());
     }
@@ -3003,6 +3021,13 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
                 return Err("finalize resume uses saved conversion workers; start a new finalize to change settings".into());
             }
             let root = resolve_project_root(cwd, project_override.as_deref())?;
+            if finish_shortcut {
+                return finalize::finish_resume(
+                    &ProjectState::open_without_session(root)?,
+                    json_output,
+                    report_language,
+                );
+            }
             return finalize::resume_in_language(
                 &ProjectState::open_without_session(root)?,
                 allow_attention,
@@ -3012,7 +3037,14 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         }
         Some("finalize") if positional.len() == 1 => {
             let root = resolve_project_root(cwd, project_override.as_deref())?;
-            let destination = destination.ok_or("finalize requires --destination PATH")?;
+            let destination = match destination {
+                Some(destination) => destination,
+                None if finish_shortcut => production_flow::destination(
+                    &root.canonicalize().map_err(|e| e.to_string())?,
+                    None,
+                )?,
+                None => return Err("finalize requires --destination PATH".into()),
+            };
             let default_workers =
                 ProjectState::open_without_session(root.clone())?.default_workers()?;
             return finalize::run_in_language(

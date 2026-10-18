@@ -7,9 +7,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $repoRoot 'target\release\fluxvault.exe'
+if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+    $source = Join-Path $repoRoot 'fluxvault.exe' # portable release layout
+}
 $completionSource = Join-Path $PSScriptRoot 'FluxVault.Completion.ps1'
 if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-    throw "Release executable not found: $source. Run cargo build --release first."
+    throw "Release executable not found. Extract the full portable release or run cargo build --release in the source checkout."
 }
 
 $resolvedInstall = [IO.Path]::GetFullPath($InstallDir)

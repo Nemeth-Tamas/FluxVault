@@ -2,6 +2,8 @@
 
 **PowerShell · Windows · `fv` = `fluxvault`**
 
+**v1 short path:** `fv init PATH` → go into PATH → `fv production start --last-disk 136`. For already-saved scans: `fv finish` → `fv package verify`. Interrupted finishing: `fv finish resume`; inspect it: `fv finish status`. Check installed version: `fv --version`. The customer extracts the ready ZIP and opens `START_HERE.html`. [Install and handover quick start](V1_RELEASE.md).
+
 Need batch visibility? `fv production benchmark` shows saved timings/actions; `fv production estimate` gives evidence-limited phase ranges; `fv recovery ranges 59` shows exact missing bytes. These are optional diagnostics, not extra steps needed to finish a normal production job. [Advanced saved-batch tools](SAVED_BATCH_TOOLS.md).
 
 New here? Follow [the tutorial](TUTORIAL.md). This is the quick reference after setup. Physical scanning defaults to the tested Greaseweazle/Mitsumi station on selector B. USB commands are in the advanced reference.

@@ -10,7 +10,7 @@ $fluxVaultCompleter = {
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $children = @{
-        '' = @('init','status','start','stop','scan','acquire','disk','project','drive','tools','greaseweazle','diagnose','extract','recovery','conversion','files','audit','report','process','processing','storage','benchmark','production','finalize','package','run','completions','help')
+        '' = @('init','status','start','stop','scan','acquire','disk','project','drive','tools','greaseweazle','diagnose','extract','recovery','conversion','files','audit','report','process','processing','storage','benchmark','production','finalize','finish','package','run','completions','help')
         'disk' = @('list','show','note','select','next','prefer')
         'project' = @('show','import','settings')
         'project settings' = @('set','clear')
@@ -34,6 +34,7 @@ $fluxVaultCompleter = {
         'benchmark' = @('report','compare','legacy','review')
         'production' = @('start','resume','status','queue','benchmark','estimate')
         'finalize' = @('status','resume')
+        'finish' = @('status','resume')
         'package' = @('build','publish','verify')
         'run' = @('status')
         'completions' = @('powershell')
@@ -91,6 +92,8 @@ $fluxVaultCompleter = {
         'benchmark review' = @('--baseline')
         'finalize' = @('--destination','--conversion-workers','--allow-attention','--language')
         'finalize resume' = @('--allow-attention','--language')
+        'finish' = @('--destination','--conversion-workers','--language')
+        'finish resume' = @('--language')
         'package build' = @('--destination','--keep-staging','--language')
     }
     $values = @{

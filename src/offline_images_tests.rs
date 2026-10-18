@@ -132,6 +132,46 @@ fn files(project: &ProjectState) -> Vec<String> {
 }
 
 #[test]
+fn older_creator_version_replays_and_reuses_exact_metadata_without_relaxing_identity() {
+    let (project, _) = fixture(&[vec![33], vec![34]]);
+    let (attempts, c) = composite(&project);
+    let p = publish(&project, 1, &attempts, Some(&c), None).unwrap();
+    let meta = p.image.with_extension("json");
+    let mut value: Value = serde_json::from_slice(&fs::read(&meta).unwrap()).unwrap();
+    value["fluxvault_version"] = json!("0.1.0");
+    let old_bytes = serde_json::to_vec(&value).unwrap();
+    fs::write(&meta, &old_bytes).unwrap();
+    verify_metadata(&project.images_dir(), &meta, &value).unwrap();
+    let image_before = fs::read(&p.image).unwrap();
+    let report_before = fs::read(&p.report).unwrap();
+    let again = publish(&project, 1, &attempts, Some(&c), None).unwrap();
+    assert!(again.reused);
+    assert_eq!(again.attempt, p.attempt);
+    assert_eq!(fs::read(&meta).unwrap(), old_bytes);
+    assert_eq!(fs::read(&p.image).unwrap(), image_before);
+    assert_eq!(fs::read(&p.report).unwrap(), report_before);
+    for (key, changed) in [
+        ("disk_number", json!(2)),
+        ("sha256", json!("changed")),
+        ("fluxvault_version", json!(null)),
+    ] {
+        let mut bad = value.clone();
+        bad[key] = changed;
+        assert!(verify_metadata(&project.images_dir(), &meta, &bad).is_err());
+        fs::write(&meta, serde_json::to_vec(&bad).unwrap()).unwrap();
+        assert!(publish(&project, 1, &attempts, Some(&c), None).is_err());
+        fs::write(&meta, &old_bytes).unwrap();
+    }
+    assert_eq!(
+        imaging::load_attempts_for_disk(&project.images_dir(), 1)
+            .unwrap()
+            .len(),
+        3
+    );
+    fs::remove_dir_all(project.root()).unwrap();
+}
+
+#[test]
 fn complementary_boot_directory_and_payload_gaps_flow_through_the_whole_pipeline() {
     let (project, original) = fixture(&[vec![0, 33], vec![19, 34]]);
     let attempts = imaging::load_attempts_for_disk(&project.images_dir(), 1).unwrap();

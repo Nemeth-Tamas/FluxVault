@@ -258,7 +258,7 @@ fn save(project: &ProjectState, r: &Record) -> Result<(), String> {
     drop(f);
     fs::rename(tmp, path).map_err(|e| e.to_string())
 }
-fn destination(root: &Path, supplied: Option<PathBuf>) -> Result<PathBuf, String> {
+pub(super) fn destination(root: &Path, supplied: Option<PathBuf>) -> Result<PathBuf, String> {
     let dest = match supplied {
         Some(dest) => dest,
         None => root
@@ -571,7 +571,7 @@ fn execute(
             json!({"workflow":r,"scan":scan,"finalization":finished,"session_elapsed_ms":started.elapsed().as_millis(),"customer_delivery_certified":false}).to_string()
         } else {
             format!(
-                "PRODUCTION FINISHED{} / REMOVE DISKS\nArchive: {}\nFinal report: {}\nSHA-256: {}\nVerified archival ZIP; attention stays in reports, NOT customer-certified.\nElapsed: {:.1}s",
+                "PRODUCTION FINISHED{} / REMOVE DISKS\nArchive: {}\nFinal report: {}\nStart page: {}\nSHA-256: {}\nVerified archival ZIP; attention stays in reports, NOT customer-certified.\nElapsed: {:.1}s",
                 if exit_code == 3 {
                     " WITH ATTENTION"
                 } else {
@@ -582,6 +582,9 @@ fn execute(
                     .or_else(|| finished["package"]["zip"].as_str())
                     .unwrap_or(""),
                 finalize::handoff_report(&finished["package"]).unwrap_or("See Reports"),
+                finished["package"]["delivery"]["entry_page"]
+                    .as_str()
+                    .unwrap_or("See README.txt inside the archive"),
                 finished["package"]["sha256"].as_str().unwrap_or(""),
                 started.elapsed().as_secs_f64()
             )

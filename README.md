@@ -1,14 +1,8 @@
 # FluxVault
 
-Saved-image recovery can now salvage supported small Word documents even when their entire compound header is unreadable. Disk 136's previously refused `level1.doc` yields all **1,744 main-text positions**, with separate Hungarian/English readable and editable editions and explicit structural-inference warnings. [Scope and evidence](docs/recovery/DEEP_RECOVERY.md#unavailable-compound-headers).
+**v1.0: scan → automatic recovery → conversion → reports → verified ZIP.** [Start here: install, scan, stop/resume and hand over](docs/guides/V1_RELEASE.md). The supported workflow is the release scope; rare-format research and future extra-drive modes remain post-v1.
 
-Recovered Office files no longer need the right filename extension: supported compound Word/Excel contents choose the conversion filters automatically. The saved batch gained DOCX/PDF editions for **28 previously skipped sources** (`.ole`, `.wbk`, `.tmp`); password-protected files get an explicit explanation instead of wasted import retries. Originals keep their names and bytes. [Content routing and limits](docs/recovery/DEEP_RECOVERY.md#office-conversion-by-content).
-
-Saved older Windows Word6 documents now get separate readable/editable text copies through the existing `fv recovery documents N` path. Tested on seven real documents from disk 133, with disputed bytes excluded and charset/font limitations visible. [Word6 support and limits](docs/recovery/DEEP_RECOVERY.md#windows-word6-text-copies).
-
-Latest v1 finishing checkpoint: the full 136-image saved-only replay completed recovery, real Office conversion (**664/665 jobs**), reports and a verified ready ZIP. New conversion receipts survive a forced exit before batch state is saved. `fv package verify` checks a published ZIP/front-report snapshot without changing it. [Measured results and restart guarantees](docs/testing/V1_FINISHING_ACCEPTANCE.md).
-
-Saved legacy images now yield separate, hash/extent-bound [snapshot candidates and damaged-file copies](docs/recovery/SNAPSHOT_CANDIDATES.md) automatically during extraction. Missing/contradictory maps stay unknown; known data holes retain their original offsets and saved filler bytes, with exact warnings. These remain forensic attention, not ordinary verified files or automatic conversions.
+Already have saved scans? From the project folder, run **`fv finish`**, then **`fv package verify`**. No floppy is needed. The ready ZIP/reports and an offline customer start page appear beside `project.json`; inside the extracted ZIP, open **START_HERE.html**. Attention remains visible and earlier editions are preserved. [Finishing guide](docs/guides/FINALIZATION.md).
 
 **Read floppies. Keep the evidence. Recover files. Prepare a checked customer archive.**
 
@@ -16,15 +10,9 @@ FluxVault is a Windows-first command-line floppy archiving and recovery tool. Th
 
 There is no GUI. Both `fv` and `fluxvault` run the same program.
 
-Saved damaged documents also get automatic content-based Word/RTF text salvage. `fv recovery documents 22` or `fv recovery documents 128` prints readable offline HTML and, where verified text survives, editable DOCX copies with explicit missing-text/symbol gaps. These are separate forensic derivatives, not repaired originals or inflated whole-file counts. [Examples and limits](docs/recovery/DEEP_RECOVERY.md).
+Supported damaged files can also yield separate readable/editable Word/RTF text candidates; gaps and structural limits stay explicit, and missing content is never fabricated. [Recovery scope](docs/recovery/DEEP_RECOVERY.md).
 
-Developing FluxVault? `pwsh -NoProfile -File .\scripts\check.ps1` is the fail-fast format/build/strict-lint/routine-test gate. It does not scan hardware, install tools or modify user PATH. Environment-dependent acceptance tests remain explicit opt-ins.
-
-Latest hardware checks cover protected clean HD, automatic DD and damaged reads with background processing/lossless packing. Helper tools cannot consume operator input; read failures display their reason before cleanup finishes. [Measured cases](docs/testing/HARDWARE_OVERLAP_20261013.md).
-
-For a fresh recovery comparison with an old script archive, `fv project import --source ZIP --destination NEW_FOLDER --images-only` copies only images/logs, not old recovered files. Legacy hash disagreements stay explicit; comparison rechecks inputs against ZIP bytes. [Same-evidence replay](docs/testing/SAME_EVIDENCE_REPLAY.md).
-
-Current checklist: **464/479 TODOs (96.9%), 15 open**. [Latest missing-boot/layout checkpoint](docs/recovery/LAYOUT_COMPARISON.md), [current progress](docs/development/PROGRESS.md) and [the measured 136-disk review](docs/testing/BATCH_136_REVIEW.md) separate engineering completion, historical file differences and remaining recovery work. [Saved-batch tools](docs/guides/SAVED_BATCH_TOOLS.md) include completion scenarios, independent saved-flux CRC checks, legacy aggregate/candidate/stream comparisons, operator-action accounting and expert GW settings. Managed-file traces cover recovered files, conversions and forensic editable editions. The normal production command is unchanged. Checklist coverage is not a customer-file recovery rate; earlier checkpoints remain historical.
+V1 gates and measured results: [release acceptance](docs/testing/V1_RELEASE_ACCEPTANCE.md). The wider research roadmap remains **465/479 TODOs (97.1%), 14 open**, not a customer-file recovery percentage. [Progress and historical checkpoints](docs/development/PROGRESS.md).
 
 ## Start here
 
@@ -40,7 +28,7 @@ The [documentation index](docs/README.md) groups operator guides, recovery/evide
 | See which files depend on bad/disputed sectors | [Batch damage impact and file trace](docs/recovery/EVIDENCE_IMPACT.md): `fv recovery impact all` or `fv recovery impact 59` |
 | Stop active work and continue later | [Stop/resume](docs/guides/STOP_RESUME.md): `STOP`, `fv stop`, `fv start` |
 | Recovered files, conversion issues and delivery hashes | [Final report guide](docs/guides/FINAL_REPORTS.md): `fv report export` |
-| Finish/archive saved results and resume interrupted finishing | [Finishing guide](docs/guides/FINALIZATION.md): `fv finalize --destination PATH` |
+| Finish/archive saved results and resume interrupted finishing | [Finishing guide](docs/guides/FINALIZATION.md): `fv finish` / `fv finish resume` |
 | Check benchmark readiness | [Single-GW gates](docs/testing/SINGLE_GW_READINESS.md) |
 | Less typing in PowerShell 7 | [Tab completion](docs/guides/SHELL_COMPLETION.md): optional one-line setup |
 | Want development status | [Progress](docs/development/PROGRESS.md) and [TODO](TODO.md) |

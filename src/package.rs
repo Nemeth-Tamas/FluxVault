@@ -12,6 +12,8 @@ use chrono::{DateTime, Local, Utc};
 use sha2::{Digest, Sha256};
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+#[path = "package_index.rs"]
+mod customer_index;
 #[path = "package_staging.rs"]
 mod staging;
 
@@ -581,9 +583,19 @@ fn write_and_verify(
             sha256,
         });
     }
+    let index = customer_index::build(files, &rows, project_name, language)?;
+    zip.start_file("START_HERE.html", options)
+        .map_err(|e| e.to_string())?;
+    zip.write_all(index.as_bytes()).map_err(|e| e.to_string())?;
+    rows.push(ManifestRow {
+        archive_path: "START_HERE.html".into(),
+        bytes: index.len() as u64,
+        modified_utc: String::new(),
+        sha256: format!("{:x}", Sha256::digest(index.as_bytes())),
+    });
     let total_bytes = rows.iter().map(|row| row.bytes).sum();
     let manifest = manifest_text(&rows);
-    let readme = readme_in_language(language, project_name, files.len(), total_bytes);
+    let readme = readme_in_language(language, project_name, rows.len(), total_bytes);
     zip.start_file("PACKAGE_MANIFEST.csv", options)
         .map_err(|error| error.to_string())?;
     zip.write_all(manifest.as_bytes())
@@ -677,6 +689,10 @@ fn readme_in_language(
     total_bytes: u64,
 ) -> String {
     let mut text = readme_base_in_language(language, project_name, file_count, total_bytes);
+    text.push_str(language.text(
+        "\r\nKEZDJE ITT: bontsa ki a ZIP-et, majd nyissa meg a START_HERE.html fájlt. Lemezenként mutatja a jelentéshez és ellenőrzőösszeghez kötött PDF/szerkeszthető kiadásokat és a figyelmeztetéseket.\r\n",
+        "\r\nSTART HERE: extract the ZIP, then open START_HERE.html. It groups report/hash-bound PDF/editable editions by disk and retains attention notices.\r\n",
+    ));
     text.push_str(match language {
         crate::final_report::Language::Hungarian => "\r\nA Recovery/SnapshotCandidates mappa kizárólag korábban mentett lemezkép-bájtokból származó fájljelölteket tartalmazhat. A beolvasási szektortérkép hiányozhat vagy ellentmondásos lehet; más jelöltek ismert olvashatatlan tartományok mentett helykitöltő/hibás bájtjait is tartalmazzák. A fizikai tartalom teljessége ISMERETLEN. Ezek nem igazolt teljes ügyfélfájlok, nem módosítják az eredeti lemezképet vagy a szokásos konverziót. A SnapshotCandidates.json rögzíti a forráslenyomatot, bájttartományokat, ismert hiányokat és korlátokat. Hiányzó adatot nem találunk ki. Használat előtt ellenőrizze a jelölteket.\r\n",
         crate::final_report::Language::English => "\r\nRecovery/SnapshotCandidates may contain files derived only from observed saved-image bytes. Acquisition maps may be absent/contradictory; other copies retain existing filler/corruption in explicitly known unreadable ranges. Complete physical content is UNKNOWN. These are not certified complete customer files, do not change original images and never enter ordinary conversion. SnapshotCandidates.json records source hashes, byte extents, known holes and limits. No missing bytes are invented. Review candidates before use.\r\n",
@@ -980,10 +996,11 @@ mod tests {
             &|_| {},
         )
         .unwrap();
-        assert_eq!(result.file_count, 8);
-        assert_eq!(result.total_bytes, 29);
+        assert_eq!(result.file_count, 9);
         assert!(result.sha256_path.is_file());
         let mut zip = ZipArchive::new(File::open(result.zip_path).unwrap()).unwrap();
+        let index_bytes = zip.by_name("START_HERE.html").unwrap().size();
+        assert_eq!(result.total_bytes, 29 + index_bytes);
         let mut readme = String::new();
         zip.by_name("README.txt")
             .unwrap()
