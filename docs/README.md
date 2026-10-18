@@ -6,6 +6,8 @@ Command examples use the repository or an acquisition project as their working d
 
 ## Operator guides
 
+Development preview: [v1.1 scope and USB fast-handoff pilot status](development/V1_1_SCOPE.md). Stable v1 instructions remain below.
+
 - [v1 release: install, scan, stop/resume and hand over](guides/V1_RELEASE.md)
 - [Tutorial: setup, scanning, recovery and delivery](guides/TUTORIAL.md)
 - [Cheat sheet: everyday commands](guides/CHEATSHEET.md)

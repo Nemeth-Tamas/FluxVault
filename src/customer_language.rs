@@ -7,6 +7,9 @@ pub(crate) fn warning_summary(language: Language, raw: &str) -> String {
         return raw.to_owned();
     }
     let lower = raw.to_ascii_lowercase();
+    if lower.contains("usb early handoff") {
+        return "Az USB-olvasás korai átadással leállt. A még nem próbált szektorok tartalma ISMERETLEN, nem igazoltan fizikailag hibás. A hiányzó szektorok száma ezeket is tartalmazza; további Greaseweazle-olvasás szükséges. A pontos lefedettség a műszaki mellékletben található.".into();
+    }
     if lower.contains("unreadable")
         || lower.contains("missing sector")
         || lower.contains("disputed")
@@ -106,6 +109,15 @@ pub(crate) fn status_description(language: Language, code: &str) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn early_usb_handoff_warning_distinguishes_unknown_from_physical_damage_in_hungarian() {
+        let raw = "USB early handoff: 2845 sectors were NOT ATTEMPTED and remain unknown";
+        let hu = warning_summary(Language::Hungarian, raw);
+        assert!(hu.contains("ISMERETLEN"));
+        assert!(hu.contains("nem igazoltan fizikailag hibás"));
+        assert_eq!(warning_summary(Language::English, raw), raw);
+    }
     #[test]
     fn human_warnings_are_hungarian_but_english_and_raw_paths_are_exact() {
         for raw in [

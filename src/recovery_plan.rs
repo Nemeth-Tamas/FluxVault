@@ -264,6 +264,8 @@ mod tests {
                 attempt_number: Some(number),
                 source: None,
                 geometry: Default::default(),
+                unread_sectors: Vec::new(),
+                usb_handoff_retries: None,
                 bad_sectors: bad.clone(),
                 retry_failures: 0,
                 retry_recovered: 0,

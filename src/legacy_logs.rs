@@ -45,6 +45,10 @@ pub struct ParsedArchiverLog {
     pub source: Option<String>,
     pub geometry: ParsedGeometry,
     pub bad_sectors: Vec<u64>,
+    /// Unavailable suffix not attempted under an explicit early-handoff policy.
+    /// Included in bad_sectors for compatibility; not measured physical damage.
+    pub unread_sectors: Vec<u64>,
+    pub usb_handoff_retries: Option<usize>,
     pub retry_failures: usize,
     pub retry_recovered: usize,
     pub bytes_written: Option<u64>,
@@ -71,6 +75,8 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
     let mut source = None;
     let mut geometry = ParsedGeometry::default();
     let mut bad_sectors = BTreeSet::new();
+    let mut unread_sectors = BTreeSet::new();
+    let mut usb_handoff_retries = None;
     let mut retry_failures = 0usize;
     let mut retry_recovered_events = 0usize;
     let mut retry_recovered_from_end = None;
@@ -95,6 +101,32 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
         let values = parse_key_values(line);
 
         match record_name.as_str() {
+            "USB_HANDOFF_POLICY" => {
+                if usb_handoff_retries.is_some() {
+                    return Err("Duplicate USB handoff policy".into());
+                }
+                usb_handoff_retries = Some(
+                    parse_usize(values.get("retries"))
+                        .filter(|n| *n <= 2)
+                        .ok_or("Invalid USB handoff retry budget")?,
+                );
+                recognized_records += 1;
+            }
+            "UNREAD_RANGE" => {
+                let first =
+                    parse_u64(values.get("first")).ok_or("Missing unattempted range start")?;
+                let end = parse_u64(values.get("end_exclusive"))
+                    .ok_or("Missing unattempted range end")?;
+                if first >= end
+                    || end > 8192
+                    || !unread_sectors.is_empty()
+                    || values.get("reason").map(String::as_str) != Some("usb_fast_handoff")
+                {
+                    return Err("Invalid/duplicate bounded unattempted range".into());
+                }
+                unread_sectors.extend(first..end);
+                recognized_records += 1;
+            }
             "BEGIN" => {
                 recognized_records += 1;
                 begin_seen = true;
@@ -175,6 +207,17 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
         status = ArchiverLogStatus::InProgress;
     }
 
+    if !unread_sectors.is_empty()
+        && (usb_handoff_retries.is_none()
+            || status != ArchiverLogStatus::Partial
+            || !end_seen
+            || geometry.total_sectors != unread_sectors.last().map(|l| l + 1)
+            || unread_sectors.iter().any(|l| bad_sectors.contains(l)))
+    {
+        return Err("Unattempted range lacks consistent partial coverage/policy".into());
+    }
+    bad_sectors.extend(&unread_sectors);
+
     Ok(ParsedArchiverLog {
         status,
         disk_number,
@@ -182,6 +225,8 @@ pub fn parse_archiver_log(content: &str) -> Result<ParsedArchiverLog, String> {
         source,
         geometry,
         bad_sectors: bad_sectors.into_iter().collect(),
+        unread_sectors: unread_sectors.into_iter().collect(),
+        usb_handoff_retries,
         retry_failures,
         retry_recovered: retry_recovered_from_end.unwrap_or(retry_recovered_events),
         bytes_written,

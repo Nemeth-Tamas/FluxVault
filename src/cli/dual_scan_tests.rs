@@ -1,10 +1,110 @@
 use super::*;
 
 #[test]
+fn early_handoff_resumes_sealed_usb_evidence_and_queues_exactly_once_without_device_access() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    let u = begin(&mut c, Station::Usb, 1).unwrap();
+    let bytes = crate::imaging::handoff::tests::publish_fixture(&p, 1, Some(34), 2);
+    c.failed(&u, "simulated exit after evidence publication")
+        .unwrap();
+    drop(c);
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    let retry = begin(&mut c, Station::Usb, 1).unwrap();
+    let (tx, _) = mpsc::sync_channel(1);
+    assert!(usb_read(&p, &retry, "NO DEVICE MAY BE OPENED", &tx, None).is_err());
+    let saved = usb_read(&p, &retry, "NO DEVICE MAY BE OPENED", &tx, Some(2)).unwrap();
+    c.complete(&retry, saved.attempt).unwrap();
+    assert!(c.complete(&retry, saved.attempt).is_err());
+    c.removed(&retry, true).unwrap();
+    assert!(c.removed(&retry, true).is_err());
+    drop(c);
+    let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
+    assert_eq!(c.status()["usb_recovery_queue"], json!([1]));
+    assert_eq!(
+        c.status()["disks"]["1"]["usb_triage"]["missing_sectors"],
+        2846
+    );
+    assert_eq!(c.next_fresh_disk(), Some(2));
+    let _next = begin(&mut c, Station::Usb, 2).unwrap();
+    let transfer = begin(&mut c, Station::Greaseweazle, 1).unwrap();
+    let good = crate::imaging::handoff::tests::original_bytes();
+    c.transfer_guard(&transfer)
+        .unwrap()
+        .unwrap()
+        .check(&good, &[])
+        .unwrap();
+    assert_eq!(
+        fs::read(p.images_dir().join("001_attempt_001.img")).unwrap(),
+        bytes
+    );
+    assert!(!p.images_dir().join("001_attempt_002.img").exists());
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn first_sector_handoff_never_invents_cross_station_identity_from_zero_placeholders() {
+    let p = project();
+    let mut c = Coordinator::open(p.clone(), Some(1), false).unwrap();
+    let u = begin(&mut c, Station::Usb, 1).unwrap();
+    crate::imaging::handoff::tests::publish_fixture(&p, 1, Some(0), 2);
+    c.complete(&u, 1).unwrap();
+    c.removed(&u, true).unwrap();
+    let g = begin(&mut c, Station::Greaseweazle, 1).unwrap();
+    let guard = c.transfer_guard(&g).unwrap().unwrap();
+    let before = c.status();
+    assert!(
+        guard
+            .check(&crate::imaging::handoff::tests::original_bytes(), &[])
+            .unwrap_err()
+            .contains("No mutually readable")
+    );
+    assert_eq!(c.status(), before);
+    drop(c);
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
+fn early_handoff_settings_restore_policy_and_reject_changes_while_old_settings_stay_off() {
+    let p = project();
+    let mut options = Options {
+        handoff_retries: Some(1),
+        usb: None,
+        gw: None,
+        last: Some(2),
+        workers: 4,
+        verified: true,
+        acquisition_only: true,
+        json: true,
+        color: false,
+        sound: false,
+    };
+    let chosen = settings(&p, &options).unwrap();
+    save_settings(&p, &chosen).unwrap();
+    options.handoff_retries = None;
+    assert_eq!(settings(&p, &options).unwrap().handoff_retries, Some(1));
+    options.handoff_retries = Some(2);
+    assert!(settings(&p, &options).is_err());
+    options.handoff_retries = Some(3);
+    assert!(settings(&p, &options).is_err());
+    let legacy: Settings =
+        serde_json::from_str(r#"{"schema":1,"usb":"A:","gw":"B","last":2}"#).unwrap();
+    assert_eq!(legacy.handoff_retries, None);
+    assert!(
+        !serde_json::to_string(&legacy)
+            .unwrap()
+            .contains("handoff_retries")
+    );
+    fs::remove_dir_all(p.root()).unwrap();
+}
+
+#[test]
 fn switching_from_usb_inherits_its_sealed_endpoint() {
     let p = project();
     drop(Coordinator::open(p.clone(), Some(6), false).unwrap());
     let options = Options {
+        handoff_retries: None,
         usb: None,
         gw: None,
         last: None,
@@ -719,7 +819,7 @@ fn failure_keeps_usb_identity_but_gw_still_finishes_and_saved_usb_retry_adopts_w
     let mut c = Coordinator::open(p.clone(), Some(2), false).unwrap();
     let retry = begin(&mut c, Station::Usb, 1).unwrap();
     let (tx, _) = mpsc::sync_channel(1);
-    let result = usb_read(&p, &retry, "NO DEVICE SHOULD BE OPENED", &tx).unwrap();
+    let result = usb_read(&p, &retry, "NO DEVICE SHOULD BE OPENED", &tx, None).unwrap();
     c.complete(&retry, result.attempt).unwrap();
     assert_eq!(
         imaging::load_attempts_for_disk(&p.images_dir(), 1)
@@ -782,6 +882,7 @@ fn dual_preflight_settings_are_strict_resume_selectors_and_no_verify_never_opens
 {
     let p = project();
     let options = Options {
+        handoff_retries: None,
         usb: None,
         gw: None,
         last: Some(6),
@@ -806,6 +907,7 @@ fn dual_preflight_settings_are_strict_resume_selectors_and_no_verify_never_opens
         selected
     );
     let bad = Options {
+        handoff_retries: None,
         usb: Some("B:".into()),
         gw: None,
         last: None,

@@ -208,6 +208,42 @@ fn version_is_available_without_project_or_tools() {
         assert!(out.stderr.is_empty());
     }
 }
+
+#[test]
+fn production_resume_restores_fast_handoff_without_enabling_usb_device_access() {
+    let f = Fixture::new(false);
+    let paused = value(&f.run(
+        &[
+            "production",
+            "start",
+            "--double",
+            "--usb-fast-handoff",
+            "--usb-handoff-retries",
+            "1",
+            "--write-blocker-verified",
+            "--last-disk",
+            "1",
+            "--json",
+        ],
+        b"QUIT\n",
+        &[],
+    ));
+    assert!(paused["finalization"].is_null());
+    let args = f.record()["scan_args"].as_array().unwrap().clone();
+    assert!(args.iter().any(|a| a == "--usb-fast-handoff"));
+    let finished = value(&f.run(
+        &["production", "resume", "--write-blocker-verified", "--json"],
+        b"g1\n",
+        &[],
+    ));
+    assert!(finished["finalization"]["package"].is_object());
+    let settings: Value = serde_json::from_slice(
+        &fs::read(f.project.root().join(".fluxvault-dual-settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["handoff_retries"], 1);
+    assert!(f.record()["dual"] == true);
+}
 #[test]
 fn production_archives_at_endpoint_and_repeated_start_never_reads_again() {
     let f = Fixture::new(false);

@@ -831,6 +831,8 @@ mod tests {
                 attempt_number: Some(1),
                 source: None,
                 geometry: Default::default(),
+                unread_sectors: Vec::new(),
+                usb_handoff_retries: None,
                 bad_sectors: Vec::new(),
                 retry_failures: 0,
                 retry_recovered: 0,

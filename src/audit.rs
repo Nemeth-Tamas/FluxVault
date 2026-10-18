@@ -202,6 +202,17 @@ pub(crate) fn run_audit(
                 ),
             );
         }
+        if let Some(log) = &attempt.parsed_log
+            && !log.unread_sectors.is_empty()
+        {
+            append_issue(
+                &mut record.issue,
+                &format!(
+                    "USB early handoff: {} sectors were NOT ATTEMPTED and remain unknown, not measured physically bad. Missing-sector counts include these unavailable placeholders; GW recovery is required.",
+                    log.unread_sectors.len()
+                ),
+            );
+        }
         let presence = extraction::inspect_extraction_presence(
             &project.extracted_dir(),
             summary.disk_number,

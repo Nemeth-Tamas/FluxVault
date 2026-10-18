@@ -12,6 +12,70 @@ use std::{
 };
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn fast_handoff_flag_guards_and_preview_never_open_devices_or_write_scan_state() {
+    let f = Fixture::new();
+    let before = fs::read(f.project.root().join("project.json")).unwrap();
+    for args in [
+        vec!["scan", "--usb", "--usb-fast-handoff"],
+        vec!["scan", "--usb-fast-handoff"],
+        vec!["acquire", "--usb-fast-handoff"],
+        vec!["scan", "--double", "--usb-handoff-retries", "1"],
+        vec![
+            "scan",
+            "--double",
+            "--usb-fast-handoff",
+            "--usb-handoff-retries",
+            "3",
+        ],
+        vec![
+            "production",
+            "start",
+            "--usb-fast-handoff",
+            "--last-disk",
+            "1",
+        ],
+    ] {
+        let out = f.command().args(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2));
+    }
+    for command in ["scan", "start"] {
+        let out = f
+            .command()
+            .args([
+                command,
+                "--double",
+                "--plan",
+                "--usb-fast-handoff",
+                "--usb-handoff-retries",
+                "1",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["requested_usb_fast_handoff_retries"], 1);
+    }
+    assert_eq!(
+        fs::read(f.project.root().join("project.json")).unwrap(),
+        before
+    );
+    for name in [
+        ".fluxvault-production.json",
+        ".fluxvault-production-workflow.json",
+        ".fluxvault-dual-settings.json",
+        ".fluxvault-run-control.json",
+    ] {
+        assert!(!f.project.root().join(name).exists(), "{name}");
+    }
+    assert_eq!(fs::read_dir(f.project.images_dir()).unwrap().count(), 0);
+}
+
 struct Fixture {
     root: PathBuf,
     project: ProjectState,

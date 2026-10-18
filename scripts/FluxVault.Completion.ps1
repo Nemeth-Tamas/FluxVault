@@ -108,10 +108,11 @@ $fluxVaultCompleter = {
         '--capture-storage' = @('packed','raw')
         '--processing-mode' = @('background','tail')
         '--conversion-workers' = @('1','2','4','8','12','16')
+        '--usb-handoff-retries' = @('0','1','2')
         '--retries' = @(0..10 | ForEach-Object { [string]$_ })
         '--revs' = @(1..10 | ForEach-Object { [string]$_ })
     }
-    $takesValue = @('--project','--destination','--drive','--disk','--retries','--count','--last-disk','--source','--baseline','--dmde-log','--conversion-workers','--gw-drive','--profile','--capture-storage','--processing-mode','--color','--sound','--revs','--capture-attempt','--policy','--profile-map','--language','--lba','--sectors','--attempt')
+    $takesValue = @('--project','--destination','--drive','--disk','--retries','--usb-handoff-retries','--count','--last-disk','--source','--baseline','--dmde-log','--conversion-workers','--gw-drive','--profile','--capture-storage','--processing-mode','--color','--sound','--revs','--capture-attempt','--policy','--profile-map','--language','--lba','--sectors','--attempt')
 
     # Only literal AST text before the cursor; never evaluate a variable,
     # subexpression, command substitution, or any user-supplied argument.
@@ -156,6 +157,10 @@ $fluxVaultCompleter = {
         } elseif ($flags -contains '--usb' -or $flags -contains '--drive' -or $flags -contains '--write-blocker-verified') {
             $options[$context] = @('--drive','--count','--last-disk','--retries','--write-blocker-verified','--sound','--color','--conversion-workers','--acquisition-only')
         }
+    }
+    if ($context -in @('scan','start','production start') -and $flags -contains '--double') {
+        $options[$context] += '--usb-fast-handoff'
+        if ($flags -contains '--usb-fast-handoff') { $options[$context] += '--usb-handoff-retries' }
     }
     if ($expectValue) {
         $candidates = @($values[$expectValue])

@@ -2,6 +2,50 @@ use super::*;
 use crate::production::{Coordinator, Station};
 use sha2::{Digest, Sha256};
 
+#[test]
+fn fast_handoff_production_options_require_shared_gw_and_survive_saved_option_replay() {
+    let f = Fixture::new();
+    let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    for bad in [
+        vec!["production", "start", "--usb-fast-handoff"],
+        vec![
+            "production",
+            "start",
+            "--double",
+            "--usb-handoff-retries",
+            "2",
+        ],
+        vec![
+            "production",
+            "start",
+            "--double",
+            "--usb-fast-handoff",
+            "--usb-handoff-retries",
+            "3",
+        ],
+    ] {
+        assert!(parse(&args(&bad), f.1.root()).is_err());
+    }
+    let parsed = parse(
+        &args(&[
+            "production",
+            "start",
+            "--double",
+            "--usb-fast-handoff",
+            "--usb-handoff-retries",
+            "1",
+        ]),
+        f.1.root(),
+    )
+    .unwrap();
+    let mut record = f.record(true);
+    record.scan_args = parsed.persistent;
+    save(&f.1, &record).unwrap();
+    let loaded = load(&f.1).unwrap().unwrap();
+    assert_eq!(loaded.scan_args, record.scan_args);
+    assert!(!f.1.root().join(".fluxvault-production.json").exists());
+}
+
 struct Fixture(PathBuf, ProjectState);
 impl Fixture {
     fn new() -> Self {

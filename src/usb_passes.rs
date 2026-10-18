@@ -22,6 +22,14 @@ pub(crate) fn index(
         return Err("USB pass attribution exceeds sector bound".into());
     }
     let mut rows = BTreeMap::<usize, (usize, bool, bool)>::new();
+    let unread = if log.contains("USB_HANDOFF_POLICY |") || log.contains("UNREAD_RANGE |") {
+        crate::legacy_logs::parse_archiver_log(log)?
+            .unread_sectors
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
     for full in log.lines() {
         let line = full.split_once("] ").map_or(full, |(_, s)| s);
         let kind = line.split('|').next().unwrap_or("").trim();
@@ -61,11 +69,19 @@ pub(crate) fn index(
     }
     if rows.values().filter(|r| r.2).count() != recovered
         || rows.iter().any(|(l, r)| bad.contains(&(*l as u64)) == r.2)
-        || bad.iter().any(|l| !rows.contains_key(&(*l as usize)))
+        || bad
+            .iter()
+            .any(|l| !unread.contains(l) && !rows.contains_key(&(*l as usize)))
+        || unread
+            .iter()
+            .any(|l| !bad.contains(l) || rows.contains_key(&(*l as usize)))
     {
         return Err("USB pass observations contradict the completed acquisition map".into());
     }
     Ok(Some((0..total).map(|lba| {
+        if unread.contains(&(lba as u64)) {
+            return json!({"lba":lba,"outcome":"not_attempted_placeholder","successful_pass":null,"last_attempted_pass":null,"direction":null,"evidence":"explicit_usb_fast_handoff_unattempted_range","initial_track_vs_sector_fallback":null,"independent_crc_verified":false,"physical_label_identity_verified":false});
+        }
         let row=rows.get(&lba);let failed=bad.contains(&(lba as u64));let pass=row.map_or(0,|r|r.0);
         json!({"lba":lba,"outcome":if failed{"unreadable_placeholder"}else{"readable_saved_sector"},
             "successful_pass":if failed{None}else{Some(pass)},"last_attempted_pass":pass,

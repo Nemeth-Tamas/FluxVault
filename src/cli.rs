@@ -217,6 +217,8 @@ Usage:
 Options:
   --usb                             scan: durable USB feeding + background files, default Windows A:
   --double                         scan: opt-in simultaneous USB/GW pilot; exact labels
+  --usb-fast-handoff               scan/production --double: stop USB after first persistent sector error
+  --usb-handoff-retries N          With fast handoff: 0-2 immediate retries (default 2); saved on resume
   --plan                           scan --double / project import / recovery snapshot: offline preview, no writes
   --json                            Output machine-readable JSON
   --project PATH                    Use a specific project instead of searching upward
@@ -393,6 +395,8 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     let mut no_verify = false;
     let mut usb_only = false;
     let mut double = false;
+    let mut usb_fast_handoff = false;
+    let mut usb_handoff_retries = None;
     let mut dual_plan = false;
     let mut color_mode = None;
     let mut sound_mode = None;
@@ -459,6 +463,24 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             "--no-verify" => no_verify = true,
             "--usb" => usb_only = true,
             "--double" => double = true,
+            "--usb-fast-handoff" => {
+                if usb_fast_handoff {
+                    return Err("Duplicate --usb-fast-handoff".into());
+                }
+                usb_fast_handoff = true;
+            }
+            "--usb-handoff-retries" => {
+                if usb_handoff_retries.is_some() {
+                    return Err("Duplicate --usb-handoff-retries".into());
+                }
+                index += 1;
+                usb_handoff_retries = Some(
+                    args.get(index)
+                        .and_then(|n| n.parse::<usize>().ok())
+                        .filter(|n| *n <= 2)
+                        .ok_or("--usb-handoff-retries requires 0, 1 or 2")?,
+                );
+            }
             "--plan" => dual_plan = true,
             "--retire-raw" => retire_raw = true,
             "--processing-mode" => {
@@ -653,6 +675,14 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
     }
     if positional == ["production", "start"] || positional == ["production", "resume"] {
         return production_flow::run(args, cwd);
+    }
+    if usb_handoff_retries.is_some() && !usb_fast_handoff {
+        return Err("--usb-handoff-retries requires --usb-fast-handoff".into());
+    }
+    if (usb_fast_handoff || usb_handoff_retries.is_some())
+        && (!(positional == ["scan"] || positional == ["start"]) || !double || usb_only)
+    {
+        return Err("USB fast handoff requires scan --double with an active GW station; USB-only must remain best effort".into());
     }
     if images_only && positional != ["project", "import"] {
         return Err("--images-only is only valid with project import".into());
@@ -1013,6 +1043,7 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
             return dual_scan::run(
                 ProjectState::open_without_session(root)?,
                 dual_scan::Options {
+                    handoff_retries: usb_fast_handoff.then_some(usb_handoff_retries.unwrap_or(2)),
                     usb: drive_override,
                     gw: gw_drive,
                     last: last_disk,
@@ -1063,6 +1094,8 @@ fn run_inner(args: &[String], cwd: &Path) -> Result<CliResponse, String> {
         let mut value = crate::production::preview(&project, last_disk)?;
         value["usb_drive"] = json!(drive_override.as_deref().unwrap_or("A:"));
         value["gw_drive"] = json!(gw_drive.unwrap_or('B').to_string());
+        value["requested_usb_fast_handoff_retries"] =
+            json!(usb_fast_handoff.then_some(usb_handoff_retries.unwrap_or(2)));
         return Ok(CliResponse {
             output: if json_output {
                 value.to_string()

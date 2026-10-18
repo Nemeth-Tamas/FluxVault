@@ -31,6 +31,7 @@ use std::{
 const SETTINGS: &str = ".fluxvault-dual-settings.json";
 
 pub(super) struct Options {
+    pub handoff_retries: Option<usize>,
     pub usb: Option<String>,
     pub gw: Option<char>,
     pub last: Option<u32>,
@@ -49,6 +50,8 @@ struct Settings {
     usb: String,
     gw: char,
     last: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handoff_retries: Option<usize>,
 }
 
 fn settings(project: &ProjectState, options: &Options) -> Result<Settings, String> {
@@ -85,6 +88,9 @@ fn settings(project: &ProjectState, options: &Options) -> Result<Settings, Strin
         None
     };
     let selected = Settings {
+        handoff_retries: options
+            .handoff_retries
+            .or_else(|| old.as_ref().and_then(|s| s.handoff_retries)),
         schema: 1,
         usb: options
             .usb
@@ -101,7 +107,8 @@ fn settings(project: &ProjectState, options: &Options) -> Result<Settings, Strin
                 .as_u64()
                 .map(|n| n as u32)),
     };
-    if selected.usb.len() != 2
+    if selected.handoff_retries.is_some_and(|n| n > 2)
+        || selected.usb.len() != 2
         || !selected.usb.as_bytes()[0].is_ascii_uppercase()
         || !selected.usb.ends_with(':')
         || !matches!(selected.gw, 'A' | 'B')
@@ -171,6 +178,7 @@ fn usb_read(
     ticket: &Ticket,
     drive: &str,
     events: &SyncSender<Event>,
+    handoff_retries: Option<usize>,
 ) -> Result<ReadDone, String> {
     // Restart can adopt a completed, original acquisition left before receipt commit.
     if ticket.retry {
@@ -187,6 +195,13 @@ fn usb_read(
                         .into(),
                 );
             }
+            if value["usb_fast_handoff"]["retries"]
+                .as_u64()
+                .map(|n| n as usize)
+                != handoff_retries
+            {
+                return Err("Interrupted USB acquisition handoff policy differs; evidence preserved, no reread started".into());
+            }
             return Ok(ReadDone {
                 attempt: a.attempt_number,
                 flux: None,
@@ -200,14 +215,15 @@ fn usb_read(
     if geometry.bytes_per_sector != 512 {
         return Err("Dual scan currently supports 512-byte USB sectors only".into());
     }
-    let receiver = imaging::start_imaging_publication(
+    let receiver = imaging::start_imaging_handoff(
         drive,
         geometry,
         project.images_dir(),
         project.logs_dir(),
         ticket.disk,
-        0,
+        handoff_retries.unwrap_or(0),
         Some(project.root().into()),
+        handoff_retries,
     );
     let mut bucket = 0;
     for event in receiver {
@@ -921,9 +937,21 @@ fn feed(
                         measurements.push(json!({"disk":ticket.disk,"station":station_name(ticket.station),"attempt":done.attempt,
                             "read_decode_ms":read_ms,"bad_sectors":a.bad_sectors.len(),"image_sha256":a.sha256}));
                         let detail = if ticket.station == Station::Usb && partial {
-                            "SET ASIDE FOR GW, or transfer with gNNN. USB can continue with uNEXT."
+                            let unread =
+                                a.parsed_log.as_ref().map_or(0, |l| l.unread_sectors.len());
+                            format!(
+                                "{} SET ASIDE FOR GW, or transfer with gNNN. USB can continue with uNEXT.",
+                                if unread > 0 {
+                                    format!(
+                                        "EARLY HANDOFF: {} failed-read sectors, {unread} NOT ATTEMPTED (unknown).",
+                                        a.bad_sectors.len() - unread
+                                    )
+                                } else {
+                                    String::new()
+                                }
+                            )
                         } else {
-                            "Remove this disk. Feed the next label, or confirm u out / g out. Saved files process in background."
+                            "Remove this disk. Feed the next label, or confirm u out / g out. Saved files process in background.".into()
                         };
                         terminal::banner(
                             output,
@@ -1138,7 +1166,13 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
     let reader: Reader = Arc::new(move |ticket, guard, events| {
         let _keep_devices = (&usb_reservation, &gw_reservation);
         match ticket.station {
-            Station::Usb => usb_read(&read_project, &ticket, &read_settings.usb, &events),
+            Station::Usb => usb_read(
+                &read_project,
+                &ticket,
+                &read_settings.usb,
+                &events,
+                read_settings.handoff_retries,
+            ),
             Station::Greaseweazle => gw_read(
                 &read_project,
                 &ticket,
@@ -1150,6 +1184,9 @@ pub(super) fn run(project: ProjectState, options: Options) -> Result<CliResponse
         }
     });
     let mut stderr = io::stderr();
+    if let Some(retries) = selected.handoff_retries {
+        writeln!(stderr,"USB FAST HANDOFF ON / {retries} immediate retries / stop on first persistent failure; untouched sectors remain UNKNOWN") .map_err(|e|e.to_string())?;
+    }
     terminal::banner(
         &mut stderr,
         options.color,

@@ -1,5 +1,7 @@
 # FluxVault
 
+Development `main` is now **1.1.0-dev**: opt-in USB fast handoff and smoother feeding/exception UX. [Scope and pilot status](docs/development/V1_1_SCOPE.md). Stable v1 remains tagged `v1.0.0`; this is not yet a stable 1.1 release.
+
 **v1.0: scan → automatic recovery → conversion → reports → verified ZIP.** [Start here: install, scan, stop/resume and hand over](docs/guides/V1_RELEASE.md). The supported workflow is the release scope; rare-format research and future extra-drive modes remain post-v1.
 
 Already have saved scans? From the project folder, run **`fv finish`**, then **`fv package verify`**. No floppy is needed. The ready ZIP/reports and an offline customer start page appear beside `project.json`; inside the extracted ZIP, open **START_HERE.html**. Attention remains visible and earlier editions are preserved. [Finishing guide](docs/guides/FINALIZATION.md).

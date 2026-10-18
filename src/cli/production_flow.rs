@@ -47,6 +47,8 @@ struct Record {
 }
 #[derive(Default)]
 struct Parsed {
+    usb_fast_handoff: bool,
+    usb_handoff_retries: Option<usize>,
     language: Option<crate::final_report::Language>,
     root: Option<PathBuf>,
     destination: Option<PathBuf>,
@@ -65,6 +67,26 @@ fn parse(args: &[String], cwd: &Path) -> Result<Parsed, String> {
     while i < args.len() {
         let a = &args[i];
         match a.as_str() {
+            "--usb-fast-handoff" => {
+                if p.usb_fast_handoff {
+                    return Err("Duplicate USB handoff option".into());
+                }
+                p.usb_fast_handoff = true;
+                p.persistent.push(a.clone());
+            }
+            "--usb-handoff-retries" => {
+                i += 1;
+                if p.usb_handoff_retries.is_some() {
+                    return Err("Duplicate USB handoff retries".into());
+                }
+                let n = args
+                    .get(i)
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .filter(|n| *n <= 2)
+                    .ok_or("--usb-handoff-retries requires 0, 1 or 2")?;
+                p.usb_handoff_retries = Some(n);
+                p.persistent.extend([a.clone(), n.to_string()]);
+            }
             "--json" => p.json = true,
             "--no-verify" => p.ephemeral.push(a.clone()),
             "--double" => {
@@ -145,6 +167,12 @@ fn parse(args: &[String], cwd: &Path) -> Result<Parsed, String> {
         return Err("Use production start or production resume".into());
     }
     p.resume = pos[1] == "resume";
+    if p.usb_handoff_retries.is_some() && !p.usb_fast_handoff {
+        return Err("--usb-handoff-retries requires --usb-fast-handoff".into());
+    }
+    if p.usb_fast_handoff && !p.dual && !p.resume {
+        return Err("USB fast handoff requires --double with an active GW station".into());
+    }
     if p.dual && p.ephemeral.iter().any(|a| a == "--no-verify") {
         return Err("Dual production requires exact uN/gN labels, not --no-verify".into());
     }

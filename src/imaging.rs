@@ -18,6 +18,9 @@ use crate::{
     safety::MediaSafetyPolicy,
 };
 
+#[path = "usb_handoff.rs"]
+pub(crate) mod handoff;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectorReadState {
     Unread,
@@ -78,6 +81,8 @@ struct AcquisitionMetadata {
     sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     read_conflicts: Option<crate::read_conflicts::Confirmation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usb_fast_handoff: Option<handoff::Summary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,6 +212,29 @@ pub(crate) fn start_imaging_publication(
     sector_retries: usize,
     publication_root: Option<PathBuf>,
 ) -> Receiver<ImagingEvent> {
+    start_imaging_handoff(
+        drive,
+        geometry,
+        output_directory,
+        log_directory,
+        disk_number,
+        sector_retries,
+        publication_root,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn start_imaging_handoff(
+    drive: FloppyDrive,
+    geometry: DiskGeometry,
+    output_directory: PathBuf,
+    log_directory: PathBuf,
+    disk_number: u32,
+    sector_retries: usize,
+    publication_root: Option<PathBuf>,
+    handoff_retries: Option<usize>,
+) -> Receiver<ImagingEvent> {
     let (sender, receiver) = mpsc::channel();
 
     crate::cancellation::spawn(move || {
@@ -219,6 +247,7 @@ pub(crate) fn start_imaging_publication(
             sector_retries,
             &sender,
             publication_root.as_deref(),
+            handoff_retries,
         ) {
             let _ = sender.send(ImagingEvent::Failed(error));
         }
@@ -239,8 +268,12 @@ fn run_imaging(
     sector_retries: usize,
     sender: &Sender<ImagingEvent>,
     publication_root: Option<&Path>,
+    handoff_retries: Option<usize>,
 ) -> Result<(), String> {
     MediaSafetyPolicy::assert_invariants();
+    if handoff_retries.is_some_and(|n| n > 2 || n != sector_retries) {
+        return Err("USB handoff retries must be 0-2 and match the recorded retry policy".into());
+    }
 
     if disk_number == 0 {
         return Err("Disk number must not be 000.".to_owned());
@@ -391,220 +424,246 @@ fn run_imaging(
     let mut completed = 0usize;
     let mut pending_bad_sectors = BTreeMap::<usize, Vec<String>>::new();
     let mut retry_recovered = 0usize;
+    let mut handoff_summary = None;
 
-    for track_index in 0..total_tracks {
-        crate::cancellation::check()?;
-        let track_lba = track_index
-            .checked_mul(sectors_per_track)
-            .ok_or_else(|| "LBA overflow.".to_owned())?;
+    if let Some(retries) = handoff_retries {
+        let read = handoff::read(
+            &mut source,
+            &mut output,
+            geometry,
+            retries,
+            sender,
+            &mut human_log,
+        )?;
+        pending_bad_sectors = read.failed;
+        retry_recovered = read.recovered;
+        handoff_summary = Some(read.summary);
+    } else {
+        for track_index in 0..total_tracks {
+            crate::cancellation::check()?;
+            let track_lba = track_index
+                .checked_mul(sectors_per_track)
+                .ok_or_else(|| "LBA overflow.".to_owned())?;
 
-        let track_offset = (track_lba as u64)
-            .checked_mul(geometry.bytes_per_sector as u64)
-            .ok_or_else(|| "Track offset overflow.".to_owned())?;
+            let track_offset = (track_lba as u64)
+                .checked_mul(geometry.bytes_per_sector as u64)
+                .ok_or_else(|| "Track offset overflow.".to_owned())?;
 
-        let cylinder = track_index / geometry.heads as usize;
-        let head = track_index % geometry.heads as usize;
+            let cylinder = track_index / geometry.heads as usize;
+            let head = track_index % geometry.heads as usize;
 
-        let mut track_buffer = vec![0u8; track_size];
+            let mut track_buffer = vec![0u8; track_size];
 
-        let track_read = source
-            .seek(SeekFrom::Start(track_offset))
-            .and_then(|_| source.read_exact(&mut track_buffer));
+            let track_read = source
+                .seek(SeekFrom::Start(track_offset))
+                .and_then(|_| source.read_exact(&mut track_buffer));
 
-        match track_read {
-            Ok(()) => {
-                output
-                    .write_all(&track_buffer)
-                    .map_err(|error| format!("Disk image write failed: {error}"))?;
-
-                for sector_index in 0..sectors_per_track {
-                    crate::cancellation::check()?;
-                    let lba = track_lba + sector_index;
-
-                    sender
-                        .send(ImagingEvent::Sector {
-                            lba,
-                            state: SectorReadState::Good,
-                        })
-                        .ok();
-
-                    completed += 1;
-
-                    sender
-                        .send(ImagingEvent::Progress {
-                            completed,
-                            total: total_sectors,
-                        })
-                        .ok();
-                }
-            }
-            Err(track_error) => {
-                crate::cancellation::check()?;
-                record_attempt_log(
-                    sender,
-                    &mut human_log,
-                    format!(
-                        "TRACK_READ_FAILED | C{cylinder:02} H{head} | {track_error} | fallback=sector"
-                    ),
-                );
-
-                for sector_index in 0..sectors_per_track {
-                    crate::cancellation::check()?;
-                    let lba = track_lba + sector_index;
-
-                    let sector_offset = (lba as u64)
-                        .checked_mul(geometry.bytes_per_sector as u64)
-                        .ok_or_else(|| "Sector offset overflow.".to_owned())?;
-
-                    let mut sector_buffer = vec![0u8; bytes_per_sector];
-
-                    let read_result = source
-                        .seek(SeekFrom::Start(sector_offset))
-                        .and_then(|_| source.read_exact(&mut sector_buffer));
-
-                    let state = match read_result {
-                        Ok(()) => SectorReadState::Good,
-                        Err(error) => {
-                            let error = error.to_string();
-
-                            record_attempt_log(
-                                sender,
-                                &mut human_log,
-                                format!(
-                                    "SECTOR_READ_FAILED | LBA={lba} | C{cylinder:02} H{head} S{:02} | pass=initial_forward | attempt=1/{} | error={error}",
-                                    sector_index + 1,
-                                    sector_retries + 1
-                                ),
-                            );
-
-                            sector_buffer.fill(0);
-                            pending_bad_sectors.insert(lba, vec![error]);
-
-                            SectorReadState::Bad
-                        }
-                    };
-
+            match track_read {
+                Ok(()) => {
                     output
-                        .write_all(&sector_buffer)
+                        .write_all(&track_buffer)
                         .map_err(|error| format!("Disk image write failed: {error}"))?;
 
-                    sender.send(ImagingEvent::Sector { lba, state }).ok();
+                    for sector_index in 0..sectors_per_track {
+                        crate::cancellation::check()?;
+                        let lba = track_lba + sector_index;
 
-                    completed += 1;
+                        sender
+                            .send(ImagingEvent::Sector {
+                                lba,
+                                state: SectorReadState::Good,
+                            })
+                            .ok();
 
-                    sender
-                        .send(ImagingEvent::Progress {
-                            completed,
-                            total: total_sectors,
-                        })
-                        .ok();
-                }
-            }
-        }
-    }
+                        completed += 1;
 
-    for retry_pass in 1..=sector_retries {
-        if pending_bad_sectors.is_empty() {
-            break;
-        }
-
-        let direction = retry_direction(retry_pass);
-        let retry_lbas = retry_lba_order(pending_bad_sectors.keys().copied().collect(), retry_pass);
-        let pending_at_start = retry_lbas.len();
-        let mut recovered_in_pass = 0usize;
-
-        record_attempt_log(
-            sender,
-            &mut human_log,
-            format!(
-                "RETRY_PASS_BEGIN | pass={retry_pass}/{sector_retries} | direction={direction} | pending={pending_at_start}"
-            ),
-        );
-
-        for lba in retry_lbas {
-            crate::cancellation::check()?;
-            let sector_offset = (lba as u64)
-                .checked_mul(geometry.bytes_per_sector as u64)
-                .ok_or_else(|| "Retry sector offset overflow.".to_owned())?;
-            let mut sector_buffer = vec![0u8; bytes_per_sector];
-            let read_result = source
-                .seek(SeekFrom::Start(sector_offset))
-                .and_then(|_| source.read_exact(&mut sector_buffer));
-            let location = bad_sector_metadata(lba as u64, geometry);
-
-            match read_result {
-                Ok(()) => {
-                    let previous_failures = pending_bad_sectors
-                        .get(&lba)
-                        .map(Vec::len)
-                        .unwrap_or(retry_pass);
-
-                    output
-                        .seek(SeekFrom::Start(sector_offset))
-                        .and_then(|_| output.write_all(&sector_buffer))
-                        .map_err(|error| {
-                            format!("Writing retry-recovered sector to image failed: {error}")
-                        })?;
-
-                    pending_bad_sectors.remove(&lba);
-                    retry_recovered += 1;
-                    recovered_in_pass += 1;
-
-                    sender
-                        .send(ImagingEvent::Sector {
-                            lba,
-                            state: SectorReadState::RetryRecovered,
-                        })
-                        .ok();
-
-                    record_attempt_log(
-                        sender,
-                        &mut human_log,
-                        format!(
-                            "SECTOR_RECOVERED_AFTER_RETRY | LBA={lba} | C{:02} H{} S{:02} | retry_pass={retry_pass} | direction={direction} | attempts_used={}",
-                            location.cylinder,
-                            location.head,
-                            location.sector,
-                            previous_failures + 1
-                        ),
-                    );
-                }
-                Err(error) => {
-                    let error = error.to_string();
-
-                    if let Some(errors) = pending_bad_sectors.get_mut(&lba) {
-                        errors.push(error.clone());
+                        sender
+                            .send(ImagingEvent::Progress {
+                                completed,
+                                total: total_sectors,
+                            })
+                            .ok();
                     }
-
+                }
+                Err(track_error) => {
+                    crate::cancellation::check()?;
                     record_attempt_log(
                         sender,
                         &mut human_log,
                         format!(
-                            "SECTOR_RETRY_FAILED | LBA={lba} | C{:02} H{} S{:02} | retry_pass={retry_pass}/{sector_retries} | direction={direction} | attempt={}/{} | error={error}",
-                            location.cylinder,
-                            location.head,
-                            location.sector,
-                            retry_pass + 1,
-                            sector_retries + 1
+                            "TRACK_READ_FAILED | C{cylinder:02} H{head} | {track_error} | fallback=sector"
                         ),
                     );
+
+                    for sector_index in 0..sectors_per_track {
+                        crate::cancellation::check()?;
+                        let lba = track_lba + sector_index;
+
+                        let sector_offset = (lba as u64)
+                            .checked_mul(geometry.bytes_per_sector as u64)
+                            .ok_or_else(|| "Sector offset overflow.".to_owned())?;
+
+                        let mut sector_buffer = vec![0u8; bytes_per_sector];
+
+                        let read_result = source
+                            .seek(SeekFrom::Start(sector_offset))
+                            .and_then(|_| source.read_exact(&mut sector_buffer));
+
+                        let state = match read_result {
+                            Ok(()) => SectorReadState::Good,
+                            Err(error) => {
+                                let error = error.to_string();
+
+                                record_attempt_log(
+                                    sender,
+                                    &mut human_log,
+                                    format!(
+                                        "SECTOR_READ_FAILED | LBA={lba} | C{cylinder:02} H{head} S{:02} | pass=initial_forward | attempt=1/{} | error={error}",
+                                        sector_index + 1,
+                                        sector_retries + 1
+                                    ),
+                                );
+
+                                sector_buffer.fill(0);
+                                pending_bad_sectors.insert(lba, vec![error]);
+
+                                SectorReadState::Bad
+                            }
+                        };
+
+                        output
+                            .write_all(&sector_buffer)
+                            .map_err(|error| format!("Disk image write failed: {error}"))?;
+
+                        sender.send(ImagingEvent::Sector { lba, state }).ok();
+
+                        completed += 1;
+
+                        sender
+                            .send(ImagingEvent::Progress {
+                                completed,
+                                total: total_sectors,
+                            })
+                            .ok();
+                    }
                 }
             }
         }
 
-        record_attempt_log(
-            sender,
-            &mut human_log,
-            format!(
-                "RETRY_PASS_END | pass={retry_pass}/{sector_retries} | direction={direction} | recovered={recovered_in_pass} | remaining={}",
-                pending_bad_sectors.len()
-            ),
-        );
+        for retry_pass in 1..=sector_retries {
+            if pending_bad_sectors.is_empty() {
+                break;
+            }
+
+            let direction = retry_direction(retry_pass);
+            let retry_lbas =
+                retry_lba_order(pending_bad_sectors.keys().copied().collect(), retry_pass);
+            let pending_at_start = retry_lbas.len();
+            let mut recovered_in_pass = 0usize;
+
+            record_attempt_log(
+                sender,
+                &mut human_log,
+                format!(
+                    "RETRY_PASS_BEGIN | pass={retry_pass}/{sector_retries} | direction={direction} | pending={pending_at_start}"
+                ),
+            );
+
+            for lba in retry_lbas {
+                crate::cancellation::check()?;
+                let sector_offset = (lba as u64)
+                    .checked_mul(geometry.bytes_per_sector as u64)
+                    .ok_or_else(|| "Retry sector offset overflow.".to_owned())?;
+                let mut sector_buffer = vec![0u8; bytes_per_sector];
+                let read_result = source
+                    .seek(SeekFrom::Start(sector_offset))
+                    .and_then(|_| source.read_exact(&mut sector_buffer));
+                let location = bad_sector_metadata(lba as u64, geometry);
+
+                match read_result {
+                    Ok(()) => {
+                        let previous_failures = pending_bad_sectors
+                            .get(&lba)
+                            .map(Vec::len)
+                            .unwrap_or(retry_pass);
+
+                        output
+                            .seek(SeekFrom::Start(sector_offset))
+                            .and_then(|_| output.write_all(&sector_buffer))
+                            .map_err(|error| {
+                                format!("Writing retry-recovered sector to image failed: {error}")
+                            })?;
+
+                        pending_bad_sectors.remove(&lba);
+                        retry_recovered += 1;
+                        recovered_in_pass += 1;
+
+                        sender
+                            .send(ImagingEvent::Sector {
+                                lba,
+                                state: SectorReadState::RetryRecovered,
+                            })
+                            .ok();
+
+                        record_attempt_log(
+                            sender,
+                            &mut human_log,
+                            format!(
+                                "SECTOR_RECOVERED_AFTER_RETRY | LBA={lba} | C{:02} H{} S{:02} | retry_pass={retry_pass} | direction={direction} | attempts_used={}",
+                                location.cylinder,
+                                location.head,
+                                location.sector,
+                                previous_failures + 1
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        let error = error.to_string();
+
+                        if let Some(errors) = pending_bad_sectors.get_mut(&lba) {
+                            errors.push(error.clone());
+                        }
+
+                        record_attempt_log(
+                            sender,
+                            &mut human_log,
+                            format!(
+                                "SECTOR_RETRY_FAILED | LBA={lba} | C{:02} H{} S{:02} | retry_pass={retry_pass}/{sector_retries} | direction={direction} | attempt={}/{} | error={error}",
+                                location.cylinder,
+                                location.head,
+                                location.sector,
+                                retry_pass + 1,
+                                sector_retries + 1
+                            ),
+                        );
+                    }
+                }
+            }
+
+            record_attempt_log(
+                sender,
+                &mut human_log,
+                format!(
+                    "RETRY_PASS_END | pass={retry_pass}/{sector_retries} | direction={direction} | recovered={recovered_in_pass} | remaining={}",
+                    pending_bad_sectors.len()
+                ),
+            );
+        }
     }
 
+    // The historical bad_sectors map is an unavailable-byte mask, not a
+    // measurement of physical damage. The explicit handoff summary/log keeps
+    // unattempted bytes distinct from sectors whose reads actually failed.
+    drop(source);
     let bad_sectors = pending_bad_sectors
         .keys()
         .map(|lba| *lba as u64)
+        .chain(
+            handoff_summary
+                .as_ref()
+                .into_iter()
+                .flat_map(|s| s.unattempted()),
+        )
         .collect::<Vec<_>>();
 
     for (lba, errors) in &pending_bad_sectors {
@@ -716,6 +775,7 @@ fn run_imaging(
 
         sha256: sha256.clone(),
         read_conflicts: None,
+        usb_fast_handoff: handoff_summary,
     };
 
     let metadata_json = serde_json::to_string_pretty(&metadata)
@@ -976,6 +1036,21 @@ pub(crate) fn load_unselected_attempts(
         let parsed_log = resolved_log_path
             .as_deref()
             .and_then(|log_path| legacy_logs::parse_archiver_log_file(log_path).ok());
+        if metadata.source_backend == "windows-raw-sector" || metadata.usb_fast_handoff.is_some() {
+            let raw = if metadata.usb_fast_handoff.is_some() {
+                Some(
+                    fs::read_to_string(
+                        resolved_log_path
+                            .as_ref()
+                            .ok_or("USB handoff log missing")?,
+                    )
+                    .map_err(|e| e.to_string())?,
+                )
+            } else {
+                None
+            };
+            handoff::validate(&metadata, parsed_log.as_ref(), raw.as_deref())?;
+        }
         let log_file = resolved_log_path
             .map(|path| path.display().to_string())
             .unwrap_or(metadata.log_file);
