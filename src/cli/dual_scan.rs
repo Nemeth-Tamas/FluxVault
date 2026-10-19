@@ -452,8 +452,16 @@ pub(super) fn next_action(state: &Value, station: Station, held: Option<(u32, &s
                     && station == Station::Greaseweazle
                     && state["disks"][disk.to_string()]["error"]
                         .as_str()
-                        .is_some_and(|e| e.starts_with("USB/GW readable bytes disagree;"))
+                        .is_some_and(crate::production::identity_exception)
                 {
+                    if state["disks"][disk.to_string()]["error"]
+                        .as_str()
+                        .is_some_and(crate::production::no_overlap_error)
+                    {
+                        return format!(
+                            "NO BYTE COMPARISON {disk:03}; check physical label. Wrong label: idle/remove, g release {disk}. Zero-readable fast USB and definitely same floppy: g confirm {disk}, then g{disk}; identity remains UNVERIFIED"
+                        );
+                    }
                     return format!(
                         "CHECK IDENTITY {disk:03}; wrong label: idle/remove then g release {disk}; definitely same USB floppy: g confirm {disk}, then g{disk}. Conflicts remain attention"
                     );
@@ -800,8 +808,13 @@ fn feed(
                                 if let Some(log) = telemetry.as_deref_mut() {
                                     crate::dual_benchmark::record(log, "dual_same_disk_confirmed", proof.clone())?;
                                 }
-                                terminal::banner(output, color, Cue::Error, "SAME DISK CONFIRMED / CONFLICTS RETAINED / NO READ STARTED",
-                                    &format!("{disk:03}: {} matching, {} differing readable sectors. Exact saved candidate bound; both source versions retained. Type g{disk} to finish from saved evidence. Not clean-content certification.", proof["agreeing_sectors"], proof["conflicts"].as_array().map_or(0, Vec::len)))?;
+                                if proof["operator_custody_only"]==true {
+                                    terminal::banner(output,color,Cue::Error,"PHYSICAL LABEL CONFIRMED / IDENTITY NOT BYTE-VERIFIED / NO READ STARTED",
+                                        &format!("{disk:03}: USB had zero readable sectors. Operator custody assertion only; no byte match claimed. Exact saved GW candidate bound and attention retained. Type g{disk} to finish from saved evidence."))?;
+                                } else {
+                                    terminal::banner(output, color, Cue::Error, "SAME DISK CONFIRMED / CONFLICTS RETAINED / NO READ STARTED",
+                                        &format!("{disk:03}: {} matching, {} differing readable sectors. Exact saved candidate bound; both source versions retained. Type g{disk} to finish from saved evidence. Not clean-content certification.", proof["agreeing_sectors"], proof["conflicts"].as_array().map_or(0, Vec::len)))?;
+                                }
                                 display(&session, output, color, draining)
                             })
                         }
@@ -936,7 +949,13 @@ fn feed(
                             .map_or(0, Vec::len);
                         measurements.push(json!({"disk":ticket.disk,"station":station_name(ticket.station),"attempt":done.attempt,
                             "read_decode_ms":read_ms,"bad_sectors":a.bad_sectors.len(),"image_sha256":a.sha256}));
-                        let detail = if ticket.station == Station::Usb && partial {
+                        let detail = if ticket.station == Station::Greaseweazle
+                            && session.coordinator.status()["disks"][ticket.disk.to_string()]["gw"]
+                                ["identity_not_byte_verified"]
+                                == true
+                        {
+                            "IDENTITY NOT BYTE-VERIFIED / operator label assertion only. Remove this disk; attention retained.".into()
+                        } else if ticket.station == Station::Usb && partial {
                             let unread =
                                 a.parsed_log.as_ref().map_or(0, |l| l.unread_sectors.len());
                             format!(
@@ -1004,6 +1023,11 @@ fn feed(
                             &if crate::cancellation::requested() {
                                 format!(
                                     "{error}\nSession stopping. Keep disks seated until the final STOPPED cue and drive activity has stopped. Pending labels remain resumable."
+                                )
+                            } else if crate::production::no_overlap_error(&error) {
+                                format!(
+                                    "{error}\nNo byte match can be established. Check the physical label. Wrong label: after idle/removal, g release {}. If USB fast handoff saved ZERO readable sectors and this is definitely that same floppy: g confirm {}, then g{} to finish the saved GW candidate. Operator custody only; identity remains NOT byte-verified and attention is retained.",
+                                    ticket.disk, ticket.disk, ticket.disk
                                 )
                             } else if error.starts_with("USB/GW readable bytes disagree;") {
                                 format!(

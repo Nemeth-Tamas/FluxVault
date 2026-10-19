@@ -113,12 +113,18 @@ fn same_disk_event(data: &Value) -> Result<(), String> {
         || proof.usb_attempt == 0
         || proof.ticket_generation == 0
         || proof.confirmed_unix_ms == 0
-        || proof.assertion != "operator_confirms_same_physical_disk_not_content_certification"
-        || proof.agreeing_sectors < 128
+        || if proof.operator_custody_only {
+            proof.assertion != crate::read_conflicts::CUSTODY_ASSERTION
+                || proof.agreeing_sectors != 0
+                || !proof.conflicts.is_empty()
+        } else {
+            proof.assertion != "operator_confirms_same_physical_disk_not_content_certification"
+                || proof.agreeing_sectors < 128
+                || proof.conflicts.is_empty()
+                || proof.conflicts.len() * 100 > proof.agreeing_sectors + proof.conflicts.len()
+        }
         || proof.agreeing_sectors > 8192
-        || proof.conflicts.is_empty()
         || proof.conflicts.len() > 32
-        || proof.conflicts.len() * 100 > proof.agreeing_sectors + proof.conflicts.len()
         || [
             &proof.usb_image_sha256,
             &proof.usb_metadata_sha256,
@@ -733,6 +739,28 @@ mod tests {
             "usb_image_sha256":"a".repeat(64),"usb_metadata_sha256":"b".repeat(64),"usb_log_sha256":"c".repeat(64),
             "gw_image_sha256":"d".repeat(64),"gw_bad_lbas":[],"agreeing_sectors":2584,
             "conflicts":[{"lba":17,"usb_sha256":"a".repeat(64),"gw_sha256":"b".repeat(64)}]})
+    }
+    #[test]
+    fn custody_telemetry_is_explicit_and_cannot_claim_matching_bytes() {
+        let mut value = confirmation();
+        value["operator_custody_only"] = json!(true);
+        value["assertion"] = json!(crate::read_conflicts::CUSTODY_ASSERTION);
+        value["agreeing_sectors"] = json!(0);
+        value["conflicts"] = json!([]);
+        same_disk_event(&value).unwrap();
+        for (field, changed) in [
+            ("operator_custody_only", json!(false)),
+            ("agreeing_sectors", json!(2880)),
+            (
+                "assertion",
+                json!("operator_confirms_same_physical_disk_not_content_certification"),
+            ),
+            ("conflicts", confirmation()["conflicts"].clone()),
+        ] {
+            let mut invalid = value.clone();
+            invalid[field] = changed;
+            assert!(same_disk_event(&invalid).is_err(), "accepted {field}");
+        }
     }
     #[test]
     fn identity_actions_replay_without_fake_reads_receipts_removals_or_yield() {

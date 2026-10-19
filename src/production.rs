@@ -66,6 +66,18 @@ struct Receipt {
     bad: Vec<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     confirmed_conflicts: Vec<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    identity_not_byte_verified: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+pub(crate) fn identity_exception(error: &str) -> bool {
+    error.starts_with("USB/GW readable bytes disagree;") || no_overlap_error(error)
+}
+pub(crate) fn no_overlap_error(error: &str) -> bool {
+    error == "No mutually readable sectors establish cross-station consistency"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,7 +215,7 @@ fn validate(j: &Journal) -> Result<(), String> {
                     || r.confirmed_conflicts.len() > 32
                     || r.confirmed_conflicts.windows(2).any(|p| p[0] >= p[1])
                     || r.confirmed_conflicts.iter().any(|l| *l >= r.sectors as u64)
-                    || (!r.confirmed_conflicts.is_empty()
+                    || ((!r.confirmed_conflicts.is_empty() || r.identity_not_byte_verified)
                         && (station != Station::Greaseweazle || disk.usb.is_none()))
                     || [
                         r.sha256.as_str(),
@@ -239,7 +251,10 @@ fn validate(j: &Journal) -> Result<(), String> {
             }
         }
         let expected = if let Some(gw) = &disk.gw {
-            if gw.bad.is_empty() && gw.confirmed_conflicts.is_empty() {
+            if gw.bad.is_empty()
+                && gw.confirmed_conflicts.is_empty()
+                && !gw.identity_not_byte_verified
+            {
                 Phase::Complete
             } else {
                 Phase::Partial
@@ -332,6 +347,8 @@ fn receipt(
         bad,
         confirmed_conflicts: metadata_confirmation(&value)?
             .map_or(Vec::new(), |c| c.conflicts.iter().map(|s| s.lba).collect()),
+        identity_not_byte_verified: metadata_confirmation(&value)?
+            .is_some_and(|c| c.operator_custody_only),
     };
     Ok((r, image))
 }
@@ -771,13 +788,9 @@ impl Coordinator {
         }
         let mut j = self.journal.clone();
         let d = Self::current(&mut j, &ticket, Phase::Interrupted)?;
-        if !d
-            .error
-            .as_deref()
-            .is_some_and(|e| e.starts_with("USB/GW readable bytes disagree;"))
-        {
+        if !d.error.as_deref().is_some_and(identity_exception) {
             return Err(
-                "Only a USB/GW identity disagreement can be released; retry other failures".into(),
+                "Only a USB/GW identity disagreement or no-comparison exception can be released; retry other failures".into(),
             );
         }
         let usb = d.usb.as_ref().ok_or("Missing original USB receipt")?;
@@ -809,8 +822,8 @@ impl Coordinator {
         self.commit(j)
     }
 
-    /// Operator affirms both labelled reads concern the same physical disk.
-    /// Bound minor disagreements remain evidence attention, never clean proof.
+    /// Operator affirms the physical label. Minor disagreements or a validated
+    /// zero-readable fast USB handoff remain attention, never clean proof.
     pub(crate) fn confirm_same_disk(
         &mut self,
         station: Station,
@@ -824,7 +837,7 @@ impl Coordinator {
             || !self.journal.disks[&disk]
                 .error
                 .as_deref()
-                .is_some_and(|e| e.starts_with("USB/GW readable bytes disagree;"))
+                .is_some_and(identity_exception)
         {
             return Err(
                 "Confirm requires the exact interrupted GW USB-transfer identity disagreement"
@@ -838,12 +851,26 @@ impl Coordinator {
         if receipt(&self.project, disk, usb.attempt, Station::Usb)?.0 != *usb {
             return Err("Original USB evidence changed; confirmation refused".into());
         }
-        let confirmation = crate::flux_recovery::confirm_same_disk(
-            &self.project,
-            disk,
-            usb.attempt,
-            ticket.generation,
-        )?;
+        let custody_only = self.journal.disks[&disk]
+            .error
+            .as_deref()
+            .is_some_and(no_overlap_error);
+        let confirmation = if custody_only {
+            crate::flux_recovery::confirm_same_disk_mode(
+                &self.project,
+                disk,
+                usb.attempt,
+                ticket.generation,
+                true,
+            )?
+        } else {
+            crate::flux_recovery::confirm_same_disk(
+                &self.project,
+                disk,
+                usb.attempt,
+                ticket.generation,
+            )?
+        };
         serde_json::to_value(confirmation).map_err(|e| e.to_string())
     }
 
@@ -896,7 +923,8 @@ impl Coordinator {
             Station::Usb => Phase::Complete,
             Station::Greaseweazle
                 if !d.gw.as_ref().unwrap().bad.is_empty()
-                    || !d.gw.as_ref().unwrap().confirmed_conflicts.is_empty() =>
+                    || !d.gw.as_ref().unwrap().confirmed_conflicts.is_empty()
+                    || d.gw.as_ref().unwrap().identity_not_byte_verified =>
             {
                 Phase::Partial
             }

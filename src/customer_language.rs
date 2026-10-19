@@ -7,6 +7,9 @@ pub(crate) fn warning_summary(language: Language, raw: &str) -> String {
         return raw.to_owned();
     }
     let lower = raw.to_ascii_lowercase();
+    if lower.contains("operator custody only") {
+        return "Az USB-olvasásból nem maradt olvasható szektor. A kezelő a fizikai lemez címkéjét megerősítette, de a két olvasó közötti lemezazonosság bájtok alapján NEM igazolt. A Greaseweazle-adatok külön olvasási bizonyítékkal rendelkeznek; a tartalom teljessége nem igazolt.".into();
+    }
     if lower.contains("usb early handoff") {
         return "Az USB-olvasás korai átadással leállt. A még nem próbált szektorok tartalma ISMERETLEN, nem igazoltan fizikailag hibás. A hiányzó szektorok száma ezeket is tartalmazza; további Greaseweazle-olvasás szükséges. A pontos lefedettség a műszaki mellékletben található.".into();
     }
@@ -109,6 +112,16 @@ pub(crate) fn status_description(language: Language, code: &str) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custody_warning_never_translates_label_assertion_into_verified_identity() {
+        let raw =
+            "Operator custody only: USB saved zero readable sectors; identity NOT byte-verified";
+        let hu = warning_summary(Language::Hungarian, raw);
+        assert!(hu.contains("NEM igazolt"));
+        assert!(hu.contains("címkéjét megerősítette"));
+        assert_eq!(warning_summary(Language::English, raw), raw);
+    }
 
     #[test]
     fn early_usb_handoff_warning_distinguishes_unknown_from_physical_damage_in_hungarian() {

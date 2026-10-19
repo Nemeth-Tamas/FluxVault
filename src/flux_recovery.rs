@@ -778,7 +778,11 @@ fn recover_impl(
             &dir,
             &j,
             &evidence,
-            "operator_confirmed_minor_cross_reader_disagreement",
+            if approval.operator_custody_only {
+                "operator_confirmed_label_no_usb_byte_comparison"
+            } else {
+                "operator_confirmed_minor_cross_reader_disagreement"
+            },
         )?;
         result.resumed = true;
         result.physical_reads_this_run = 0;
@@ -1215,6 +1219,16 @@ pub(crate) fn confirm_same_disk(
     usb_attempt: u32,
     generation: u64,
 ) -> Result<crate::read_conflicts::Confirmation, String> {
+    confirm_same_disk_mode(project, disk, usb_attempt, generation, false)
+}
+
+pub(crate) fn confirm_same_disk_mode(
+    project: &ProjectState,
+    disk: u32,
+    usb_attempt: u32,
+    generation: u64,
+    custody_only: bool,
+) -> Result<crate::read_conflicts::Confirmation, String> {
     let (path, bytes, mut job) =
         identity_job(project, disk)?.ok_or("No saved GW candidate to confirm")?;
     if job.result.is_some()
@@ -1250,7 +1264,22 @@ pub(crate) fn confirm_same_disk(
         .chain(&evidence.conflicts)
         .copied()
         .collect();
-    let approval = crate::read_conflicts::build(
+    if let Some(approval) = &job.read_conflicts {
+        if approval.usb_attempt != usb_attempt || approval.operator_custody_only != custody_only {
+            return Err("Saved confirmation kind/source differs; no replacement authorized".into());
+        }
+        crate::read_conflicts::verify(project, approval, &evidence.bytes, &bad)?;
+        if fs::read(&path).map_err(|e| e.to_string())? != bytes {
+            return Err("Candidate job changed during confirmation replay".into());
+        }
+        return Ok(approval.clone());
+    }
+    let build = if custody_only {
+        crate::read_conflicts::build_custody_only
+    } else {
+        crate::read_conflicts::build
+    };
+    let approval = build(
         project,
         disk,
         usb_attempt,
@@ -1925,7 +1954,11 @@ fn publish(
         "image_sha256": sha256,
         "sectors": e.sectors,
         "read_conflicts": j.read_conflicts,
-        "note": "Single-capture sectors have lower confidence. Within-GW unreadable/conflicting sectors are zero-filled. Optional read_conflicts records separately preserved USB/GW disagreements; the observed GW edition is retained, not guessed or certified. No customer-delivery certification."
+        "note": if j.read_conflicts.as_ref().is_some_and(|c| c.operator_custody_only) {
+            "Operator custody only: USB saved zero readable sectors. The operator confirmed the physical label, not a USB/GW byte match. GW sectors retain their own capture evidence; missing/conflicting bytes remain zero-filled. Identity is NOT byte-verified. No customer-delivery certification."
+        } else {
+            "Single-capture sectors have lower confidence. Within-GW unreadable/conflicting sectors are zero-filled. Optional read_conflicts records separately preserved USB/GW disagreements; the observed GW edition is retained, not guessed or certified. No customer-delivery certification."
+        }
     })).map_err(|e| e.to_string())?;
     let prov_hash = format!("{:x}", Sha256::digest(&prov));
     let reservation = publication::reserve(project, dir, j, &sha256, &prov_hash, reason)?;

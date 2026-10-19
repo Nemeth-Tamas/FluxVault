@@ -34,6 +34,8 @@ Never move a disk marked **READING**. Every read command confirms station, exact
 | `u7` / `u 007` | USB read of 007 |
 | `g8` / `g 008` | GW read of 008 |
 | `g22` | Recover an available earlier USB partial 022 |
+| `g release 22` | After idle/removal, release an interrupted wrong-label USB-to-GW transfer; preserves rejected evidence and queue |
+| `g confirm 22` | Explicitly confirm the physical label for a qualifying interrupted transfer; starts no read; attention retained |
 | `u out` / `g out` | Confirm removal of that station's SAVED disk |
 | `s`, `?`, `STATUS` | Both stations, next fresh label and transfer queue |
 | `p`, `PAUSE` | Persistently stop new reads; active reads/background work finish |
@@ -41,6 +43,8 @@ Never move a disk marked **READING**. Every read command confirms station, exact
 | `q`, `QUIT` | Stop new reads; finish active reads and downstream work |
 
 This pilot uses **one aggregator console**, with station-labelled progress and a heartbeat during quiet reads. No additional windows or competing independent scans are launched. Clean swap banners are green; partials/errors red. ASCII-first messages also work without color.
+
+**Development 1.1 exception:** if fast USB handoff saved zero readable sectors, GW cannot establish a USB/GW byte match. Check the label: wrong disk → wait for idle, remove it, `g release N`; definitely the original USB disk → `g confirm N`, then `gN` to finish from its saved GW candidate. The latter remains **identity NOT byte-verified**, with operator-custody-only attention even if GW read all sectors. It is not a general mismatch override. [Limits and restart behavior](../development/V1_1_SCOPE.md#zero-readable-usb-explicit-label-confirmation-2026-10-19).
 
 Both station views show an explicit `ACTION` line. A recurring ten-second refresh preserves swap/transfer instructions while the other reader is busy; `STATUS` refreshes immediately and includes elapsed read time plus the latest capture/decode message. The shared next fresh label is offered to either free station, never both at once. Live HD sector counts are provisional until automatic HD/DD identification finishes; a 720 KB disk can legitimately show `0/18` before its offline DD decode succeeds.
 

@@ -338,7 +338,25 @@ pub(crate) fn run_audit(
                 record.issue = "Conversion has not been audited or has invalid outputs.".to_owned();
             }
         }
-        if !attempt.legacy_image
+        let custody_only = if !attempt.legacy_image
+            && attempt.attention_required
+            && !attempt.metadata_path.as_os_str().is_empty()
+        {
+            let value: serde_json::Value = serde_json::from_slice(
+                &fs::read(&attempt.metadata_path).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            value["read_conflicts"]["operator_custody_only"] == true
+        } else {
+            false
+        };
+        if custody_only {
+            record.evidence_status = "OPERATOR_CUSTODY_ONLY".into();
+            append_issue(
+                &mut record.issue,
+                "Operator custody only: USB saved zero readable sectors. The operator confirmed this physical label; cross-station identity is NOT byte-verified. Saved GW bytes retain their own acquisition evidence; no USB/GW match or content completeness is certified.",
+            );
+        } else if !attempt.legacy_image
             && attempt.status == "OK"
             && attempt.bad_sectors.is_empty()
             && attempt.attention_required

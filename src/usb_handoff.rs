@@ -273,3 +273,21 @@ pub(super) fn validate(
     }
     Ok(())
 }
+
+/// Independently replay the original USB coverage, without loading any GW
+/// metadata (which would recursively re-enter confirmation verification).
+pub(crate) fn require_zero_readable(metadata: &[u8], raw_log: &[u8]) -> Result<(), String> {
+    let meta: AcquisitionMetadata = serde_json::from_slice(metadata).map_err(|e| e.to_string())?;
+    let raw = std::str::from_utf8(raw_log).map_err(|e| e.to_string())?;
+    let parsed = crate::legacy_logs::parse_archiver_log(raw)?;
+    validate(&meta, Some(&parsed), Some(raw))?;
+    if meta
+        .usb_fast_handoff
+        .as_ref()
+        .is_none_or(|s| s.first_failed_lba != Some(0) || s.attempted_sectors != 1)
+        || meta.bad_sectors.len() != meta.total_sectors
+    {
+        return Err("Custody-only confirmation requires a replay-verified first-sector USB fast handoff with zero readable bytes".into());
+    }
+    Ok(())
+}

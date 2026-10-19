@@ -89,7 +89,11 @@ fn main() {
     }
 
     // Simulated failure
-    if env::var("MOCK_GW_FAIL").is_ok() || args.iter().any(|arg| arg == "--mock-fail") {
+    if env::var("MOCK_GW_FAIL").is_ok()
+        || args.iter().any(|arg| arg == "--mock-fail")
+        || (env::var_os("MOCK_GW_FAIL_CAPTURE_DECODE").is_some()
+            && matches!(args[0].as_str(), "read" | "convert"))
+    {
         eprintln!("** ERROR: mock_gw simulated failure");
         std::process::exit(1);
     }

@@ -119,6 +119,9 @@ impl Fixture {
         command
     }
     fn start(&self, last: bool) -> Running {
+        self.start_with(last, &[], false)
+    }
+    fn start_with(&self, last: bool, extra: &[&str], fail_host: bool) -> Running {
         let mut command = self.command();
         command.args([
             "scan",
@@ -133,6 +136,10 @@ impl Fixture {
         ]);
         if last {
             command.args(["--last-disk", "3"]);
+        }
+        command.args(extra);
+        if fail_host {
+            command.env("MOCK_GW_FAIL_CAPTURE_DECODE", "1");
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -168,8 +175,13 @@ impl Fixture {
             }
             assert!(
                 start.elapsed() < Duration::from_secs(20),
-                "timed out waiting for {disk} {phase} in {}; journal: {}",
+                "timed out waiting for {disk} {phase} in {}; error: {}; journal: {}",
                 path.display(),
+                fs::read(&path)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                    .map_or(Value::Null, |v| v["disks"][disk.to_string()]["error"]
+                        .clone()),
                 fs::read_to_string(&path)
                     .unwrap_or_else(|e| e.to_string())
                     .chars()
@@ -251,6 +263,224 @@ fn seed_usb_partial(project: &ProjectState, disk: u32, bad: &[u64]) {
         "sector_retries":0,"total_sectors":2880,"bytes_written":1474560,"retry_recovered_sectors":0,"bad_sector_count":bad.len(),
         "bad_sectors":bad.iter().map(|l|json!({"lba":l,"cylinder":l/36,"head":(l%36)/18,"sector":l%18+1})).collect::<Vec<_>>(),"sha256":sha
     })).unwrap()).unwrap();
+}
+
+fn seed_usb_zero_readable_handoff(project: &ProjectState, disk: u32) {
+    seed_usb_partial(project, disk, &(0..2880).collect::<Vec<_>>());
+    let stem = format!("{disk:03}_attempt_001");
+    let path = project.images_dir().join(format!("{stem}.json"));
+    let mut meta: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    meta["usb_fast_handoff"] = json!({"schema":1,"retries":0,"total_sectors":2880,
+        "attempted_sectors":1,"first_failed_lba":0});
+    fs::write(&path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    fs::write(project.logs_dir().join(format!("{stem}.log")), format!(
+        "BEGIN | disk={disk} | attempt=1 | source=windows-raw-sector\nGEOMETRY | cylinders=80 | heads=2 | sectors_per_track=18 | bytes_per_sector=512 | total_sectors=2880 | total_bytes=1474560\nRETRY_POLICY | retries=0\nUSB_HANDOFF_POLICY | retries=0\nSECTOR_READ_FAILED | LBA=0 | pass=initial_forward\nBAD_SECTOR | LBA=0\nUNREAD_RANGE | first=1 | end_exclusive=2880 | reason=usb_fast_handoff\nEND | status=PARTIAL | bytes=1474560 | sha256={}\n", meta["sha256"].as_str().unwrap()
+    )).unwrap();
+}
+
+#[test]
+fn zero_readable_usb_requires_explicit_label_assertion_and_resumes_saved_gw_without_host() {
+    use fluxvault::production::{Coordinator, Station};
+    let f = Fixture::new();
+    let mut c = Coordinator::open(f.project.clone(), Some(3), false).unwrap();
+    let t = c.claim(Station::Usb, 1).unwrap();
+    c.confirm(&t, "1", true).unwrap();
+    seed_usb_zero_readable_handoff(&f.project, 1);
+    c.complete(&t, 1).unwrap();
+    c.removed(&t, true).unwrap();
+    drop(c);
+    let source_paths = [
+        f.project.images_dir().join("001_attempt_001.img"),
+        f.project.images_dir().join("001_attempt_001.json"),
+        f.project.logs_dir().join("001_attempt_001.log"),
+    ];
+    let original = source_paths.each_ref().map(|p| fs::read(p).unwrap());
+    let mut run = f.start_with(
+        true,
+        &["--usb-fast-handoff", "--usb-handoff-retries", "0"],
+        false,
+    );
+    run.send("g1");
+    f.wait(1, "interrupted");
+    assert!(!f.project.images_dir().join("001_attempt_002.img").exists());
+    run.send("g confirm 2"); // Wrong held label must not grant an assertion.
+    run.send("g confirm 1");
+    let job = f.project.root().join("Flux/Recovery/001_job.json");
+    let start = Instant::now();
+    let approved = loop {
+        let value: Value = serde_json::from_slice(&fs::read(&job).unwrap()).unwrap();
+        if value["read_conflicts"]["operator_custody_only"] == true {
+            break value;
+        }
+        assert!(start.elapsed() < Duration::from_secs(20));
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(approved["read_conflicts"]["agreeing_sectors"], 0);
+    assert_eq!(approved["read_conflicts"]["conflicts"], json!([]));
+    run.send("g confirm 1"); // Idempotent: keep original proof, not a new timestamp.
+    run.send("QUIT");
+    let (code, _, console) = run.finish();
+    assert_eq!(code, 3, "{console}");
+    assert!(console.contains("PHYSICAL LABEL CONFIRMED / IDENTITY NOT BYTE-VERIFIED"));
+    let approved_again: Value = serde_json::from_slice(&fs::read(&job).unwrap()).unwrap();
+    assert_eq!(approved["read_conflicts"], approved_again["read_conflicts"]);
+    let stages = approved["stages"].clone();
+    // Startup mock health checks remain available, but capture/decode commands
+    // fail. Publishing must reuse the approved saved candidate, not read again.
+    let mut resumed = f.start_with(false, &[], true);
+    resumed.send("g1");
+    f.wait(1, "saved");
+    resumed.send("g out");
+    resumed.send("QUIT");
+    let (code, value, console) = resumed.finish();
+    assert_eq!(code, 3, "{console}"); // Identity attention must survive completion.
+    assert_eq!(value["state"]["disks"]["1"]["phase"], "partial");
+    assert_eq!(value["state"]["usb_recovery_queue"], json!([]));
+    assert!(console.contains("IDENTITY NOT BYTE-VERIFIED / operator label assertion only"));
+    let final_job: Value = serde_json::from_slice(&fs::read(&job).unwrap()).unwrap();
+    assert_eq!(final_job["stages"], stages);
+    let attempts = imaging::load_attempts_for_disk(&f.project.images_dir(), 1).unwrap();
+    assert_eq!(attempts.len(), 2);
+    let saved = attempts.iter().find(|a| a.attempt_number == 2).unwrap();
+    assert!(saved.attention_required);
+    assert!(saved.bad_sectors.is_empty());
+    let meta_bytes = fs::read(&saved.metadata_path).unwrap();
+    let mut meta: Value = serde_json::from_slice(&meta_bytes).unwrap();
+    assert_eq!(meta["read_conflicts"], approved["read_conflicts"]);
+    let benchmark = f
+        .command()
+        .args(["production", "benchmark", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        benchmark.status.success(),
+        "{}",
+        String::from_utf8_lossy(&benchmark.stdout)
+    );
+    let audit = f.command().args(["audit", "--json"]).output().unwrap();
+    assert_ne!(
+        audit.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&audit.stdout)
+    );
+    let audit_summary: Value = serde_json::from_slice(&audit.stdout).unwrap();
+    assert_eq!(audit_summary["verified"], 0);
+    let audit_document: Value = serde_json::from_slice(
+        &fs::read(f.project.reports_dir().join("EvidenceAudit.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        audit_document["disks"][0]["evidence_status"],
+        "OPERATOR_CUSTODY_ONLY"
+    );
+    assert!(
+        audit_document["disks"][0]["issue"]
+            .as_str()
+            .unwrap()
+            .contains("NOT byte-verified")
+    );
+    for (path, bytes) in source_paths.iter().zip(original) {
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    // Removing attention from metadata cannot turn this into a certified match.
+    meta["read_conflicts"]
+        .as_object_mut()
+        .unwrap()
+        .remove("operator_custody_only");
+    fs::write(&saved.metadata_path, serde_json::to_vec(&meta).unwrap()).unwrap();
+    assert!(imaging::load_attempts_for_disk(&f.project.images_dir(), 1).is_err());
+    fs::write(&saved.metadata_path, meta_bytes).unwrap();
+    let journal = f.project.root().join(".fluxvault-production.json");
+    let journal_bytes = fs::read(&journal).unwrap();
+    let mut state: Value = serde_json::from_slice(&journal_bytes).unwrap();
+    state["disks"]["1"]["gw"]
+        .as_object_mut()
+        .unwrap()
+        .remove("identity_not_byte_verified");
+    state["disks"]["1"]["phase"] = json!("complete");
+    fs::write(&journal, serde_json::to_vec(&state).unwrap()).unwrap();
+    let refused = f
+        .command()
+        .args(["production", "status", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(refused.status.code(), Some(2));
+    fs::write(journal, journal_bytes).unwrap();
+}
+
+#[test]
+fn no_comparison_wrong_label_release_preserves_rejected_evidence_and_unblocks_station() {
+    use fluxvault::production::{Coordinator, Station};
+    let f = Fixture::new();
+    let mut c = Coordinator::open(f.project.clone(), Some(3), false).unwrap();
+    let t = c.claim(Station::Usb, 1).unwrap();
+    c.confirm(&t, "1", true).unwrap();
+    seed_usb_zero_readable_handoff(&f.project, 1);
+    c.complete(&t, 1).unwrap();
+    c.removed(&t, true).unwrap();
+    drop(c);
+    let mut run = f.start_with(
+        true,
+        &["--usb-fast-handoff", "--usb-handoff-retries", "0"],
+        false,
+    );
+    run.send("g1");
+    f.wait(1, "interrupted");
+    let job = f.project.root().join("Flux/Recovery/001_job.json");
+    let bytes = fs::read(&job).unwrap();
+    let before: Value = serde_json::from_slice(&bytes).unwrap();
+    let source = fs::read(f.project.images_dir().join("001_attempt_001.img")).unwrap();
+    run.send("g release 2"); // Wrong label and OUT cannot discard an interrupted job.
+    run.send("g out");
+    run.send("g release 1");
+    f.wait(1, "await_gw");
+    let after: Value = serde_json::from_slice(&fs::read(&job).unwrap()).unwrap();
+    assert_eq!(after["stages"], json!([]));
+    assert_eq!(
+        after["rejected_capture_attempts"].as_array().unwrap().len(),
+        before["stages"].as_array().unwrap().len()
+    );
+    let recovery = f.project.root().join("Flux/Recovery");
+    let archived = fs::read_dir(recovery)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("001_identity_rejected_")
+        })
+        .unwrap();
+    assert_eq!(fs::read(archived).unwrap(), bytes);
+    run.send("g2");
+    f.wait(2, "saved");
+    run.send("g out");
+    run.send("QUIT");
+    let (code, value, console) = run.finish();
+    assert_eq!(code, 3, "{value}\n{console}");
+    assert_eq!(value["state"]["usb_recovery_queue"], json!([1]));
+    assert_eq!(value["state"]["disks"]["2"]["phase"], "complete");
+    assert!(console.contains("GW IDENTITY RELEASED / NO READ STARTED"));
+    assert_eq!(
+        imaging::load_attempts_for_disk(&f.project.images_dir(), 1)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        fs::read(f.project.images_dir().join("001_attempt_001.img")).unwrap(),
+        source
+    );
+    // Saved rejected captures and decoded files remain on disk; their capture
+    // identities must not reappear in a later recovery stage automatically.
+    assert_eq!(after["read_conflicts"], Value::Null);
+    let status = f
+        .command()
+        .args(["production", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
 }
 
 #[test]

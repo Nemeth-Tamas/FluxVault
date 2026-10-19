@@ -1,5 +1,6 @@
-//! Explicit same-label confirmation of MINOR cross-reader disagreements.
-//! This retains observations, not repaired bytes or independent CRC proof.
+//! Explicit same-label confirmation: minor disagreements, or operator custody
+//! ONLY when an early-handoff USB acquisition saved no readable sectors.
+//! Never a fabricated byte match, repaired bytes or independent CRC proof.
 use crate::project::ProjectState;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,7 +30,14 @@ pub(crate) struct Confirmation {
     pub gw_bad_lbas: Vec<u64>,
     pub agreeing_sectors: usize,
     pub conflicts: Vec<Conflict>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub operator_custody_only: bool,
 }
+fn is_false(value: &bool) -> bool {
+    !value
+}
+pub(crate) const CUSTODY_ASSERTION: &str =
+    "operator_confirms_physical_label_only_no_usb_readable_bytes_identity_unverified";
 fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -72,6 +80,50 @@ pub(crate) fn build(
     confirmed_unix_ms: u64,
     gw: &[u8],
     bad: &[u64],
+) -> Result<Confirmation, String> {
+    build_impl(
+        project,
+        disk,
+        usb_attempt,
+        generation,
+        confirmed_unix_ms,
+        gw,
+        bad,
+        false,
+    )
+}
+
+pub(crate) fn build_custody_only(
+    project: &ProjectState,
+    disk: u32,
+    usb_attempt: u32,
+    generation: u64,
+    confirmed_unix_ms: u64,
+    gw: &[u8],
+    bad: &[u64],
+) -> Result<Confirmation, String> {
+    build_impl(
+        project,
+        disk,
+        usb_attempt,
+        generation,
+        confirmed_unix_ms,
+        gw,
+        bad,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_impl(
+    project: &ProjectState,
+    disk: u32,
+    usb_attempt: u32,
+    generation: u64,
+    confirmed_unix_ms: u64,
+    gw: &[u8],
+    bad: &[u64],
+    operator_custody_only: bool,
 ) -> Result<Confirmation, String> {
     let name = format!("{disk:03}_attempt_{usb_attempt:03}.json");
     let meta_path = crate::recovery_plan::resolve_image_path(&project.images_dir(), &name)?;
@@ -126,10 +178,11 @@ pub(crate) fn build(
     }
     // An explicit operator assertion is not permission to accept arbitrary
     // wrong-disk data. Keep broad disagreements and sparse overlap blocked.
-    if conflicts.is_empty()
-        || conflicts.len() > 32
-        || agreeing < 128
-        || conflicts.len() * 100 > agreeing + conflicts.len()
+    if !operator_custody_only
+        && (conflicts.is_empty()
+            || conflicts.len() > 32
+            || agreeing < 128
+            || conflicts.len() * 100 > agreeing + conflicts.len())
     {
         return Err(format!(
             "Same-disk confirmation requires minor disagreement: {agreeing} matching / {} conflicting sectors; at least 128 matches, at most 32 conflicts and 1% disagreement",
@@ -142,6 +195,12 @@ pub(crate) fn build(
         .ok_or("Invalid USB log")?;
     let log_path = crate::recovery_plan::resolve_image_path(&project.logs_dir(), log_name)?;
     let log = read(&log_path, 8 * 1048576)?;
+    if operator_custody_only {
+        if usb_bad.len() != sectors || agreeing != 0 || !conflicts.is_empty() {
+            return Err("Custody-only confirmation requires zero readable USB sectors; byte disagreements are not eligible".into());
+        }
+        crate::imaging::handoff::require_zero_readable(&metadata, &log)?;
+    }
     // Recheck the source snapshots before returning an approval.
     if read(&meta_path, 1048576)? != metadata
         || read(&image, crate::fat12::MAX_IMAGE_BYTES)? != usb
@@ -155,7 +214,12 @@ pub(crate) fn build(
         usb_attempt,
         ticket_generation: generation,
         confirmed_unix_ms,
-        assertion: "operator_confirms_same_physical_disk_not_content_certification".into(),
+        assertion: if operator_custody_only {
+            CUSTODY_ASSERTION
+        } else {
+            "operator_confirms_same_physical_disk_not_content_certification"
+        }
+        .into(),
         usb_image_sha256: hash(&usb),
         usb_metadata_sha256: hash(&metadata),
         usb_log_sha256: hash(&log),
@@ -163,6 +227,7 @@ pub(crate) fn build(
         gw_bad_lbas: gw_bad.into_iter().collect(),
         agreeing_sectors: agreeing,
         conflicts,
+        operator_custody_only,
     })
 }
 
@@ -172,7 +237,7 @@ pub(crate) fn verify(
     gw: &[u8],
     bad: &[u64],
 ) -> Result<(), String> {
-    let replay = build(
+    let replay = build_impl(
         project,
         approval.disk,
         approval.usb_attempt,
@@ -180,6 +245,7 @@ pub(crate) fn verify(
         approval.confirmed_unix_ms,
         gw,
         bad,
+        approval.operator_custody_only,
     )?;
     if &replay != approval {
         return Err(
@@ -188,6 +254,10 @@ pub(crate) fn verify(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "read_conflicts_tests.rs"]
+mod tests;
 
 /// Cheap immutable publication binding for catalog loading: removing an
 /// attention field must not turn a confirmed-conflict image into a clean one.
